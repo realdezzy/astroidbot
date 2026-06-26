@@ -1,0 +1,11 @@
+node_modules/
+dist/
+web/dist/
+.vite/
+.env
+.env.docker
+*.log
+*.tsbuildinfo
+prisma/migrations/
+.DS_Store
+Thumbs.db

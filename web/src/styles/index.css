@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-400: #6366f1;
+  --color-brand-500: #4f46e5;
+  --color-brand-600: #4338ca;
+  --color-brand-accent: #818cf8;
+  --color-success-400: #34d399;
+  --color-success-500: #10b981;
+  --color-danger-400: #f87171;
+  --color-danger-500: #ef4444;
+  --color-warning-400: #fbbf24;
+  --color-warning-500: #f59e0b;
+
+  --color-main-bg: var(--bg-main);
+  --color-main-text: var(--text-main);
+  --color-sidebar-bg: var(--bg-sidebar);
+  --color-sidebar-border: var(--border-sidebar);
+  --color-card-bg: var(--bg-card);
+  --color-card-border: var(--border-card);
+  --color-input-bg: var(--bg-input);
+  --color-title-text: var(--text-title);
+  --color-muted-text: var(--text-muted);
+  --color-bg-hover: var(--bg-hover);
+  --color-divider-color: var(--divider-color);
+  --color-badge-bg: var(--badge-bg);
+
+  --font-sans: "Outfit", "Inter", sans-serif;
+}
+
+:root {
+  --bg-main: #030712; /* gray-950 */
+  --text-main: #f3f4f6; /* gray-100 */
+  --bg-sidebar: #111827; /* gray-900 */
+  --border-sidebar: #1f2937; /* gray-800 */
+  --bg-card: rgba(17, 24, 39, 0.6); /* gray-900/60 */
+  --border-card: rgba(31, 41, 55, 0.8); /* gray-800/80 */
+  --bg-input: #030712; /* gray-950 */
+  --text-title: #ffffff;
+  --text-muted: #9ca3af; /* gray-400 */
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --divider-color: rgba(31, 41, 55, 0.8);
+  --badge-bg: rgba(107, 114, 128, 0.15);
+}
+
+.light {
+  --bg-main: #e5e5ea; /* slightly darker than gray-100 */
+  --text-main: #374151; /* gray-700 */
+  --bg-sidebar: #fafafa;
+  --border-sidebar: #e5e7eb; /* gray-200 */
+  --bg-card: rgba(255, 255, 255, 0.92);
+  --border-card: rgba(209, 213, 219, 0.9); /* gray-300 */
+  --bg-input: #ffffff;
+  --text-title: #111827; /* gray-900 */
+  --text-muted: #6b7280; /* gray-500 */
+  --bg-hover: rgba(17, 24, 39, 0.04);
+  --divider-color: rgba(209, 213, 219, 0.9);
+  --badge-bg: rgba(107, 114, 128, 0.1);
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  @apply font-sans antialiased selection:bg-brand-500/30 selection:text-white transition-colors duration-300;
+}
+
+/* Glassmorphism utility */
+.glass-card {
+  background-color: var(--bg-card) !important;
+  border: 1px solid var(--border-card) !important;
+  @apply backdrop-blur-md rounded-2xl shadow-xl transition-all duration-300;
+}
+
+.glass-card:hover {
+  @apply border-brand-500/30 shadow-brand-500/5 shadow-2xl;
+}
+
+/* Stronger card shadow in light mode for visibility */
+.light .glass-card {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);
+}
+.light .glass-card:hover {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 6px 20px rgba(79,70,229,0.08);
+}
+
+/* Custom premium controls */
+.btn-premium {
+  @apply px-4 py-2.5 bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 text-white rounded-xl text-sm font-semibold transition-all duration-300 shadow-lg shadow-brand-500/20 hover:shadow-brand-500/40 hover:-translate-y-0.5 active:translate-y-0 cursor-pointer;
+}
+
+.input-premium {
+  background-color: var(--bg-input) !important;
+  border: 1px solid var(--border-card) !important;
+  color: var(--text-main) !important;
+  @apply w-full px-4 py-2.5 rounded-xl text-sm placeholder-gray-500 focus:border-brand-500 focus:outline-none transition-colors duration-200;
+}
+
+/* Ensure text headings use theme title color */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-title);
+  @apply transition-colors duration-300;
+}
+
+/* Custom Nav links helper */
+.light .nav-inactive-hover:hover {
+  @apply bg-gray-100 text-gray-900;
+}

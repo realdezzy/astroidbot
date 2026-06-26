@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("ASTROIDBOT_DATABASE_URL")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  telegramId   BigInt?   @unique
+  email        String?   @unique
+  passwordHash String?
+  username     String?
+  emailVerified Boolean  @default(false)
+  referralCode String    @unique @default(uuid())
+  referredBy   Int?
+  referrer     User?     @relation("Referrals", fields: [referredBy], references: [id])
+  referees     User[]    @relation("Referrals")
+  points       Int       @default(0)
+  isActive     Boolean   @default(true)
+  isAdmin      Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  wallets       Wallet[]
+  tradeSettings TradeSettings[]
+  trades        Trade[]
+  perpPositions PerpPosition[]
+}
+
+model Wallet {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id])
+  address      String   @unique
+  name         String
+  encryptedKey String
+  balance      Float    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  trades        Trade[]
+  perpPositions PerpPosition[]
+}
+
+
+model TradeSettings {
+  id                 Int      @id @default(autoincrement())
+  userId             Int
+  user               User     @relation(fields: [userId], references: [id])
+  context            String   @default("personal")
+  chain              String   @default("stacks:mainnet")
+  slippageBps        Int      @default(100)
+  maxPositionPct     Float    @default(25.0)
+  dailyLossLimit     Float    @default(5.0)
+  rebalanceThreshold Float    @default(2.0)
+  useGasless         Boolean  @default(false)
+  gaslessFeeToken    String   @default("USDC")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Trade {
+  id           Int       @id @default(autoincrement())
+  walletId     Int
+  wallet       Wallet    @relation(fields: [walletId], references: [id])
+  userId       Int
+  user         User      @relation(fields: [userId], references: [id])
+  direction    String
+  tokenIn      String
+  tokenOut     String
+  amountIn     Float
+  amountOut    Float
+  feeAmount    Float     @default(0)
+  feeBps       Int       @default(30)
+  txId         String?
+  status       String    @default("PENDING")
+  errorMessage String?
+  isGasless        Boolean   @default(false)
+  relayerFeeAmount Float?
+  relayerFeeToken  String?
+  amountInUsd      Float?
+  amountOutUsd     Float?
+  createdAt    DateTime  @default(now())
+  confirmedAt  DateTime?
+
+  @@index([userId, status, createdAt])
+}
+
+model MarketMakingGrid {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  walletId   Int
+  tokenPair  String
+  midPrice   Float
+  gridLevels Int      @default(5)
+  spreadBps  Int
+  lastUpdated DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  @@unique([walletId, tokenPair])
+}
+
+model AIRecommendation {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  context          String
+  inputHash        String
+  modelProvider    String
+  modelName        String
+  promptTokens     Int
+  completionTokens Int
+  recommendation   Json
+  actedUpon        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  tokenHash String   @unique
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model EmailToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  token     String   @unique
+  type      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, type])
+  @@index([token])
+}
+
+model LimitOrder {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  walletId    Int
+  tokenIn     String
+  tokenOut    String
+  direction   String
+  targetPrice Float
+  amountIn    Float
+  status      String    @default("ACTIVE")
+  forceAfter  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  filledAt    DateTime?
+  txId        String?
+
+  @@index([userId, walletId])
+  @@index([status])
+}
+
+model BlockedToken {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  contractId String
+  symbol     String
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, contractId])
+  @@index([userId])
+}
+
+model TradingStrategy {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  agentId   Int?
+  type      String
+  config    Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([agentId])
+}
+
+model TradeAgent {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  name      String
+  context   String    @default("custom")
+  aiMode    String    @default("off")
+  config    Json
+  state     Json      @default("{}")
+  model     String    @default("deepseek-v4-pro")
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model PerpPosition {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  user             User     @relation(fields: [userId], references: [id])
+  walletId         Int
+  wallet           Wallet   @relation(fields: [walletId], references: [id])
+  market           String   
+  direction        String   // "LONG" | "SHORT"
+  size             Float    
+  leverage         Float    
+  entryPrice       Float
+  liquidationPrice Float
+  margin           Float    
+  status           String   // "OPEN" | "CLOSED" | "LIQUIDATED"
+  txId             String?  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+  @@index([walletId])
+  @@index([status])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  action    String
+  details   String
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model ContactMessage {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String
+  message   String
+  createdAt DateTime @default(now())
+}
