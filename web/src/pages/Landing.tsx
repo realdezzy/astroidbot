@@ -111,8 +111,8 @@ export function Landing() {
 
       {/* Header / Navigation */}
       <header className="sticky top-0 z-50 backdrop-blur-md bg-main-bg/80 border-b border-sidebar-border">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3 shrink-0">
+        <div className="mx-auto px-6 h-16 flex items-center">
+          <a href="/" className="flex-1 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0">
               <img src="/logo.png" alt="AstroidBot Logo" className="w-9 h-9 object-contain" />
             </div>
@@ -120,7 +120,7 @@ export function Landing() {
               <span className="font-bold text-title-text text-lg tracking-tight">AstroidBot</span>
               <span className="text-xs block text-muted-text -mt-1 font-mono">AI TRADING</span>
             </div>
-          </div>
+          </a>
 
           <nav className="hidden md:flex items-center gap-8 text-sm text-muted-text font-medium">
             <a href="#features" className="hover:text-title-text transition-colors">Features</a>
@@ -130,7 +130,7 @@ export function Landing() {
             <a href="#contact" className="hover:text-title-text transition-colors">Contact</a>
           </nav>
 
-          <div className="flex items-center gap-4">
+          <div className="flex-1 flex items-center justify-end gap-4">
             <button
               onClick={toggleTheme}
               className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors cursor-pointer"
@@ -166,7 +166,7 @@ export function Landing() {
       </header>
 
       {/* Hero Section */}
-      <section className="relative max-w-7xl mx-auto px-6 pt-20 pb-28 text-center">
+      <section className="relative mx-auto px-6 pt-20 pb-28 text-center">
 
         <h1 className="text-4xl sm:text-6xl font-black text-title-text tracking-tight leading-tight max-w-4xl mx-auto">
           AstroidBot: The <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-indigo-400 to-indigo-500">smart trading bot</span> for Stacks
@@ -192,7 +192,7 @@ export function Landing() {
           </a>
         </div>
 
-        {/* Dashboard Mockup Showcase */}
+        {/* Dashboard Showcase */}
         <div className="mt-20 relative max-w-5xl mx-auto rounded-2xl border border-card-border bg-card-bg p-4 backdrop-blur-sm shadow-2xl">
           <div className="absolute -inset-0.5 bg-gradient-to-r from-brand-500 to-indigo-500 rounded-2xl opacity-10 filter blur-xl pointer-events-none" />
 
@@ -295,7 +295,7 @@ export function Landing() {
       </section>
 
       {/* Features Section */}
-      <section id="features" className="max-w-7xl mx-auto px-6 py-24 border-t border-sidebar-border">
+      <section id="features" className="max-w-[1400px] mx-auto px-6 py-24 border-t border-sidebar-border">
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text">Why automate with AstroidBot?</h2>
           <p className="mt-4 text-muted-text">
@@ -337,7 +337,7 @@ export function Landing() {
       </section>
 
       {/* Profit Calculator Section */}
-      <section id="calculator" className="max-w-7xl mx-auto px-6 py-24 border-t border-sidebar-border">
+      <section id="calculator" className="max-w-[1400px] mx-auto px-6 py-24 border-t border-sidebar-border">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           <div>
             <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text">Project your profits</h2>
@@ -468,7 +468,7 @@ export function Landing() {
 
 
       {/* Integrations Section */}
-      <section id="integrations" className="max-w-7xl mx-auto px-6 py-16 border-t border-sidebar-border text-center">
+      <section id="integrations" className="max-w-[1400px] mx-auto px-6 py-16 border-t border-sidebar-border text-center">
         <span className="text-xs uppercase text-muted-text tracking-wider font-semibold">Integrations & Protocols</span>
         <div className="mt-8 flex flex-wrap justify-center items-center gap-12 opacity-65 grayscale hover:grayscale-0 transition-all duration-300">
           <div className="flex items-center gap-2">
@@ -557,7 +557,7 @@ export function Landing() {
 
       {/* Footer */}
       <footer className="bg-main-bg border-t border-sidebar-border py-12">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
+        <div className="mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center">
               <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain" />

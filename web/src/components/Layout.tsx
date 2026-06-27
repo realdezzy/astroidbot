@@ -72,13 +72,13 @@ export function Layout() {
     <div className="min-h-screen flex flex-col md:flex-row bg-main-bg text-main-text transition-colors duration-300">
       {/* Mobile Top Header */}
       <header className="md:hidden flex items-center justify-between px-6 py-4 bg-sidebar-bg border-b border-sidebar-border transition-colors duration-300">
-        <div className="flex items-center gap-3">
+        <a href="/" className="flex items-center gap-3">
           <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
           <div>
             <h1 className="text-md font-bold text-title-text">AstroidBot</h1>
             <p className="text-[10px] text-muted-text">AI Trading</p>
           </div>
-        </div>
+        </a>
         <div className="flex items-center gap-3">
           <button
             onClick={toggleTheme}
