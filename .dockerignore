@@ -16,5 +16,4 @@ eslint.config.js
 Dockerfile
 docker-compose.yml
 .dockerignore
-Grants/
 README.md

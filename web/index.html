@@ -10,7 +10,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <script>
       try {
-        if (localStorage.getItem("theme") === "light") {
+        const stored = localStorage.getItem("theme");
+        if (stored === "light" || (!stored && window.matchMedia("(prefers-color-scheme: light)").matches)) {
           document.documentElement.classList.add("light");
         } else {
           document.documentElement.classList.remove("light");
