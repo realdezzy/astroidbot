@@ -9,150 +9,22 @@ import { apiFetch } from "../lib/api";
 import { formatDate, classNames } from "../lib/utils";
 import { MultiWalletSelect } from "../components/MultiWalletSelect";
 import { StrategyDetailModal } from "../components/StrategyDetailModal";
+import { ChatInput } from "../components/ChatInput";
+import { STRATEGY_REGISTRY, STRATEGY_DEFAULTS } from "@shared/strategies";
+import type { StrategyType, AiMode } from "@shared/types";
 
-
-type StrategyType =
-  | "portfolio_rebalance" | "grid" | "dca" | "sniper" | "copy"
-  | "momentum" | "mean_reversion" | "twap" | "stop_loss_tp" | "rotational" | "breakout";
-type AiMode = "off" | "advisor" | "autonomous";
-
-interface StrategyInfo {
-  icon: React.FC<{ className?: string }>;
-  label: string;
-  desc: string;
-  defaults: Record<string, unknown>;
-  fields: { key: string; label: string; type: "number" | "text"; placeholder?: string; step?: string }[];
-}
-
-const STRATEGY_INFO: Record<StrategyType, StrategyInfo> = {
-  portfolio_rebalance: {
-    icon: Gauge, label: "Portfolio Rebalance", desc: "AI-driven weight-based portfolio rebalancing. Requires AI.",
-    defaults: { rebalanceThreshold: 2, maxPositionPct: 25, useAI: true, aiRefreshMinutes: 15, maxSlippageBps: 100, minTradeUsd: 5 },
-    fields: [
-      { key: "rebalanceThreshold", label: "Rebalance Threshold (%)", type: "number", placeholder: "2", step: "0.5" },
-      { key: "maxPositionPct", label: "Max Position (%)", type: "number", placeholder: "25", step: "1" },
-      { key: "useAI", label: "Use AI targets", type: "text", placeholder: "true/false" },
-      { key: "aiRefreshMinutes", label: "AI Refresh (min)", type: "number", placeholder: "15" },
-      { key: "maxSlippageBps", label: "Max Slippage (bps)", type: "number", placeholder: "100" },
-      { key: "tokenUniverse", label: "Token Universe (CSV)", type: "text", placeholder: "STX,ALEX,sUSDT" },
-      { key: "minTradeUsd", label: "Min Trade ($)", type: "number", placeholder: "5" },
-    ],
-  },
-  grid: {
-    icon: Grid3X3, label: "Grid Market Making", desc: "Buy/sell at fixed price intervals. AI configures spreads.",
-    defaults: { tokenPair: "STX/sUSDT", levels: 5, spreadBps: 30, maxPositionPct: 25, useAI: true, aiRefreshMinutes: 30, gridRangePct: 5, totalCapitalUsd: 50 },
-    fields: [
-      { key: "tokenPair", label: "Token Pair (e.g. STX/sUSDT)", type: "text", placeholder: "STX/sUSDT" },
-      { key: "levels", label: "Grid Levels (3-10)", type: "number", placeholder: "5" },
-      { key: "spreadBps", label: "Spread (bps per level)", type: "number", placeholder: "30" },
-      { key: "maxPositionPct", label: "Max Position (%)", type: "number", placeholder: "25" },
-      { key: "useAI", label: "Use AI for spreads", type: "text", placeholder: "true/false" },
-      { key: "aiRefreshMinutes", label: "AI Refresh (min)", type: "number", placeholder: "30" },
-      { key: "gridRangePct", label: "Grid Range (%)", type: "number", placeholder: "5" },
-      { key: "totalCapitalUsd", label: "Total Capital ($)", type: "number", placeholder: "50" },
-    ],
-  },
-  dca: {
-    icon: Clock, label: "Dollar Cost Average", desc: "Auto-buy fixed amount at regular intervals with price conditions.",
-    defaults: { tokenIn: "STX", tokenOut: "sUSDT", amount: 1, intervalMinutes: 60, priceCondition: "always", priceThresholdUsd: 0, maxSlippageBps: 100, totalBudgetUsd: 0 },
-    fields: [
-      { key: "tokenIn", label: "From Token", type: "text", placeholder: "STX" },
-      { key: "tokenOut", label: "To Token", type: "text", placeholder: "sUSDT" },
-      { key: "amount", label: "Amount per Buy", type: "number", placeholder: "1", step: "0.1" },
-      { key: "intervalMinutes", label: "Interval (min)", type: "number", placeholder: "60" },
-      { key: "priceCondition", label: "Price Condition (always/below/above)", type: "text", placeholder: "always" },
-      { key: "priceThresholdUsd", label: "Price Threshold ($)", type: "number", placeholder: "0" },
-      { key: "maxSlippageBps", label: "Max Slippage (bps)", type: "number", placeholder: "100" },
-      { key: "totalBudgetUsd", label: "Total Budget ($, 0=unlimited)", type: "number", placeholder: "0" },
-    ],
-  },
-  sniper: {
-    icon: Crosshair, label: "Token Sniper", desc: "Auto-buy new tokens matching watchlist with liquidity/impact filters.",
-    defaults: { watchTokens: "", maxBuyAmount: 1, slippageBps: 100, perTokenCapUsd: 5, maxPriceImpactPct: 5, cooldownMinutes: 60, minLiquidity: 0 },
-    fields: [
-      { key: "watchTokens", label: "Watch Tokens (CSV)", type: "text", placeholder: "ALEX,WELSH" },
-      { key: "maxBuyAmount", label: "Max Buy per Token (STX)", type: "number", placeholder: "1", step: "0.1" },
-      { key: "perTokenCapUsd", label: "Per-Token Cap ($)", type: "number", placeholder: "5" },
-      { key: "maxPriceImpactPct", label: "Max Price Impact (%)", type: "number", placeholder: "5" },
-      { key: "slippageBps", label: "Slippage (bps)", type: "number", placeholder: "100" },
-      { key: "cooldownMinutes", label: "Cooldown (min)", type: "number", placeholder: "60" },
-    ],
-  },
-  copy: {
-    icon: Copy, label: "Copy Trading", desc: "Mirror trades from a watched wallet with configurable ratio.",
-    defaults: { targetAddress: "", maxPerTrade: 10, maxCopiesPerCycle: 3, copyRatio: 1, delaySeconds: 0 },
-    fields: [
-      { key: "targetAddress", label: "Target Wallet Address", type: "text", placeholder: "SP..." },
-      { key: "maxPerTrade", label: "Max Per Trade (STX)", type: "number", placeholder: "10", step: "1" },
-      { key: "maxCopiesPerCycle", label: "Max Copies/Cycle", type: "number", placeholder: "3" },
-      { key: "copyRatio", label: "Copy Ratio", type: "number", placeholder: "1", step: "0.1" },
-      { key: "delaySeconds", label: "Delay Between Copies (s)", type: "number", placeholder: "0" },
-    ],
-  },
-  momentum: {
-    icon: TrendingUp, label: "Momentum / Trend", desc: "Buy tokens with strong positive returns, exit on reversal.",
-    defaults: { lookbackPeriods: 20, momentumThresholdPct: 2, exitThresholdPct: -1, positionSizeUsd: 10 },
-    fields: [
-      { key: "lookbackPeriods", label: "Lookback Periods", type: "number", placeholder: "20" },
-      { key: "momentumThresholdPct", label: "Entry Threshold (%)", type: "number", placeholder: "2" },
-      { key: "exitThresholdPct", label: "Exit Threshold (%)", type: "number", placeholder: "-1" },
-      { key: "positionSizeUsd", label: "Position Size ($)", type: "number", placeholder: "10" },
-      { key: "tokenUniverse", label: "Token Universe (CSV)", type: "text", placeholder: "ALEX,WELSH,DIKO" },
-    ],
-  },
-  mean_reversion: {
-    icon: RefreshCw, label: "Mean Reversion", desc: "Buy when price deviates below MA, sell when above.",
-    defaults: { maPeriods: 20, entryDeviationPct: 5, exitDeviationPct: 1, tokenPair: "STX/sUSDT", positionSizeUsd: 10 },
-    fields: [
-      { key: "maPeriods", label: "MA Periods", type: "number", placeholder: "20" },
-      { key: "entryDeviationPct", label: "Entry Deviation (%)", type: "number", placeholder: "5" },
-      { key: "exitDeviationPct", label: "Exit Deviation (%)", type: "number", placeholder: "1" },
-      { key: "tokenPair", label: "Token Pair", type: "text", placeholder: "STX/sUSDT" },
-      { key: "positionSizeUsd", label: "Position Size ($)", type: "number", placeholder: "10" },
-    ],
-  },
-  twap: {
-    icon: Timer, label: "TWAP (Time-Weighted)", desc: "Split large order into equal slices over a time window.",
-    defaults: { tokenIn: "STX", tokenOut: "sUSDT", totalAmount: 10, slices: 10, windowMinutes: 60, maxSlippageBps: 100 },
-    fields: [
-      { key: "tokenIn", label: "From Token", type: "text", placeholder: "STX" },
-      { key: "tokenOut", label: "To Token", type: "text", placeholder: "sUSDT" },
-      { key: "totalAmount", label: "Total Amount", type: "number", placeholder: "10" },
-      { key: "slices", label: "Slices", type: "number", placeholder: "10" },
-      { key: "windowMinutes", label: "Window (min)", type: "number", placeholder: "60" },
-      { key: "maxSlippageBps", label: "Max Slippage (bps)", type: "number", placeholder: "100" },
-    ],
-  },
-  stop_loss_tp: {
-    icon: ShieldAlert, label: "Stop Loss / Take Profit", desc: "Auto-exit positions at profit target or loss limit. Supports trailing stop.",
-    defaults: { token: "", takeProfitPct: 10, stopLossPct: 5, trailingStopPct: 0 },
-    fields: [
-      { key: "token", label: "Token Symbol", type: "text", placeholder: "ALEX" },
-      { key: "takeProfitPct", label: "Take Profit (%)", type: "number", placeholder: "10" },
-      { key: "stopLossPct", label: "Stop Loss (%)", type: "number", placeholder: "5" },
-      { key: "trailingStopPct", label: "Trailing Stop (%)", type: "number", placeholder: "0" },
-    ],
-  },
-  rotational: {
-    icon: RotateCw, label: "Momentum Rotation", desc: "Periodically rotate capital into top-performing tokens.",
-    defaults: { topK: 3, rebalancePeriodHours: 24, positionSizeUsd: 10 },
-    fields: [
-      { key: "topK", label: "Top K", type: "number", placeholder: "3" },
-      { key: "rebalancePeriodHours", label: "Rebalance Period (hrs)", type: "number", placeholder: "24" },
-      { key: "positionSizeUsd", label: "Position Size ($)", type: "number", placeholder: "10" },
-      { key: "tokenUniverse", label: "Token Universe (CSV)", type: "text", placeholder: "ALEX,WELSH,DIKO" },
-    ],
-  },
-  breakout: {
-    icon: ArrowUpRight, label: "Range Breakout", desc: "Buy on breakout above resistance, sell on breakdown.",
-    defaults: { lookbackPeriods: 20, breakoutPct: 3, tokenPair: "STX/sUSDT", positionSizeUsd: 10 },
-    fields: [
-      { key: "lookbackPeriods", label: "Lookback Periods", type: "number", placeholder: "20" },
-      { key: "breakoutPct", label: "Breakout Threshold (%)", type: "number", placeholder: "3" },
-      { key: "tokenPair", label: "Token Pair", type: "text", placeholder: "STX/sUSDT" },
-      { key: "positionSizeUsd", label: "Position Size ($)", type: "number", placeholder: "10" },
-    ],
-  },
+const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
+  portfolio_rebalance: Gauge,
+  grid: Grid3X3,
+  dca: Clock,
+  sniper: Crosshair,
+  copy: Copy,
+  momentum: TrendingUp,
+  mean_reversion: RefreshCw,
+  twap: Timer,
+  stop_loss_tp: ShieldAlert,
+  rotational: RotateCw,
+  breakout: ArrowUpRight,
 };
 
 interface AgentStrategy {
@@ -194,7 +66,7 @@ function AgentStrategies({ agentId, wallets }: {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [type, setType] = useState<StrategyType>("portfolio_rebalance");
-  const [config, setConfig] = useState<Record<string, unknown>>(STRATEGY_INFO.portfolio_rebalance.defaults);
+  const [config, setConfig] = useState<Record<string, unknown>>(STRATEGY_DEFAULTS.portfolio_rebalance);
   const [walletIds, setWalletIds] = useState<number[]>([]);
   const [detailId, setDetailId] = useState<number | null>(null);
 
@@ -256,8 +128,8 @@ function AgentStrategies({ agentId, wallets }: {
       )}
 
       {strategies.map((s) => {
-        const info = STRATEGY_INFO[s.type as StrategyType] ?? STRATEGY_INFO.portfolio_rebalance;
-        const Icon = info.icon;
+        const info = STRATEGY_REGISTRY.find((x) => x.type === s.type) ?? STRATEGY_REGISTRY[0]!;
+        const Icon = ICON_MAP[s.type] ?? Gauge;
         return (
           <div key={s.id} className={classNames("flex items-center gap-3 p-3 bg-input-bg/40 rounded-lg", !s.isActive && "opacity-50")}>
             <Icon className="w-4 h-4 text-brand-400 flex-shrink-0" />
@@ -285,19 +157,19 @@ function AgentStrategies({ agentId, wallets }: {
           <div>
             <label className="block text-[10px] text-muted-text mb-1.5">Strategy Type</label>
             <div className="grid grid-cols-3 gap-1.5">
-              {(Object.entries(STRATEGY_INFO) as [StrategyType, StrategyInfo][]).map(([key, info]) => {
-                const Icon = info.icon;
+              {STRATEGY_REGISTRY.map((s) => {
+                const Icon = ICON_MAP[s.type] ?? Gauge;
                 return (
                   <button
-                    key={key}
-                    onClick={() => { setType(key); setConfig({ ...info.defaults }); }}
+                    key={s.type}
+                    onClick={() => { setType(s.type as StrategyType); setConfig({ ...s.defaults }); }}
                     className={classNames(
                       "flex items-center gap-1.5 p-2 rounded border text-left transition-colors",
-                      type === key ? "bg-brand-500/10 border-brand-500/30 text-brand-400" : "bg-input-bg border-divider-color text-muted-text"
+                      type === s.type ? "bg-brand-500/10 border-brand-500/30 text-brand-400" : "bg-input-bg border-divider-color text-muted-text"
                     )}
                   >
                     <Icon className="w-3 h-3" />
-                    <span className="text-[10px] font-medium">{info.label}</span>
+                    <span className="text-[10px] font-medium">{s.label}</span>
                   </button>
                 );
               })}
@@ -305,7 +177,7 @@ function AgentStrategies({ agentId, wallets }: {
           </div>
 
           <div className="space-y-2">
-            {STRATEGY_INFO[type].fields.map((f) => (
+            {(STRATEGY_REGISTRY.find((x) => x.type === type)?.fields ?? []).map((f) => (
               <div key={f.key}>
                 <label className="block text-[10px] text-muted-text mb-0.5">{f.label}</label>
                 <input

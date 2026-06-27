@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Send, Loader2, Sparkles, Mic } from "lucide-react";
 import { apiFetch } from "../lib/api";
+import { WEB_INFO_LINK_MAP } from "@shared/navigation";
 
 interface ChatInputProps {
   onCommand?: (type: string, data: Record<string, unknown>) => void;
@@ -79,16 +80,8 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
         setTimeout(() => navigate("/agents"), 800);
       } else if (action === "info") {
         const topic = result.topic as string;
-        const linkMap: Record<string, string> = {
-          portfolio: "/portfolio",
-          wallets: "/wallets",
-          orders: "/limit-orders",
-          trades: "/trades",
-          agents: "/agents",
-          settings: "/settings",
-        };
         setResponse(`📊 Opening ${topic}...`);
-        const link = (result.suggestedLink as string) ?? linkMap[topic];
+        const link = (result.suggestedLink as string) ?? WEB_INFO_LINK_MAP[topic];
         if (link) setTimeout(() => navigate(link), 600);
         onCommand?.(action, result);
       } else if (action === "settings") {

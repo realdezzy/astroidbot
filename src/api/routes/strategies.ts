@@ -2,13 +2,15 @@ import { Router } from "express";
 import { authenticate } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { z } from "zod";
+import { InternalError, NotFoundError, ValidationError } from "../errors.js";
+import { STRATEGY_TYPES } from "../../../shared/strategies.js";
 import { StrategyController } from "../controllers/strategyController.js";
 
 const router = Router();
 
 const createStrategySchema = z.object({
   agentId: z.number().int().positive(),
-  type: z.enum(["portfolio_rebalance", "grid", "dca", "sniper", "copy", "momentum", "mean_reversion", "twap", "stop_loss_tp", "rotational", "breakout"]),
+  type: z.enum(STRATEGY_TYPES as unknown as [string, ...string[]]),
   config: z.record(z.unknown()),
   walletIds: z.array(z.number().int().positive()).min(1),
   isActive: z.boolean().optional(),

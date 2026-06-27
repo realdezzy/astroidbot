@@ -432,7 +432,7 @@ function CodeBlockContainer({ code, language }: { code: string; language: string
       </div>
 
       {/* Code body */}
-      <pre className="p-4 overflow-x-auto font-mono text-sm leading-relaxed text-emerald-400 bg-[#070b13]">
+      <pre className="p-4 overflow-x-auto font-mono text-sm leading-relaxed text-emerald-400 bg-main-bg">
         <code>{code}</code>
       </pre>
     </div>

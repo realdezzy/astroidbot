@@ -5,6 +5,7 @@ WORKDIR /app/web
 COPY web/package.json ./
 RUN npm install --legacy-peer-deps
 
+COPY shared/ /app/shared/
 COPY web/ ./
 RUN npm run build
 
@@ -24,6 +25,7 @@ RUN npm install --legacy-peer-deps --omit=dev && npm cache clean --force
 COPY prisma/ ./prisma/
 RUN npx prisma generate
 
+COPY shared/ ./shared/
 COPY src/ ./src/
 COPY Docs/ ./Docs/
 COPY --from=frontend-builder /app/web/dist ./web/dist
