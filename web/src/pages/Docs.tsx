@@ -203,25 +203,25 @@ export function Docs() {
 
       {/* Main Container */}
       <div className="flex-1 w-full max-w-full px-6 py-8 flex flex-col lg:flex-row gap-8 relative">
-        
+
         {/* Sidebar Navigation - Desktop */}
         <aside className="hidden lg:block w-72 shrink-0 space-y-6">
           {/* Search Panel */}
-          <div className="glass-card p-4 relative">
+          <div className="glass-card p-4 relative z-40">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-text" />
               <input
                 type="text"
                 placeholder="Search docs..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="input-premium"
+                className="input-premium pr-10"
               />
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-text pointer-events-none" />
             </div>
 
             {/* Search Results Dropdown */}
             {searchQuery.trim() !== "" && (
-              <div className="absolute left-0 right-0 mt-2 glass-card shadow-2xl z-30 max-h-80 overflow-y-auto p-2 space-y-1">
+              <div className="absolute left-0 right-0 mt-2 bg-main-bg border border-card-border rounded-2xl shadow-2xl z-30 max-h-80 overflow-y-auto p-2 space-y-1">
                 <div className="text-[10px] uppercase tracking-wider text-muted-text font-bold px-3 py-1">
                   {searching ? "Searching..." : `${searchResults.length} Search Results`}
                 </div>
@@ -275,11 +275,10 @@ export function Docs() {
                           <Link
                             key={item.slug}
                             to={`/docs/${item.slug}`}
-                            className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                              isActive
+                            className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${isActive
                                 ? "bg-brand-500/20 text-brand-400 font-semibold"
                                 : "text-muted-text hover:text-title-text hover:bg-bg-hover"
-                            }`}
+                              }`}
                           >
                             <span className="truncate">{item.title}</span>
                             {isActive && <ChevronRight className="w-3.5 h-3.5" />}
@@ -297,17 +296,17 @@ export function Docs() {
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
           <div className="lg:hidden fixed inset-0 z-40 bg-main-bg/95 backdrop-blur-md pt-20 px-6 overflow-y-auto">
-            <div className="relative mb-6">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-text" />
+            <div className="relative mb-6 z-40">
               <input
                 type="text"
                 placeholder="Search docs..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="input-premium"
+                className="input-premium pr-10"
               />
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-text pointer-events-none" />
               {searchQuery.trim() !== "" && (
-                <div className="absolute left-0 right-0 mt-2 glass-card shadow-2xl z-50 max-h-60 overflow-y-auto p-2 space-y-1">
+                <div className="absolute left-0 right-0 mt-2 bg-main-bg border border-card-border rounded-2xl shadow-2xl z-50 max-h-60 overflow-y-auto p-2 space-y-1">
                   {searchResults.map((result) => (
                     <Link
                       key={result.slug}
@@ -346,11 +345,10 @@ export function Docs() {
                             key={item.slug}
                             to={`/docs/${item.slug}`}
                             onClick={() => setMobileMenuOpen(false)}
-                            className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                              isActive
+                            className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${isActive
                                 ? "bg-brand-500/20 text-brand-400 font-semibold"
                                 : "text-muted-text hover:text-title-text hover:bg-bg-hover"
-                            }`}
+                              }`}
                           >
                             <span className="truncate">{item.title}</span>
                             {isActive && <ChevronRight className="w-3.5 h-3.5" />}
@@ -366,7 +364,7 @@ export function Docs() {
         )}
 
         {/* Main Content Pane */}
-        <main className="flex-1 min-w-0 glass-card rounded-2xl p-6 sm:p-8">
+        <main className="flex-1 min-w-0 glass-card rounded-2xl p-6 sm:p-8 max-h-[calc(100vh-8rem)] overflow-y-auto">
           {loadingContent ? (
             <div className="min-h-[400px] flex items-center justify-center">
               <div className="flex flex-col items-center gap-3">
@@ -413,9 +411,8 @@ export function Docs() {
                         el.scrollIntoView({ behavior: "smooth" });
                       }
                     }}
-                    className={`block text-xs text-muted-text hover:text-brand-400 transition-colors py-0.5 truncate ${
-                      heading.level === 3 ? "pl-3 opacity-70" : ""
-                    }`}
+                    className={`block text-xs text-muted-text hover:text-brand-400 transition-colors py-0.5 truncate ${heading.level === 3 ? "pl-3 opacity-70" : ""
+                      }`}
                   >
                     {heading.text}
                   </a>

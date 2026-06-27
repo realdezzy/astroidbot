@@ -110,14 +110,22 @@ export class DEXRegistry {
       try {
         const tokens = await provider.getSwappableTokens();
         for (const t of tokens) {
-          const existing = tokensMap.get(t.contractId);
+          const key = t.symbol.toUpperCase();
+          const existing = tokensMap.get(key);
           if (existing) {
             existing.supportedBy = existing.supportedBy || [];
             if (!existing.supportedBy.includes(provider.name)) {
               existing.supportedBy.push(provider.name);
             }
+            const existingIsReal = existing.contractId.includes(".");
+            const newIsReal = t.contractId.includes(".");
+            if (newIsReal && !existingIsReal) {
+              existing.contractId = t.contractId;
+              existing.name = t.name;
+              existing.decimals = t.decimals;
+            }
           } else {
-            tokensMap.set(t.contractId, {
+            tokensMap.set(key, {
               ...t,
               supportedBy: [provider.name],
             });
@@ -149,14 +157,22 @@ export class DEXRegistry {
     for (const provider of this.providers) {
       if (provider.getCachedTokens) {
         for (const t of provider.getCachedTokens()) {
-          const existing = seen.get(t.contractId);
+          const key = t.symbol.toUpperCase();
+          const existing = seen.get(key);
           if (existing) {
             existing.supportedBy = existing.supportedBy || [];
             if (!existing.supportedBy.includes(provider.name)) {
               existing.supportedBy.push(provider.name);
             }
+            const existingIsReal = existing.contractId.includes(".");
+            const newIsReal = t.contractId.includes(".");
+            if (newIsReal && !existingIsReal) {
+              existing.contractId = t.contractId;
+              existing.name = t.name;
+              existing.decimals = t.decimals;
+            }
           } else {
-            seen.set(t.contractId, {
+            seen.set(key, {
               ...t,
               supportedBy: [provider.name],
             });

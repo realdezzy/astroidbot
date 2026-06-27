@@ -11,7 +11,7 @@ This guide walks you through setting up your AstroidBot account from scratch.
 ## 1. Create an Account
 
 ### Via Web Dashboard
-1. Open the web dashboard at `http://your-server:8006`
+1. Open the web dashboard at [here](https://astroidbot.xyz/dashboard)
 2. Click **Login** (top right)
 3. Switch to the **Register** tab
 4. Enter your email and a password (8+ characters, must include letters and numbers)
