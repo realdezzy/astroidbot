@@ -6,7 +6,6 @@ import { TransactionService } from "../services/transaction.js";
 import { TelegramService } from "../services/telegram.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { BotStatus } from "../types.js";
-import { executeTradeCycle } from "./tradeCycle.js";
 import { executeLimitOrderCycle } from "./limitOrderCycle.js";
 import { StrategyEngine } from "../services/strategyEngine.js";
 import { AgentService } from "../services/agentService.js";
@@ -60,17 +59,6 @@ export async function runCycle(): Promise<void> {
         });
       }
       logger.info("Agent cycles dispatched", { count: activeAgents.length });
-    }
-
-    for (const wallet of wallets) {
-      const settings = await db.findTradeSettings(wallet.userId, "personal");
-      if (!settings) {
-        logger.debug("No trade settings found, skipping", { userId: wallet.userId });
-        continue;
-      }
-
-      const executed = await executeTradeCycle(wallet, tokens, settings);
-      totalActionsExecuted += executed;
     }
 
     // Retry pending confirmations from previous cycles

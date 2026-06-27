@@ -8,7 +8,7 @@ const router = Router();
 
 const createStrategySchema = z.object({
   agentId: z.number().int().positive(),
-  type: z.enum(["portfolio_rebalance", "grid", "dca", "sniper", "copy"]),
+  type: z.enum(["portfolio_rebalance", "grid", "dca", "sniper", "copy", "momentum", "mean_reversion", "twap", "stop_loss_tp", "rotational", "breakout"]),
   config: z.record(z.unknown()),
   walletIds: z.array(z.number().int().positive()).min(1),
   isActive: z.boolean().optional(),

@@ -1,13 +1,12 @@
+import { Redis } from "ioredis";
+import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
 
 export class RedisService {
   private static instance: RedisService;
-  private store: Map<string, { value: string; expiresAt: number }> = new Map();
-  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private client: Redis | null = null;
 
-  private constructor() {
-    this.cleanupTimer = setInterval(() => this.cleanup(), 60_000);
-  }
+  private constructor() {}
 
   static getInstance(): RedisService {
     if (!RedisService.instance) {
@@ -16,92 +15,128 @@ export class RedisService {
     return RedisService.instance;
   }
 
+  private getClient(): Redis {
+    if (!this.client) {
+      const url = ConfigManager.getInstance().config.REDIS_URL || "redis://localhost:6379";
+      this.client = new Redis(url, {
+        maxRetriesPerRequest: 3,
+        retryStrategy(times) {
+          if (times > 5) return null;
+          return Math.min(times * 200, 2000);
+        },
+        lazyConnect: true,
+      });
+
+      this.client.on("error", (err) => {
+        logger.error("Redis connection error", { error: err.message });
+      });
+
+      this.client.on("connect", () => {
+        logger.info("Redis connected");
+      });
+    }
+
+    if (this.client.status !== "ready" && this.client.status !== "connecting") {
+      this.client.connect().catch(() => {});
+    }
+
+    return this.client;
+  }
+
   async get(key: string): Promise<string | null> {
-    const entry = this.store.get(key);
-    if (!entry) return null;
-    if (Date.now() > entry.expiresAt) {
-      this.store.delete(key);
+    try {
+      return await this.getClient().get(key);
+    } catch {
       return null;
     }
-    return entry.value;
   }
 
   async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
-    this.store.set(key, {
-      value,
-      expiresAt: Date.now() + (ttlSeconds ?? 300) * 1000,
-    });
+    try {
+      const client = this.getClient();
+      if (ttlSeconds) {
+        await client.set(key, value, "EX", ttlSeconds);
+      } else {
+        await client.set(key, value);
+      }
+    } catch {}
   }
 
   async incr(key: string): Promise<number> {
-    const existing = await this.get(key);
-    const value = (parseInt(existing ?? "0", 10) + 1).toString();
-    const entry = this.store.get(key);
-    await this.set(
-      key,
-      value,
-      entry ? Math.max(1, Math.ceil((entry.expiresAt - Date.now()) / 1000)) : 60
-    );
-    return parseInt(value, 10);
+    try {
+      return await this.getClient().incr(key);
+    } catch {
+      return 0;
+    }
   }
 
   async del(key: string): Promise<void> {
-    this.store.delete(key);
+    try {
+      await this.getClient().del(key);
+    } catch {}
   }
 
-  async acquireLock(key: string, ttlSeconds = 30): Promise<boolean> {
-    const existing = await this.get(key);
-    if (existing) return false;
-    await this.set(key, "locked", ttlSeconds);
-    return true;
+  async expire(key: string, ttlSeconds: number): Promise<void> {
+    try {
+      await this.getClient().expire(key, ttlSeconds);
+    } catch {}
+  }
+
+  async acquireLock(key: string, ttlMs = 30_000): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      const result = await client.set(key, "locked", "PX", ttlMs, "NX");
+      return result === "OK";
+    } catch {
+      return false;
+    }
   }
 
   async releaseLock(key: string): Promise<void> {
     await this.del(key);
   }
 
-  async getAndIncrementNonce(address: string, fetcher?: () => Promise<number>): Promise<number> {
+  async getAndIncrementNonce(
+    address: string,
+    fetcher?: () => Promise<number>
+  ): Promise<number> {
     const key = `nonce:${address}`;
-    const existing = await this.get(key);
 
-    if (existing !== null) {
-      const current = parseInt(existing, 10);
-      await this.set(key, String(current + 1), 3600);
-      return current;
-    }
+    try {
+      const client = this.getClient();
+      const existing = await client.get(key);
 
-    let nonce = 0;
-    if (fetcher) {
-      try {
-        nonce = await fetcher();
-      } catch {
-        nonce = 0;
+      if (existing !== null) {
+        const current = parseInt(existing, 10);
+        await client.set(key, String(current + 1), "EX", 3600);
+        return current;
       }
-    }
 
-    await this.set(key, String(nonce + 1), 3600);
-    return nonce;
+      let nonce = 0;
+      if (fetcher) {
+        try {
+          nonce = await fetcher();
+        } catch {
+          nonce = 0;
+        }
+      }
+
+      await client.set(key, String(nonce + 1), "EX", 3600);
+      return nonce;
+    } catch {
+      return 0;
+    }
   }
 
   async clearNonceCache(address: string): Promise<void> {
     await this.del(`nonce:${address}`);
   }
 
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.store) {
-      if (now > entry.expiresAt) {
-        this.store.delete(key);
-      }
-    }
-  }
-
   async shutdown(): Promise<void> {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = null;
+    if (this.client) {
+      await this.client.quit();
+      this.client = null;
+      logger.info("RedisService shut down");
     }
-    this.store.clear();
-    logger.info("RedisService shut down");
   }
 }

@@ -5,29 +5,67 @@ import { AgentService } from "../../services/agentService.js";
 import { escapeMd } from "../utils.js";
 
 const STRATEGY_FIELDS: Record<string, string[]> = {
-  portfolio_rebalance: ["rebalanceThreshold", "maxPositionPct"],
-  grid: ["tokenPair", "levels", "spreadBps", "maxPositionPct"],
-  dca: ["tokenIn", "tokenOut", "amount", "intervalMinutes"],
-  sniper: ["watchTokens", "maxBuyAmount", "slippageBps"],
-  copy: ["targetAddress", "maxPerTrade", "minLiquidity"],
+  portfolio_rebalance: ["rebalanceThreshold", "maxPositionPct", "useAI", "aiRefreshMinutes", "maxSlippageBps", "tokenUniverse", "minTradeUsd"],
+  grid: ["tokenPair", "levels", "spreadBps", "maxPositionPct", "useAI", "aiRefreshMinutes", "gridRangePct", "totalCapitalUsd"],
+  dca: ["tokenIn", "tokenOut", "amount", "intervalMinutes", "priceCondition", "priceThresholdUsd", "maxSlippageBps", "totalBudgetUsd"],
+  sniper: ["watchTokens", "maxBuyAmount", "perTokenCapUsd", "maxPriceImpactPct", "slippageBps", "cooldownMinutes"],
+  copy: ["targetAddress", "maxPerTrade", "maxCopiesPerCycle", "copyRatio", "delaySeconds"],
+  momentum: ["lookbackPeriods", "momentumThresholdPct", "exitThresholdPct", "positionSizeUsd", "tokenUniverse"],
+  mean_reversion: ["maPeriods", "entryDeviationPct", "exitDeviationPct", "tokenPair", "positionSizeUsd"],
+  twap: ["tokenIn", "tokenOut", "totalAmount", "slices", "windowMinutes", "maxSlippageBps"],
+  stop_loss_tp: ["token", "takeProfitPct", "stopLossPct", "trailingStopPct"],
+  rotational: ["topK", "rebalancePeriodHours", "positionSizeUsd", "tokenUniverse"],
+  breakout: ["lookbackPeriods", "breakoutPct", "tokenPair", "positionSizeUsd"],
 };
 
 const STRATEGY_LABELS: Record<string, string> = {
-  rebalanceThreshold: "Rebalance Threshold (%) (e.g. 2.0)",
-  maxPositionPct: "Max Position Percent (%) (e.g. 25.0)",
+  rebalanceThreshold: "Rebalance Threshold (%)",
+  maxPositionPct: "Max Position (%)",
+  useAI: "Use AI? (true/false)",
+  aiRefreshMinutes: "AI Refresh Interval (min)",
+  maxSlippageBps: "Max Slippage (bps)",
+  tokenUniverse: "Token Universe (CSV, e.g. STX,ALEX)",
+  minTradeUsd: "Min Trade Size ($)",
   tokenPair: "Token Pair (e.g. STX/sUSDT)",
   levels: "Grid Levels (e.g. 5)",
-  spreadBps: "Spread in Basis Points (bps) (e.g. 30)",
+  spreadBps: "Spread (bps)",
+  gridRangePct: "Grid Range (%)",
+  totalCapitalUsd: "Total Capital ($)",
   tokenIn: "Source Token (e.g. STX)",
   tokenOut: "Destination Token (e.g. sUSDT)",
   amount: "Amount per Buy (e.g. 1.0)",
-  intervalMinutes: "Interval in Minutes (e.g. 60)",
-  watchTokens: "Watch Tokens (comma-separated, e.g. ALEX,WELSH)",
-  maxBuyAmount: "Max Buy Amount (STX) (e.g. 1.0)",
-  slippageBps: "Slippage in Basis Points (bps) (e.g. 100)",
-  targetAddress: "Target Stacks Address (e.g. SP...)",
-  maxPerTrade: "Max per Trade (STX) (e.g. 10.0)",
-  minLiquidity: "Minimum Liquidity in USD (e.g. 1000)",
+  intervalMinutes: "Interval (min)",
+  priceCondition: "Price Cond (always/below/above)",
+  priceThresholdUsd: "Price Threshold ($)",
+  totalBudgetUsd: "Total Budget (0=unlimited)",
+  watchTokens: "Watch Tokens (CSV, e.g. ALEX,WELSH)",
+  maxBuyAmount: "Max Buy (STX)",
+  perTokenCapUsd: "Per-Token Cap ($)",
+  maxPriceImpactPct: "Max Price Impact (%)",
+  slippageBps: "Slippage (bps)",
+  cooldownMinutes: "Cooldown (min)",
+  targetAddress: "Target Address (e.g. SP...)",
+  maxPerTrade: "Max Per Trade (STX)",
+  maxCopiesPerCycle: "Max Copies Per Cycle",
+  copyRatio: "Copy Ratio (e.g. 1)",
+  delaySeconds: "Delay Between Copies (s)",
+  lookbackPeriods: "Lookback Periods",
+  momentumThresholdPct: "Momentum Entry (%)",
+  exitThresholdPct: "Exit Threshold (%)",
+  positionSizeUsd: "Position Size ($)",
+  maPeriods: "MA Periods",
+  entryDeviationPct: "Entry Deviation (%)",
+  exitDeviationPct: "Exit Deviation (%)",
+  totalAmount: "Total Amount",
+  slices: "Slices",
+  windowMinutes: "Window (min)",
+  token: "Token Symbol",
+  takeProfitPct: "Take Profit (%)",
+  stopLossPct: "Stop Loss (%)",
+  trailingStopPct: "Trailing Stop (%)",
+  topK: "Top K Tokens",
+  rebalancePeriodHours: "Rebalance Period (hrs)",
+  breakoutPct: "Breakout Threshold (%)",
 };
 
 export async function agentsScreen(ctx: BotContext): Promise<void> {
@@ -143,11 +181,17 @@ export async function startStrategyWizard(ctx: BotContext, agentId: number): Pro
   ctx.session.tempStrategyWalletIds = [];
 
   const keyboard = new InlineKeyboard()
-    .text("📊 Portfolio Rebalance", "action:strat_type:portfolio_rebalance").row()
-    .text("📈 Grid Market Making", "action:strat_type:grid").row()
-    .text("⏱ Dollar Cost Averaging (DCA)", "action:strat_type:dca").row()
-    .text("🎯 Token Sniper", "action:strat_type:sniper").row()
-    .text("📋 Copy Trading", "action:strat_type:copy").row()
+    .text("📊 Rebalance", "action:strat_type:portfolio_rebalance")
+    .text("📈 Grid", "action:strat_type:grid")
+    .text("⏱ DCA", "action:strat_type:dca").row()
+    .text("🎯 Sniper", "action:strat_type:sniper")
+    .text("📋 Copy", "action:strat_type:copy")
+    .text("📈 Momentum", "action:strat_type:momentum").row()
+    .text("🔄 Mean Rev", "action:strat_type:mean_reversion")
+    .text("⌛ TWAP", "action:strat_type:twap")
+    .text("🛡️ SL/TP", "action:strat_type:stop_loss_tp").row()
+    .text("🔁 Rotation", "action:strat_type:rotational")
+    .text("↗️ Breakout", "action:strat_type:breakout")
     .text("← Back", `action:agent_details:${agentId}`);
 
   const text = "➕ *Add Trading Strategy - Step 1*\n\nSelect the strategy type you want to add to this agent:";

@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
+import { RedisService } from "./redis.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { PortfolioManager } from "./portfolio.js";
 import { RiskManager } from "./riskManager.js";
@@ -139,7 +140,7 @@ Available actions:
 3. info: { action: "info", topic: "portfolio" | "wallets" | "orders" | "status" | "settings" | "trades" | "agents" }
 4. halt: { action: "halt" }
 5. resume: { action: "resume" }
-6. create_strategy: { action: "create_strategy", type: "portfolio_rebalance" | "grid" | "dca", config: object }
+6. create_strategy: { action: "create_strategy", type: "portfolio_rebalance" | "grid" | "dca" | "sniper" | "copy" | "momentum" | "mean_reversion" | "twap" | "stop_loss_tp" | "rotational" | "breakout", config: object }
 7. perp_trade: { action: "perp_trade", market: string, direction: "LONG" | "SHORT", margin: number, leverage: number }
    - Use this when the user explicitly requests leveraged trading, margin, long, short, or perpetual contracts (e.g. 'long BTC with 5x leverage' or 'open a 3x short on STX').
 8. clarify: { action: "clarify", prompt: string, originalInput: string }
@@ -295,6 +296,25 @@ Respond in JSON format:
     prompt: string
   ): Promise<string> {
     const inputHash = crypto.createHash("sha256").update(prompt).digest("hex");
+    const cacheKey = `llm:cache:${inputHash}`;
+
+    // Cache TTL by context: sentiment/targets 15min, grid 30min, parse 5min, agent 10min
+    const ttlMap: Record<string, number> = {
+      sentiment: 900,
+      portfolio: 900,
+      market_making: 1800,
+      parse_command: 300,
+    };
+    const cacheTtl = ttlMap[context] ?? 600;
+
+    // Check cache
+    const redis = RedisService.getInstance();
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      logger.info("LLM cache hit", { context, hash: inputHash.slice(0, 8) });
+      return cached;
+    }
+
     let response = "";
 
     if ((this.provider === "openai" || this.provider === "deepseek") && this.openaiClient) {
@@ -338,6 +358,11 @@ Respond in JSON format:
       throw new Error(
         `AI provider "${this.provider}" is not configured or no API key provided`
       );
+    }
+
+    // Cache the response
+    if (response) {
+      redis.set(cacheKey, response, cacheTtl).catch(() => {});
     }
 
     return response;
