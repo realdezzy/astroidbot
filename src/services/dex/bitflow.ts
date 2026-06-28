@@ -16,6 +16,45 @@ interface LocalPool {
   feeRate: number;
 }
 
+async function callSilently<T>(fn: () => Promise<T>): Promise<T> {
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+
+  const filter = (...args: any[]) => {
+    const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
+    return (
+      msg.includes("Error calling read-only function") ||
+      msg.includes("Contract returned an error") ||
+      msg.includes("Value for provider") ||
+      msg.includes("invalid value for type") ||
+      msg.includes("Using default value") ||
+      msg.includes("Failed to get quote for route")
+    );
+  };
+
+  console.error = (...args: any[]) => {
+    if (filter(...args)) return;
+    originalError(...args);
+  };
+  console.warn = (...args: any[]) => {
+    if (filter(...args)) return;
+    originalWarn(...args);
+  };
+  console.log = (...args: any[]) => {
+    if (filter(...args)) return;
+    originalLog(...args);
+  };
+
+  try {
+    return await fn();
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
+}
+
 export class BitflowDEXService implements DEXProvider {
   name = "Bitflow";
   private static instance: BitflowDEXService;
@@ -237,7 +276,7 @@ export class BitflowDEXService implements DEXProvider {
         };
       }
 
-      const quote = await sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+      const quote = await callSilently(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn));
       const bestRoute = quote.bestRoute ?? quote.allRoutes?.[0];
       if (!bestRoute) {
         const local = this.localQuote(tokenIn, tokenOut, amountIn);
@@ -275,7 +314,7 @@ export class BitflowDEXService implements DEXProvider {
       const sdk = this.getSDK();
       if (!sdk) return 0;
 
-      const quote = await sdk.getQuoteForRoute(tokenId, "token-usda", 1);
+      const quote = await callSilently(() => sdk.getQuoteForRoute(tokenId, "token-usda", 1));
       const bestRoute = quote.allRoutes?.[0] ?? quote.bestRoute;
       if (bestRoute?.quote) {
         return bestRoute.quote / (10 ** (bestRoute.tokenYDecimals ?? 6));

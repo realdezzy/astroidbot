@@ -78,7 +78,9 @@ export class TransactionService {
         this.fetchOnChainNonce(senderAddress)
       );
 
-      const txFee = 100_000n; // 0.1 STX
+      const feeRate = await this.fetchFeeRate();
+      const txFee = BigInt(Math.max(10_000, Math.floor(400 * feeRate * 1.2)));
+
       const postConditions = postConditionsOverride && postConditionsOverride.length > 0
         ? postConditionsOverride
         : this.buildPostConditions(action, senderAddress, contractAddress, txFee);
@@ -121,6 +123,16 @@ export class TransactionService {
         txId = await this.broadcastViaVelumX(tx, config.VELUMX_RELAYER_URL, config.VELUMX_API_KEY);
       } else {
         const result = await broadcastTransaction(tx, this.network);
+        if ("error" in result && result.error) {
+          logger.error("Transaction broadcast rejected by node", {
+            error: result.error,
+            reason: result.reason,
+            reasonData: result.reason_data,
+            nonce,
+            sender: senderAddress,
+          });
+          throw new Error(`Broadcast failed: ${result.error} - ${result.reason || ""}`);
+        }
         txId = result.txid;
       }
 
@@ -164,7 +176,11 @@ export class TransactionService {
         this.fetchOnChainNonce(senderAddress)
       );
 
-      const txFee = 100_000n; // 0.1 STX
+      const feeRate = await this.fetchFeeRate();
+      const txSize = token === "STX" ? 180 : 250;
+      const minFee = token === "STX" ? 3_000 : 5_000;
+      const txFee = BigInt(Math.max(minFee, Math.floor(txSize * feeRate * 1.2)));
+
       let tx;
 
       if (token === "STX") {
@@ -226,6 +242,16 @@ export class TransactionService {
       }
 
       const result = await broadcastTransaction(tx, this.network);
+      if ("error" in result && result.error) {
+        logger.error("Transfer transaction broadcast rejected by node", {
+          error: result.error,
+          reason: result.reason,
+          reasonData: result.reason_data,
+          nonce,
+          sender: senderAddress,
+        });
+        throw new Error(`Broadcast failed: ${result.error} - ${result.reason || ""}`);
+      }
       const txId = result.txid;
 
       logger.info("Transfer transaction broadcast", { txId, nonce, sender: senderAddress, token, amount });
@@ -331,9 +357,15 @@ export class TransactionService {
           `${url}/extended/v1/address/${address}/nonces`,
           { timeout: 5000 }
         );
-        const nonce: number = response.data?.possible_next_nonce ?? 0;
-        logger.debug("Fetched nonce from chain", { address, nonce, url });
-        return nonce;
+        const possibleNextNonce = response.data?.possible_next_nonce ?? 0;
+        const pendingNonces = response.data?.pending_tx_nonces ?? [];
+        logger.info("Fetched nonce from chain", {
+          address,
+          possibleNextNonce,
+          pendingNonces,
+          url,
+        });
+        return possibleNextNonce;
       } catch (err) {
         logger.warn("RPC node failed, trying fallback", {
           url,
@@ -344,6 +376,39 @@ export class TransactionService {
 
     logger.error("All RPC nodes failed for nonce fetch, defaulting to 0");
     return 0;
+  }
+
+  // Fetches the current fee rate (in microSTX/byte) from the Stacks API
+  private async fetchFeeRate(): Promise<number> {
+    const config = ConfigManager.getInstance().config;
+    const urls = [
+      config.STACKS_API_URL,
+      ...config.STACKS_FALLBACK_API_URLS
+        .split(",")
+        .map((u) => u.trim())
+        .filter(Boolean),
+    ];
+
+    for (const url of urls) {
+      try {
+        const response = await axios.get(
+          `${url}/v2/fees/transfer`,
+          { timeout: 5000 }
+        );
+        const rate = response.data?.fee_rate;
+        if (typeof rate === "number") {
+          return rate;
+        }
+      } catch (err) {
+        logger.warn("Failed to fetch fee rate, trying fallback", {
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Default rate if all fails (approx 50 microSTX/byte)
+    return 50;
   }
 
   // Fetches transaction status with RPC failover.
