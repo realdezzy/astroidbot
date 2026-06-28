@@ -246,6 +246,16 @@ export class DatabaseService {
     });
   }
 
+  async hasPendingTradesForWallet(walletId: number): Promise<boolean> {
+    const count = await this.prisma.trade.count({
+      where: {
+        walletId,
+        status: { in: ["PENDING", "BROADCAST"] },
+      },
+    });
+    return count > 0;
+  }
+
   async getDailyTradesSince(userId: number, since: Date) {
     return this.prisma.trade.findMany({
       where: { userId, createdAt: { gte: since } },

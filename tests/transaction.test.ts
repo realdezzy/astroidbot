@@ -2,6 +2,7 @@ import {
   getNextNonce,
   validateMaxOutbound,
   shouldContinuePolling,
+  parseTokenAmount,
 } from "../src/services/transaction.js";
 
 describe("TransactionService (from src/)", () => {
@@ -76,6 +77,25 @@ describe("TransactionService (from src/)", () => {
 
     it("stops after max attempts", () => {
       expect(shouldContinuePolling("pending", 20, 20)).toBe(false);
+    });
+  });
+
+  describe("Float-free amount parsing", () => {
+    it("converts numbers accurately", () => {
+      expect(parseTokenAmount(1.234567, 6)).toBe(1234567n);
+      expect(parseTokenAmount(0.0001, 6)).toBe(100n);
+      expect(parseTokenAmount(10, 6)).toBe(10000000n);
+    });
+
+    it("converts strings accurately", () => {
+      expect(parseTokenAmount("1.234567", 6)).toBe(1234567n);
+      expect(parseTokenAmount("0.000005", 6)).toBe(5n);
+      expect(parseTokenAmount("100", 6)).toBe(100000000n);
+    });
+
+    it("handles different decimals", () => {
+      expect(parseTokenAmount(12.345, 3)).toBe(12345n);
+      expect(parseTokenAmount("0.000000001", 9)).toBe(1n);
     });
   });
 });

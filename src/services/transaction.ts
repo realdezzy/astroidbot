@@ -68,26 +68,51 @@ export class TransactionService {
     }
 
     try {
+      const hasPending = await db.hasPendingTradesForWallet(walletId);
+      if (hasPending) {
+        return { error: `Wallet ${walletId} has pending or broadcasted transactions in progress. Sequential execution is required.` };
+      }
+
       const wallet = await db.findWalletById(walletId);
       if (!wallet) {
         return { error: `Wallet ${walletId} not found` };
       }
 
       const privateKey = await KMSService.getInstance().decryptPrivateKey(wallet.encryptedKey);
-      const nonce = await redis.getAndIncrementNonce(senderAddress, () =>
-        this.fetchOnChainNonce(senderAddress)
-      );
-
-      const feeRate = await this.fetchFeeRate();
-      const txFee = BigInt(Math.max(10_000, Math.floor(400 * feeRate * 1.2)));
-
-      const postConditions = postConditionsOverride && postConditionsOverride.length > 0
-        ? postConditionsOverride
-        : this.buildPostConditions(action, senderAddress, contractAddress, txFee);
+      const nonce = await this.fetchOnChainNonce(senderAddress);
 
       const parsedArgs = (functionArgs.length > 0 && typeof functionArgs[0] !== "string")
         ? (functionArgs as ClarityValue[])
         : parseClarityArgs(functionArgs as string[]);
+
+      // 1. Build a placeholder transaction with a base fee to measure size in bytes
+      const placeholderFee = 10_000n;
+      const placeholderPostConditions = postConditionsOverride && postConditionsOverride.length > 0
+        ? postConditionsOverride
+        : this.buildPostConditions(action, senderAddress, contractAddress, placeholderFee);
+
+      const placeholderTx = await makeContractCall({
+        contractAddress,
+        contractName,
+        functionName,
+        functionArgs: parsedArgs,
+        fee: placeholderFee,
+        nonce,
+        senderKey: privateKey,
+        network: this.network,
+        anchorMode: AnchorMode.OnChainOnly,
+        postConditionMode: PostConditionMode.Allow,
+        postConditions: placeholderPostConditions,
+      });
+
+      const txSize = placeholderTx.serialize().length;
+      const feeRate = await this.fetchFeeRate();
+      const txFee = BigInt(Math.max(10_000, Math.floor(txSize * feeRate * 1.2)));
+
+      // 2. Build the final transaction with the calculated fee and correct post conditions
+      const postConditions = postConditionsOverride && postConditionsOverride.length > 0
+        ? postConditionsOverride
+        : this.buildPostConditions(action, senderAddress, contractAddress, txFee);
 
       const tx = await makeContractCall({
         contractAddress,
@@ -98,7 +123,7 @@ export class TransactionService {
         nonce,
         senderKey: privateKey,
         network: this.network,
-        anchorMode: AnchorMode.Any,
+        anchorMode: AnchorMode.OnChainOnly,
         postConditionMode: PostConditionMode.Allow,
         postConditions,
       });
@@ -134,6 +159,20 @@ export class TransactionService {
           throw new Error(`Broadcast failed: ${result.error} - ${result.reason || ""}`);
         }
         txId = result.txid;
+
+        // Verify mempool admission
+        const admitted = await this.verifyMempoolAdmission(txId);
+        if (!admitted) {
+          logger.warn("Transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
+          const retryResult = await broadcastTransaction(tx, this.network);
+          if ("error" in retryResult && retryResult.error) {
+            throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
+          }
+          const readmitted = await this.verifyMempoolAdmission(txId);
+          if (!readmitted) {
+            throw new Error(`Transaction ${txId} failed mempool admission check after re-broadcast.`);
+          }
+        }
       }
 
       logger.info("Transaction broadcast", { txId, nonce, sender: senderAddress, gasless: useGasless });
@@ -141,7 +180,6 @@ export class TransactionService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error("Transaction failed", { error: message, action });
-      await redis.clearNonceCache(senderAddress);
       return { error: message };
     } finally {
       await redis.releaseLock(lockKey);
@@ -166,32 +204,34 @@ export class TransactionService {
     }
 
     try {
+      const hasPending = await db.hasPendingTradesForWallet(walletId);
+      if (hasPending) {
+        return { error: `Wallet ${walletId} has pending or broadcasted transactions in progress. Sequential execution is required.` };
+      }
+
       const wallet = await db.findWalletById(walletId);
       if (!wallet) {
         return { error: `Wallet ${walletId} not found` };
       }
 
       const privateKey = await KMSService.getInstance().decryptPrivateKey(wallet.encryptedKey);
-      const nonce = await redis.getAndIncrementNonce(senderAddress, () =>
-        this.fetchOnChainNonce(senderAddress)
-      );
+      const nonce = await this.fetchOnChainNonce(senderAddress);
 
-      const feeRate = await this.fetchFeeRate();
-      const txSize = token === "STX" ? 180 : 250;
-      const minFee = token === "STX" ? 3_000 : 5_000;
-      const txFee = BigInt(Math.max(minFee, Math.floor(txSize * feeRate * 1.2)));
+      const rawAmount = parseTokenAmount(amount, token === "STX" ? 6 : decimals);
 
-      let tx;
+      // 1. Build a placeholder transaction with base fee to measure size in bytes
+      const placeholderFee = token === "STX" ? 3_000n : 5_000n;
+      let placeholderTx;
 
       if (token === "STX") {
-        tx = await makeSTXTokenTransfer({
+        placeholderTx = await makeSTXTokenTransfer({
           recipient: toAddress,
-          amount: BigInt(Math.floor(amount * 1_000_000)),
-          fee: txFee,
+          amount: rawAmount,
+          fee: placeholderFee,
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.Any,
+          anchorMode: AnchorMode.OnChainOnly,
         });
       } else {
         // SIP-010 token transfer
@@ -208,7 +248,58 @@ export class TransactionService {
           ? Cl.contractPrincipal(toAddress.split(".")[0]!, toAddress.split(".")[1]!)
           : Cl.standardPrincipal(toAddress);
 
-        const rawAmount = BigInt(Math.floor(amount * (10 ** decimals)));
+        const functionArgs = [
+          Cl.uint(rawAmount),
+          senderPrincipal,
+          recipientPrincipal,
+          Cl.none()
+        ];
+
+        placeholderTx = await makeContractCall({
+          contractAddress,
+          contractName,
+          functionName: "transfer",
+          functionArgs,
+          fee: placeholderFee,
+          nonce,
+          senderKey: privateKey,
+          network: this.network,
+          anchorMode: AnchorMode.OnChainOnly,
+          postConditionMode: PostConditionMode.Allow,
+        });
+      }
+
+      const txSize = placeholderTx.serialize().length;
+      const feeRate = await this.fetchFeeRate();
+      const minFee = token === "STX" ? 3_000 : 5_000;
+      const txFee = BigInt(Math.max(minFee, Math.floor(txSize * feeRate * 1.2)));
+
+      // 2. Build the final transaction with the calculated fee
+      let tx;
+
+      if (token === "STX") {
+        tx = await makeSTXTokenTransfer({
+          recipient: toAddress,
+          amount: rawAmount,
+          fee: txFee,
+          nonce,
+          senderKey: privateKey,
+          network: this.network,
+          anchorMode: AnchorMode.OnChainOnly,
+        });
+      } else {
+        const [contractAddress, contractName] = token.split(".");
+        if (!contractAddress || !contractName) {
+          throw new Error("Invalid token contract ID");
+        }
+        const senderPrincipal = senderAddress.includes(".")
+          ? Cl.contractPrincipal(senderAddress.split(".")[0]!, senderAddress.split(".")[1]!)
+          : Cl.standardPrincipal(senderAddress);
+
+        const recipientPrincipal = toAddress.includes(".")
+          ? Cl.contractPrincipal(toAddress.split(".")[0]!, toAddress.split(".")[1]!)
+          : Cl.standardPrincipal(toAddress);
+
         const functionArgs = [
           Cl.uint(rawAmount),
           senderPrincipal,
@@ -225,7 +316,7 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.Any,
+          anchorMode: AnchorMode.OnChainOnly,
           postConditionMode: PostConditionMode.Allow,
         });
       }
@@ -254,12 +345,25 @@ export class TransactionService {
       }
       const txId = result.txid;
 
+      // Verify mempool admission
+      const admitted = await this.verifyMempoolAdmission(txId);
+      if (!admitted) {
+        logger.warn("Transfer transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
+        const retryResult = await broadcastTransaction(tx, this.network);
+        if ("error" in retryResult && retryResult.error) {
+          throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
+        }
+        const readmitted = await this.verifyMempoolAdmission(txId);
+        if (!readmitted) {
+          throw new Error(`Transaction ${txId} failed mempool admission check after re-broadcast.`);
+        }
+      }
+
       logger.info("Transfer transaction broadcast", { txId, nonce, sender: senderAddress, token, amount });
       return { txId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error("Transfer failed", { error: message, token, amount, toAddress });
-      await redis.clearNonceCache(senderAddress);
       return { error: message };
     } finally {
       await redis.releaseLock(lockKey);
@@ -273,8 +377,8 @@ export class TransactionService {
       return true;
     }
 
-    const maxAttempts = 20;
-    const pollIntervalMs = 30_000;
+    const maxAttempts = 120;
+    const pollIntervalMs = 5000;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -411,6 +515,20 @@ export class TransactionService {
     return 50;
   }
 
+  // Verifies that the transaction is accepted by the mempool by checking its status.
+  private async verifyMempoolAdmission(txId: string): Promise<boolean> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await this.sleep(3000); // Wait 3s before checking
+      const result = await this.fetchTransactionStatus(txId);
+      if (result.status !== "not_found") {
+        logger.info("Transaction verified in mempool / chain", { txId, status: result.status });
+        return true;
+      }
+      logger.warn("Transaction not yet visible in mempool, retrying check", { txId, attempt });
+    }
+    return false;
+  }
+
   // Fetches transaction status with RPC failover.
   private async fetchTransactionStatus(txId: string): Promise<{ status: string }> {
     const config = ConfigManager.getInstance().config;
@@ -429,7 +547,10 @@ export class TransactionService {
           { timeout: 5000 }
         );
         return { status: response.data?.tx_status ?? "pending" };
-      } catch {
+      } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
+          return { status: "not_found" };
+        }
         logger.warn("RPC node failed during status check, trying fallback", { url, txId });
       }
     }
@@ -461,7 +582,8 @@ export class TransactionService {
     const postConditions = [];
 
     if (action.direction === "BUY") {
-      const stxLimit = BigInt(Math.floor(action.amountIn * 1e6)) + txFee;
+      const amountInBigInt = parseTokenAmount(action.amountIn, 6);
+      const stxLimit = amountInBigInt + txFee;
       postConditions.push(
         createSTXPostCondition(senderAddress, FungibleConditionCode.LessEqual, stxLimit)
       );
@@ -470,16 +592,15 @@ export class TransactionService {
         ? action.tokenIn
         : `${contractAddress}.${action.tokenIn.split(".").pop() ?? action.tokenIn}`;
 
+      const amountInBigInt = parseTokenAmount(action.amountIn, 6);
+
       postConditions.push(
         createFungiblePostCondition(
           senderAddress,
           FungibleConditionCode.LessEqual,
-          BigInt(Math.floor(action.amountIn * 1e6)),
+          amountInBigInt,
           assetInfo
         )
-      );
-      postConditions.push(
-        createSTXPostCondition(senderAddress, FungibleConditionCode.LessEqual, txFee)
       );
     }
 
@@ -536,4 +657,17 @@ export function shouldContinuePolling(
 
 export function validateMaxOutbound(amountOut: number, maxAllowed: number): boolean {
   return amountOut <= maxAllowed;
+}
+
+export function parseTokenAmount(amount: number | string, decimals: number): bigint {
+  const amtStr = typeof amount === "number" ? amount.toFixed(decimals) : amount;
+  const parts = amtStr.split(".");
+  const integerPart = parts[0] || "0";
+  let fractionalPart = parts[1] || "";
+  if (fractionalPart.length < decimals) {
+    fractionalPart = fractionalPart.padEnd(decimals, "0");
+  } else {
+    fractionalPart = fractionalPart.slice(0, decimals);
+  }
+  return BigInt(integerPart + fractionalPart);
 }
