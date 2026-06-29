@@ -394,7 +394,7 @@ export class TransactionService {
           return true;
         }
 
-        if (result.status === "aborted_by_response" || result.status === "aborted_by_post_condition") {
+        if (result.status.startsWith("abort") || result.status === "failed") {
           await DatabaseService.getInstance().updateTradeStatus(
             tradeId,
             "FAILED",

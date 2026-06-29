@@ -64,10 +64,10 @@ describe("TransactionService (from src/)", () => {
 
     it("stops on abort", () => {
       expect(
-        shouldContinuePolling("aborted_by_response", 1, 20)
+        shouldContinuePolling("abort_by_response", 1, 20)
       ).toBe(false);
       expect(
-        shouldContinuePolling("aborted_by_post_condition", 1, 20)
+        shouldContinuePolling("abort_by_post_condition", 1, 20)
       ).toBe(false);
     });
 
