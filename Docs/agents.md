@@ -103,4 +103,4 @@ Each agent's `config` JSON can include:
 | `maxPositionPct` | Max % of wallet balance per trade | 25 |
 | `allowedTokens` | Array of token symbols the agent is allowed to trade | (all) |
 
-The AI prompt for autonomous agents includes real-time STX price, wallet balances, and available tokens from ALEX DEX.
+The AI prompt for autonomous agents includes real-time STX price, wallet balances, and available tokens from the registered DEX registries.

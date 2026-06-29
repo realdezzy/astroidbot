@@ -6,7 +6,7 @@ order: 6
 
 # Trading Tokens
 
-Execute swaps between any supported Stacks tokens. AstroidBot automatically finds the best price across available DEXs (ALEX, Bitflow).
+Execute swaps between any supported Stacks tokens. AstroidBot automatically finds the best price across available DEXs (ALEX, Bitflow, Velar, and Faktory).
 
 ## Quick Trade — Web
 
@@ -51,16 +51,15 @@ Go to **Trades** in the sidebar. View all historical trades with:
 ### Telegram
 Tap **📈 Trades** on the main menu. Shows last 20 trades with direction, amounts, and status emojis.
 
-## Supported Tokens
+## Supported Tokens & DEXs
 
-The bot supports all tokens available on ALEX DEX (typically 28+ tokens). Common pairs include:
-- STX / sUSDT
-- STX / ALEX
-- STX / USDA
-- STX / WELSH
-- STX / DIKO
+The bot aggregates liquidity from multiple Stacks DEXs (typically 200+ tokens cached automatically):
+- **ALEX**: Standard and stable token pools (STX, sUSDT, ALEX, USDA)
+- **Bitflow**: Stablecoins and protocol tokens (sUSDT, USDA, STX)
+- **Velar**: Protocol tokens and liquidity pools (STX, VELAR, etc.)
+- **Faktory**: Meme tokens and newly launched bonding curve assets (e.g. AGENTX, WELSH, etc.)
 
-Token list is cached for 6 hours and refreshed automatically.
+Token registries and liquidity pool metadata are cached and refreshed automatically in the background.
 
 ## Trade Execution Flow
 

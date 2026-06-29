@@ -50,7 +50,7 @@ Every trade needs a wallet. When you first sign up, AstroidBot automatically cre
   - **Autonomous** — executes AI decisions alongside strategies
 
 ### DEX Routing
-AstroidBot automatically finds the best price across available DEXs (ALEX, Bitflow) for every trade. You don't need to know which exchange to use — the bot picks the best route.
+AstroidBot automatically finds the best price across available DEXs (ALEX, Bitflow, Velar, Faktory) for every trade. You don't need to know which exchange to use — the bot picks the best route.
 
 ## Next Steps
 1. [Set up your account and link Telegram](/Docs/getting-started)

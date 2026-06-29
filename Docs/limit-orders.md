@@ -74,7 +74,7 @@ Orders can optionally "force execute" after a certain time regardless of price â
 
 ## Fees
 
-Each limit order execution incurs the standard ALEX DEX fee (typically 0.3% / 30 bps). This fee is shown in the trade history after execution.
+Each limit order execution incurs the standard DEX fee (typically 0.3% / 30 bps, depending on the route and platform used). This fee is shown in the trade history after execution.
 
 ## Multiple Wallets
 
