@@ -19,7 +19,8 @@ import { DatabaseService } from "./db.js";
 import { KMSService } from "./kms.js";
 import { RedisService } from "./redis.js";
 import type { RebalanceAction } from "../types.js";
-import { VelumXClient } from "@velumx/sdk";
+import { VelumXClient, RelayerError } from "@velumx/sdk";
+import { CircuitBreakerRegistry } from "../utils/circuitBreaker.js";
 
 export class TransactionService {
   private static instance: TransactionService;
@@ -212,7 +213,8 @@ export class TransactionService {
           return { txId: "dry-run-tx-id" };
         }
 
-        const result = await broadcastTransaction(tx, this.network);
+        const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
+        const result = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
         if ("error" in result && result.error) {
           logger.error("Transaction broadcast rejected by node", {
             error: result.error,
@@ -229,7 +231,7 @@ export class TransactionService {
         const admitted = await this.verifyMempoolAdmission(txId);
         if (!admitted) {
           logger.warn("Transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
-          const retryResult = await broadcastTransaction(tx, this.network);
+          const retryResult = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
           if ("error" in retryResult && retryResult.error) {
             throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
           }
@@ -397,7 +399,8 @@ export class TransactionService {
         return { txId: "dry-run-tx-id" };
       }
 
-      const result = await broadcastTransaction(tx, this.network);
+      const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
+      const result = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
       if ("error" in result && result.error) {
         logger.error("Transfer transaction broadcast rejected by node", {
           error: result.error,
@@ -414,7 +417,7 @@ export class TransactionService {
       const admitted = await this.verifyMempoolAdmission(txId);
       if (!admitted) {
         logger.warn("Transfer transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
-        const retryResult = await broadcastTransaction(tx, this.network);
+        const retryResult = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
         if ("error" in retryResult && retryResult.error) {
           throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
         }
@@ -501,21 +504,34 @@ export class TransactionService {
     relayerUrl: string,
     apiKey: string
   ): Promise<string> {
-    const serialized = Buffer.from(tx.serialize()).toString("hex");
+    const txHex = Buffer.from(tx.serialize()).toString("hex");
     const networkName = ConfigManager.getInstance().config.STACKS_NETWORK === "mainnet" ? "mainnet" : "testnet";
+
+    // paymasterUrl is the full API base (e.g. https://api.velumx.xyz/api/v1).
+    // apiKey is injected server-side as x-api-key — we ARE the server in this context.
     const velumx = new VelumXClient({
       paymasterUrl: relayerUrl,
-      apiKey: apiKey,
+      apiKey,
       network: networkName,
     });
 
-    const result = await velumx.sponsor(serialized);
-    const txId = result.txid;
-    if (!txId) {
-      throw new Error("VelumX relayer returned no txid");
+    const velumxBreaker = CircuitBreakerRegistry.getBreaker("VelumX");
+    try {
+      const result = await velumxBreaker.execute(() => velumx.sponsor(txHex));
+      const txId = result.txid;
+      if (!txId) {
+        throw new Error("VelumX relayer returned no txid");
+      }
+      logger.info("Transaction relayed via VelumX", { txId });
+      return txId;
+    } catch (err) {
+      if (err instanceof RelayerError) {
+        // Relayer explicitly rejected — do not count as a circuit breaker failure
+        logger.error("VelumX relayer rejected transaction", { reason: err.message });
+        throw new Error(`VelumX rejected: ${err.message}`);
+      }
+      throw err;
     }
-    logger.info("Transaction relayed via VelumX", { txId });
-    return txId;
   }
 
   // Fetches nonces from the Stacks API with fallback node support.
@@ -529,12 +545,14 @@ export class TransactionService {
         .filter(Boolean),
     ];
 
+    const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
+
     for (const url of urls) {
       try {
-        const response = await axios.get(
+        const response = await stacksRpc.execute(() => axios.get(
           `${url}/extended/v1/address/${address}/nonces`,
           { timeout: 5000 }
-        );
+        ));
         const possibleNextNonce = response.data?.possible_next_nonce ?? 0;
         const pendingNonces = response.data?.pending_tx_nonces ?? [];
         logger.info("Fetched nonce from chain", {
@@ -567,12 +585,14 @@ export class TransactionService {
         .filter(Boolean),
     ];
 
+    const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
+
     for (const url of urls) {
       try {
-        const response = await axios.get(
+        const response = await stacksRpc.execute(() => axios.get(
           `${url}/v2/fees/transfer`,
           { timeout: 5000 }
-        );
+        ));
         const rate = response.data?.fee_rate;
         if (typeof rate === "number") {
           return rate;
@@ -615,13 +635,14 @@ export class TransactionService {
     ];
 
     const formattedTxId = txId.startsWith("0x") ? txId : `0x${txId}`;
+    const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
 
     for (const url of urls) {
       try {
-        const response = await axios.get(
+        const response = await stacksRpc.execute(() => axios.get(
           `${url}/extended/v1/tx/${formattedTxId}`,
           { timeout: 5000 }
-        );
+        ));
         return { status: response.data?.tx_status ?? "pending" };
       } catch (err) {
         if (axios.isAxiosError(err) && err.response?.status === 404) {

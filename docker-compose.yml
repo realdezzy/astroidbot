@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: astroidbot
       POSTGRES_PASSWORD: astroidbot

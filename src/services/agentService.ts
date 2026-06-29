@@ -6,6 +6,7 @@ import { AIOrchestrator } from "./ai.js";
 import { QueueManager } from "./queue.js";
 import { StrategyEngine } from "./strategyEngine.js";
 import { PortfolioManager } from "./portfolio.js";
+import { NotificationService } from "./notificationService.js";
 
 
 interface AgentRunResult {
@@ -25,6 +26,50 @@ export class AgentService {
     return AgentService.instance;
   }
 
+  private async handleAgentSuccess(agentId: number): Promise<void> {
+    const db = DatabaseService.getInstance();
+    await db.prisma.tradeAgent.update({
+      where: { id: agentId },
+      data: { failureCount: 0 },
+    });
+  }
+
+  private async handleAgentFailure(agentId: number, userId: number, errorMsg: string): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const agent = await db.prisma.tradeAgent.findUnique({
+      where: { id: agentId },
+    });
+    if (!agent) return;
+
+    const newFailureCount = agent.failureCount + 1;
+    if (newFailureCount >= 5) {
+      await db.prisma.tradeAgent.update({
+        where: { id: agentId },
+        data: { failureCount: newFailureCount, isActive: false },
+      });
+
+      await db.prisma.auditLog.create({
+        data: {
+          userId,
+          action: "AGENT_AUTO_DISABLE",
+          details: `Agent ${agent.name} (ID: ${agentId}) automatically disabled after 5 consecutive failures. Last error: ${errorMsg}`,
+        },
+      });
+
+      await NotificationService.getInstance().send({
+        userId,
+        title: "Agent Automatically Disabled",
+        message: `Your agent "${agent.name}" has been disabled due to 5 consecutive failures. Last failure: ${errorMsg}`,
+        type: "ERROR",
+      });
+    } else {
+      await db.prisma.tradeAgent.update({
+        where: { id: agentId },
+        data: { failureCount: newFailureCount },
+      });
+    }
+  }
+
   /**
    * Run one cycle for an agent:
    *   1. Execute all of the agent's deterministic strategies via StrategyEngine.
@@ -37,82 +82,85 @@ export class AgentService {
       return { actions: 0, strategiesExecuted: 0, reason: "Agent not active" };
     }
 
-    const wallets = await db.findWalletsByUserId(agent.userId);
-    if (wallets.length === 0) {
-      return { actions: 0, strategiesExecuted: 0, reason: "No wallets" };
-    }
+    try {
+      const wallets = await db.findWalletsByUserId(agent.userId);
+      if (wallets.length === 0) {
+        throw new Error("No wallets configured for user");
+      }
 
-    const registry = DEXRegistry.getInstance();
-    const tokens = await registry.getSwappableTokens();
-    const pm = PortfolioManager.getInstance();
+      const registry = DEXRegistry.getInstance();
+      const tokens = await registry.getSwappableTokens();
+      const pm = PortfolioManager.getInstance();
 
-    const updatedWallets = await Promise.all(
-      wallets.map(async (w) => {
-        try {
-          const balances = await pm.fetchBalances(w.address, tokens, agent.userId);
-          const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
-          await db.updateWalletBalance(w.id, stxBal);
-          return { ...w, balance: stxBal };
-        } catch {
-          return w;
-        }
-      })
-    );
-
-    const state = (agent.state as Record<string, unknown>) ?? {};
-    const cfg = (agent.config as Record<string, unknown>) ?? {};
-    const aiMode = ((agent as { aiMode?: string }).aiMode) ?? "off";
-
-    // 1. Execute deterministic strategies belonging to this agent
-    const strategies = await db.prisma.tradingStrategy.findMany({
-      where: { agentId, userId: agent.userId, isActive: true },
-    });
-
-    let strategiesExecuted = 0;
-    let actionsExecuted = 0;
-
-    if (strategies.length > 0) {
-      const result = await StrategyEngine.getInstance().runStrategies(
-        strategies.map((s) => ({
-          id: s.id, type: s.type, config: s.config as Record<string, unknown>, userId: s.userId,
-        })),
+      const updatedWallets = await Promise.all(
+        wallets.map(async (w) => {
+          try {
+            const balances = await pm.fetchBalances(w.address, tokens, agent.userId);
+            const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
+            await db.updateWalletBalance(w.id, stxBal);
+            return { ...w, balance: stxBal };
+          } catch {
+            return w;
+          }
+        })
       );
-      strategiesExecuted = result.strategies;
-      actionsExecuted += result.actions;
-    }
 
-    // 2. Optional AI overlay
-    let aiDecision: { action: string; reason: string } | undefined;
-    if (aiMode === "advisor" || aiMode === "autonomous") {
-      try {
+      const state = (agent.state as Record<string, unknown>) ?? {};
+      const cfg = (agent.config as Record<string, unknown>) ?? {};
+      const aiMode = ((agent as { aiMode?: string }).aiMode) ?? "off";
+
+      // 1. Execute deterministic strategies belonging to this agent
+      const strategies = await db.prisma.tradingStrategy.findMany({
+        where: { agentId, userId: agent.userId, isActive: true },
+      });
+
+      let strategiesExecuted = 0;
+      let actionsExecuted = 0;
+
+      if (strategies.length > 0) {
+        const result = await StrategyEngine.getInstance().runStrategies(
+          strategies.map((s) => ({
+            id: s.id, type: s.type, config: s.config as Record<string, unknown>, userId: s.userId,
+          })),
+        );
+        strategiesExecuted = result.strategies;
+        actionsExecuted += result.actions;
+      }
+
+      // 2. Optional AI overlay
+      let aiDecision: { action: string; reason: string } | undefined;
+      if (aiMode === "advisor" || aiMode === "autonomous") {
         aiDecision = await this.runAiOverlay(agent, updatedWallets, state, cfg, aiMode === "autonomous");
         if (aiDecision && aiMode === "autonomous" && aiDecision.action === "trade") {
           actionsExecuted += 1;
         }
-      } catch (err) {
-        logger.warn(`Agent ${agent.name} AI overlay failed`, {
-          error: err instanceof Error ? err.message : String(err),
-        });
       }
+
+      // Update state
+      state.lastRun = new Date().toISOString();
+      state.lastStrategiesExecuted = strategiesExecuted;
+      state.lastActions = actionsExecuted;
+      if (aiDecision) state.lastDecision = { ...aiDecision, time: new Date().toISOString() };
+
+      await db.prisma.tradeAgent.update({
+        where: { id: agent.id },
+        data: { state: state as any },
+      });
+
+      await this.handleAgentSuccess(agentId);
+
+      return {
+        actions: actionsExecuted,
+        strategiesExecuted,
+        reason: aiDecision?.reason ?? `Ran ${strategiesExecuted} strategies`,
+        aiDecision,
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("Agent cycle failed", { agentId: agent.id, error: err });
+      await this.handleAgentFailure(agentId, agent.userId, errorMsg);
+      throw err;
     }
-
-    // Update state
-    state.lastRun = new Date().toISOString();
-    state.lastStrategiesExecuted = strategiesExecuted;
-    state.lastActions = actionsExecuted;
-    if (aiDecision) state.lastDecision = { ...aiDecision, time: new Date().toISOString() };
-
-    await db.prisma.tradeAgent.update({
-      where: { id: agent.id },
-      data: { state: state as any },
-    });
-
-    return {
-      actions: actionsExecuted,
-      strategiesExecuted,
-      reason: aiDecision?.reason ?? `Ran ${strategiesExecuted} strategies`,
-      aiDecision,
-    };
   }
 
   private async runAiOverlay(

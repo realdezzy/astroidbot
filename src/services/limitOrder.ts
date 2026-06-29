@@ -4,6 +4,7 @@ import { DEXRegistry } from "./dex/dexRegistry.js";
 import { PortfolioManager } from "./portfolio.js";
 import { TransactionService } from "./transaction.js";
 import { WebSocketManager } from "../api/websocket.js";
+import { NotificationService } from "./notificationService.js";
 import type { SwappableToken } from "../types.js";
 
 export class LimitOrderService {
@@ -87,6 +88,50 @@ export class LimitOrderService {
     });
   }
 
+  private async handleLimitOrderSuccess(orderId: number): Promise<void> {
+    const db = DatabaseService.getInstance();
+    await db.prisma.limitOrder.update({
+      where: { id: orderId },
+      data: { failureCount: 0 },
+    });
+  }
+
+  private async handleLimitOrderFailure(orderId: number, userId: number, errorMsg: string): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const order = await db.prisma.limitOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) return;
+
+    const newFailureCount = order.failureCount + 1;
+    if (newFailureCount >= 5) {
+      await db.prisma.limitOrder.update({
+        where: { id: orderId },
+        data: { failureCount: newFailureCount, status: "SUSPENDED" },
+      });
+
+      await db.prisma.auditLog.create({
+        data: {
+          userId,
+          action: "LIMIT_ORDER_AUTO_DISABLE",
+          details: `Limit Order ${order.tokenIn}→${order.tokenOut} (ID: ${orderId}) suspended after 5 consecutive failures. Last error: ${errorMsg}`,
+        },
+      });
+
+      await NotificationService.getInstance().send({
+        userId,
+        title: "Limit Order Suspended",
+        message: `Your limit order to swap ${order.amountIn} ${order.tokenIn} to ${order.tokenOut} has been suspended due to 5 consecutive failures. Last error: ${errorMsg}`,
+        type: "ERROR",
+      });
+    } else {
+      await db.prisma.limitOrder.update({
+        where: { id: orderId },
+        data: { failureCount: newFailureCount },
+      });
+    }
+  }
+
   async checkAndExecute(
     activeWallets: Array<{ id: number; userId: number; address: string }>,
     tokens: SwappableToken[]
@@ -138,85 +183,92 @@ export class LimitOrderService {
 
         if (!shouldExecute) continue;
 
-        const bestQuoteResult = await registry.getBestQuote(order.tokenIn, order.tokenOut, order.amountIn);
-        if (!bestQuoteResult) {
-          logger.warn("No route for limit order", { orderId: order.id });
-          continue;
-        }
+        try {
+          const bestQuoteResult = await registry.getBestQuote(order.tokenIn, order.tokenOut, order.amountIn);
+          if (!bestQuoteResult) {
+            throw new Error("No route found for limit order");
+          }
 
-        const { providerName, quote: est } = bestQuoteResult;
-        const provider = registry.getProvider(providerName);
-        if (!provider) continue;
+          const { providerName, quote: est } = bestQuoteResult;
+          const provider = registry.getProvider(providerName);
+          if (!provider) {
+            throw new Error(`DEX provider ${providerName} not found`);
+          }
 
-        const minOut = est.amountOut * 0.99;
-        const payload = await provider.buildSwapPayload(
-          order.tokenIn, order.tokenOut, order.amountIn, minOut, wallet.address
-        );
+          const minOut = est.amountOut * 0.99;
+          const payload = await provider.buildSwapPayload(
+            order.tokenIn, order.tokenOut, order.amountIn, minOut, wallet.address
+          );
 
-        if (!payload) {
-          logger.warn("Failed to build payload for limit order", { orderId: order.id, providerName });
-          continue;
-        }
+          if (!payload) {
+            throw new Error("Failed to build transaction payload");
+          }
 
-        const settings = await db.findTradeSettings(order.userId, "personal");
-        const useGasless = settings?.useGasless ?? false;
+          const settings = await db.findTradeSettings(order.userId, "personal");
+          const useGasless = settings?.useGasless ?? false;
 
-        const result = await txService.execute(
-          {
-            tokenIn: order.tokenIn,
-            tokenOut: order.tokenOut,
-            amountIn: order.amountIn,
-            direction: order.direction as "BUY" | "SELL",
-            reason,
-          },
-          payload.contractAddress,
-          payload.contractName,
-          payload.functionName,
-          payload.functionArgs,
-          wallet.id,
-          wallet.address,
-          est.amountOut,
-          useGasless,
-          payload.postConditions
-        );
+          const result = await txService.execute(
+            {
+              tokenIn: order.tokenIn,
+              tokenOut: order.tokenOut,
+              amountIn: order.amountIn,
+              direction: order.direction as "BUY" | "SELL",
+              reason,
+            },
+            payload.contractAddress,
+            payload.contractName,
+            payload.functionName,
+            payload.functionArgs,
+            wallet.id,
+            wallet.address,
+            est.amountOut,
+            useGasless,
+            payload.postConditions
+          );
 
-        if ("txId" in result) {
-          const trade = await db.createTrade({
-            walletId: wallet.id,
-            userId: order.userId,
-            direction: order.direction,
-            tokenIn: order.tokenIn,
-            tokenOut: order.tokenOut,
-            amountIn: order.amountIn,
-            amountOut: est.amountOut,
-            feeAmount: est.feeAmount,
-            feeBps: est.feeBps,
-          });
+          if ("txId" in result) {
+            const trade = await db.createTrade({
+              walletId: wallet.id,
+              userId: order.userId,
+              direction: order.direction,
+              tokenIn: order.tokenIn,
+              tokenOut: order.tokenOut,
+              amountIn: order.amountIn,
+              amountOut: est.amountOut,
+              feeAmount: est.feeAmount,
+              feeBps: est.feeBps,
+            });
 
-          await db.updateTradeStatus(trade.id, "BROADCAST", result.txId);
-          await db.prisma.limitOrder.update({
-            where: { id: order.id },
-            data: { status: "PENDING_FILL", txId: result.txId },
-          });
+            await db.updateTradeStatus(trade.id, "BROADCAST", result.txId);
+            await db.prisma.limitOrder.update({
+              where: { id: order.id },
+              data: { status: "PENDING_FILL", txId: result.txId },
+            });
 
-          wss.broadcastTradeEvent(order.userId, "trade_broadcast", {
-            tradeId: trade.id,
-            txId: result.txId,
-            direction: order.direction,
-            tokenIn: order.tokenIn,
-            tokenOut: order.tokenOut,
-            amountIn: order.amountIn,
-            amountOut: est.amountOut,
-            feeAmount: est.feeAmount,
-            feeBps: est.feeBps,
-          });
+            wss.broadcastTradeEvent(order.userId, "trade_broadcast", {
+              tradeId: trade.id,
+              txId: result.txId,
+              direction: order.direction,
+              tokenIn: order.tokenIn,
+              tokenOut: order.tokenOut,
+              amountIn: order.amountIn,
+              amountOut: est.amountOut,
+              feeAmount: est.feeAmount,
+              feeBps: est.feeBps,
+            });
 
-          executed++;
-        } else {
+            await this.handleLimitOrderSuccess(order.id);
+            executed++;
+          } else {
+            throw new Error(result.error || "Transaction broadcast failed");
+          }
+        } catch (execErr) {
+          const errorMsg = execErr instanceof Error ? execErr.message : String(execErr);
           logger.error("Limit order execution failed", {
             orderId: order.id,
-            error: result.error,
+            error: errorMsg,
           });
+          await this.handleLimitOrderFailure(order.id, order.userId, errorMsg);
         }
       } catch (error) {
         logger.error("Limit order check failed", { orderId: order.id, error });

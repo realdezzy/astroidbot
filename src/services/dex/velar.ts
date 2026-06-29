@@ -4,6 +4,7 @@ import { logger } from "../../utils/logger.js";
 import { RedisService } from "../redis.js";
 import type { SwappableToken, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote } from "../../types/dexProvider.js";
+import { CircuitBreakerRegistry } from "../../utils/circuitBreaker.js";
 
 export class VelarDEXService implements DEXProvider {
   name = "Velar";
@@ -18,6 +19,10 @@ export class VelarDEXService implements DEXProvider {
 
   private constructor() {
     this.sdk = new VelarSDK({ headless: true });
+  }
+
+  private get breaker() {
+    return CircuitBreakerRegistry.getBreaker("Velar");
   }
 
   static initialize(): VelarDEXService {
@@ -38,17 +43,20 @@ export class VelarDEXService implements DEXProvider {
     if (this.initialized) return;
     const config = ConfigManager.getInstance().config;
     this.sdk.setBlockChainApiUrl(config.STACKS_API_URL);
-    await this.sdk.init();
+    await this.breaker.execute(() => this.sdk.init());
     this.initialized = true;
   }
 
-  private resolveTokenId(symbolOrContractId: string): string {
+  private resolveTokenId(symbolOrContractId: string): string | null {
     const token = this.swappableTokens.find(
       (t) =>
         t.contractId.toLowerCase() === symbolOrContractId.toLowerCase() ||
         t.symbol.toLowerCase() === symbolOrContractId.toLowerCase()
     );
-    return token ? token.contractId : symbolOrContractId;
+    if (token) return token.contractId;
+    // Only accept raw values that look like a valid Stacks contract ID (addr.name)
+    if (symbolOrContractId.includes(".")) return symbolOrContractId;
+    return null;
   }
 
   private getTokenDecimals(symbolOrContractId: string): number {
@@ -73,7 +81,7 @@ export class VelarDEXService implements DEXProvider {
     this.lastFetchAttemptAt = now;
     try {
       await this.ensureInitialized();
-      const tokensMeta = await getTokensMeta();
+      const tokensMeta = await this.breaker.execute(() => getTokensMeta());
       this.swappableTokens = tokensMeta.map((t: any) => ({
         contractId: t.contractAddress,
         symbol: t.symbol,
@@ -95,12 +103,13 @@ export class VelarDEXService implements DEXProvider {
       await this.ensureInitialized();
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
-      const swap = await this.sdk.getSwapInstance({
+      if (!tokenInId || !tokenOutId) return false;
+      const swap = await this.breaker.execute(() => this.sdk.getSwapInstance({
         account: "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
         inToken: tokenInId,
         outToken: tokenOutId,
-      });
-      const info = await swap.buildPoolInfo();
+      }));
+      const info = await this.breaker.execute(() => swap.buildPoolInfo());
       return !!(info && info.routes && info.routes.length > 0);
     } catch {
       return false;
@@ -123,7 +132,7 @@ export class VelarDEXService implements DEXProvider {
         if (cached) return parseFloat(cached);
       } catch {}
 
-      const tokensMeta = await getTokensMeta();
+      const tokensMeta = await this.breaker.execute(() => getTokensMeta());
       const match = tokensMeta.find((t: any) => t.symbol.toLowerCase() === token.symbol.toLowerCase());
       const price = match ? parseFloat(match.price) : 0;
 
@@ -146,15 +155,19 @@ export class VelarDEXService implements DEXProvider {
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
 
-      const swap = await this.sdk.getSwapInstance({
+      if (!tokenInId || !tokenOutId) {
+        return { amountOut: 0, priceImpact: 0, feeBps: 30, feeAmount: 0 };
+      }
+
+      const swap = await this.breaker.execute(() => this.sdk.getSwapInstance({
         account: "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
         inToken: tokenInId,
         outToken: tokenOutId,
-      });
+      }));
 
-      const quote = await swap.getComputedAmount({
+      const quote = await this.breaker.execute(() => swap.getComputedAmount({
         amount: amountIn,
-      });
+      }));
 
       if (!quote || !quote.valid) {
         throw new Error(quote?.errorMessage || "Invalid quote from Velar");
@@ -205,23 +218,25 @@ export class VelarDEXService implements DEXProvider {
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
 
-      const swap = await this.sdk.getSwapInstance({
+      if (!tokenInId || !tokenOutId) return null;
+
+      const swap = await this.breaker.execute(() => this.sdk.getSwapInstance({
         account: senderAddress,
         inToken: tokenInId,
         outToken: tokenOutId,
-      });
+      }));
 
-      const quote = await swap.getComputedAmount({ amount: amountIn });
+      const quote = await this.breaker.execute(() => swap.getComputedAmount({ amount: amountIn }));
       const expectedOut = Number(quote.value) || minAmountOut;
       let slippagePct = 1.0;
       if (expectedOut > 0 && minAmountOut > 0) {
         slippagePct = Math.max(0.5, Math.round((1 - minAmountOut / expectedOut) * 100 * 100) / 100);
       }
 
-      const tx = await swap.swap({
+      const tx = await this.breaker.execute(() => swap.swap({
         amount: amountIn,
         slippage: slippagePct,
-      });
+      }));
 
       return {
         contractAddress: tx.contractAddress,

@@ -3,6 +3,7 @@ import { logger } from "../../utils/logger.js";
 import { RedisService } from "../redis.js";
 import type { SwappableToken, SwapRoute, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote } from "../../types/dexProvider.js";
+import { CircuitBreakerRegistry } from "../../utils/circuitBreaker.js";
 
 interface TokenPair {
   tokenX: string;
@@ -25,6 +26,10 @@ export class AlexDEXService implements DEXProvider {
 
   private constructor() {
     this.sdk = new AlexSDK();
+  }
+
+  private get breaker() {
+    return CircuitBreakerRegistry.getBreaker("Alex");
   }
 
   static initialize(): AlexDEXService {
@@ -56,7 +61,7 @@ export class AlexDEXService implements DEXProvider {
 
     for (let attempt = 1; attempt <= 4; attempt++) {
       try {
-        const tokenInfos = await this.sdk.fetchSwappableCurrency();
+        const tokenInfos = await this.breaker.execute(() => this.sdk.fetchSwappableCurrency());
 
         this.swappableTokens = tokenInfos.map((t) => ({
           contractId: t.id,
@@ -120,7 +125,7 @@ export class AlexDEXService implements DEXProvider {
     try {
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
-      const route = await this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency);
+      const route = await this.breaker.execute(() => this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency));
       return route.length > 0;
     } catch {
       return false;
@@ -146,17 +151,17 @@ export class AlexDEXService implements DEXProvider {
       const amountInBigInt = BigInt(Math.floor(amountIn * (10 ** decimalsIn)));
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
-      const route = await this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency);
-      const amountOutBigInt = await this.sdk.getAmountTo(
+      const route = await this.breaker.execute(() => this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency));
+      const amountOutBigInt = await this.breaker.execute(() => this.sdk.getAmountTo(
         tokenInId as Currency,
         amountInBigInt,
         tokenOutId as Currency,
         route.length > 0 ? route : undefined,
-      );
+      ));
 
       const amountOut = Number(amountOutBigInt) / (10 ** decimalsOut);
 
-      const prices = await this.sdk.getLatestPrices();
+      const prices = await this.breaker.execute(() => this.sdk.getLatestPrices());
       const priceIn = getPriceFromMap(prices, tokenIn);
       const priceOut = getPriceFromMap(prices, tokenOut);
 
@@ -194,7 +199,7 @@ export class AlexDEXService implements DEXProvider {
         if (cached) return parseFloat(cached);
       } catch { }
 
-      const prices = await this.sdk.getLatestPrices();
+      const prices = await this.breaker.execute(() => this.sdk.getLatestPrices());
       const price = getPriceFromMap(prices, tokenSymbol);
 
       try {
@@ -211,7 +216,7 @@ export class AlexDEXService implements DEXProvider {
     try {
       const tokenInId = this.resolveTokenId(_tokenIn);
       const tokenOutId = this.resolveTokenId(_tokenOut);
-      const fee = await this.sdk.getFeeRate(tokenInId as Currency, tokenOutId as Currency);
+      const fee = await this.breaker.execute(() => this.sdk.getFeeRate(tokenInId as Currency, tokenOutId as Currency));
       return Number(fee) / 100;
     } catch {
       return 30;
@@ -243,7 +248,7 @@ export class AlexDEXService implements DEXProvider {
     try {
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
-      const route = await this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency);
+      const route = await this.breaker.execute(() => this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency));
       if (route.length === 0) return null;
 
       const decimalsIn = this.getTokenDecimals(tokenIn);
@@ -251,14 +256,14 @@ export class AlexDEXService implements DEXProvider {
       const amountInBigInt = BigInt(Math.floor(amountIn * (10 ** decimalsIn)));
       const minOutBigInt = BigInt(Math.floor(minAmountOut * (10 ** decimalsOut)));
 
-      const tx = await this.sdk.runSwap(
+      const tx = await this.breaker.execute(() => this.sdk.runSwap(
         senderAddress,
         tokenInId as Currency,
         tokenOutId as Currency,
         amountInBigInt,
         minOutBigInt,
         route,
-      );
+      ));
 
       return {
         contractAddress: tx.contractAddress,
@@ -291,16 +296,16 @@ export class AlexDEXService implements DEXProvider {
     const decimalsOut = this.getTokenDecimals(tokenOut);
     const fromAmountBigInt = BigInt(Math.floor(fromAmount * (10 ** decimalsIn)));
     const minDyBigInt = BigInt(Math.floor(minDy * (10 ** decimalsOut)));
-    const route = await this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency);
+    const route = await this.breaker.execute(() => this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency));
 
-    return this.sdk.runSwap(
+    return this.breaker.execute(() => this.sdk.runSwap(
       senderAddress,
       tokenInId as Currency,
       tokenOutId as Currency,
       fromAmountBigInt,
       minDyBigInt,
       route.length > 0 ? route : undefined,
-    );
+    ));
   }
 }
 

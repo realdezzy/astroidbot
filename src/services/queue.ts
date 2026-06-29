@@ -8,6 +8,7 @@ export const QUEUES = {
   TRADE_EXECUTION: "trade-execution",
   TRADE_CONFIRMATION: "trade-confirmation",
   STRATEGY_CYCLE: "strategy-cycle",
+  NOTIFICATION: "notification",
 } as const;
 
 interface TradeJob {

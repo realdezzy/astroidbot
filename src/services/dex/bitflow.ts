@@ -4,6 +4,7 @@ import { ConfigManager } from "../../config.js";
 import { logger } from "../../utils/logger.js";
 import type { SwappableToken, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote, TradingPair } from "../../types/dexProvider.js";
+import { CircuitBreakerRegistry } from "../../utils/circuitBreaker.js";
 
 interface LocalPool {
   tokenXId: string;
@@ -29,7 +30,12 @@ async function callSilently<T>(fn: () => Promise<T>): Promise<T> {
       msg.includes("Value for provider") ||
       msg.includes("invalid value for type") ||
       msg.includes("Using default value") ||
-      msg.includes("Failed to get quote for route")
+      msg.includes("Failed to get quote for route") ||
+      msg.includes("Error fetching possible swaps") ||
+      msg.includes("HTTP error!") ||
+      msg.includes("504") ||
+      msg.includes("503") ||
+      msg.includes("502")
     );
   };
 
@@ -66,6 +72,10 @@ export class BitflowDEXService implements DEXProvider {
   private readonly CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 
   private constructor() {
+  }
+
+  private get breaker() {
+    return CircuitBreakerRegistry.getBreaker("Bitflow");
   }
 
   private getSDK(): BitflowSDK | null {
@@ -108,7 +118,7 @@ export class BitflowDEXService implements DEXProvider {
     try {
       const sdk = this.getSDK();
       if (!sdk) return this.pools;
-      const sdkTokens = await sdk.getAvailableTokens();
+      const sdkTokens = await this.breaker.execute(() => sdk.getAvailableTokens());
       const tokenMap = new Map(sdkTokens.map((t) => [t.tokenId, t]));
 
       this.tokens = sdkTokens.map((t) => {
@@ -141,7 +151,7 @@ export class BitflowDEXService implements DEXProvider {
         await Promise.all(
           batch.map(async (token) => {
             try {
-              const swaps = await sdk.getPossibleSwaps(token.tokenId);
+              const swaps = await callSilently(() => this.breaker.execute(() => sdk.getPossibleSwaps(token.tokenId)));
               const swapTokenIds = Object.keys(swaps);
 
               for (const swapTokenId of swapTokenIds) {
@@ -276,7 +286,7 @@ export class BitflowDEXService implements DEXProvider {
         };
       }
 
-      const quote = await callSilently(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn));
+      const quote = await callSilently(() => this.breaker.execute(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn)));
       const bestRoute = quote.bestRoute ?? quote.allRoutes?.[0];
       if (!bestRoute) {
         const local = this.localQuote(tokenIn, tokenOut, amountIn);
@@ -314,7 +324,7 @@ export class BitflowDEXService implements DEXProvider {
       const sdk = this.getSDK();
       if (!sdk) return 0;
 
-      const quote = await callSilently(() => sdk.getQuoteForRoute(tokenId, "token-usda", 1));
+      const quote = await callSilently(() => this.breaker.execute(() => sdk.getQuoteForRoute(tokenId, "token-usda", 1)));
       const bestRoute = quote.allRoutes?.[0] ?? quote.bestRoute;
       if (bestRoute?.quote) {
         return bestRoute.quote / (10 ** (bestRoute.tokenYDecimals ?? 6));
@@ -349,7 +359,7 @@ export class BitflowDEXService implements DEXProvider {
       const tokenOutId = this.resolveTokenId(tokenOut);
       if (!tokenInId || !tokenOutId) return null;
 
-      const quote = await sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+      const quote = await this.breaker.execute(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn));
       const bestRoute = quote.bestRoute ?? quote.allRoutes?.[0];
       if (!bestRoute) return null;
 
@@ -361,7 +371,7 @@ export class BitflowDEXService implements DEXProvider {
       };
 
       const slippageTolerance = Math.max(0, (amountIn - minAmountOut) / amountIn);
-      const swapParams = await sdk.prepareSwap(swapExecutionData, senderAddress, slippageTolerance);
+      const swapParams = await this.breaker.execute(() => sdk.prepareSwap(swapExecutionData, senderAddress, slippageTolerance));
       if (!swapParams) return null;
 
       return {

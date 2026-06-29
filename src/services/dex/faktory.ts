@@ -3,6 +3,7 @@ import { ConfigManager } from "../../config.js";
 import { logger } from "../../utils/logger.js";
 import type { SwappableToken, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote } from "../../types/dexProvider.js";
+import { CircuitBreakerRegistry } from "../../utils/circuitBreaker.js";
 
 export class FaktoryDEXService implements DEXProvider {
   name = "Faktory";
@@ -18,6 +19,10 @@ export class FaktoryDEXService implements DEXProvider {
   private constructor() {
     // We instantiate lazily inside ensureInitialized to pass proper network
     this.sdk = null as any;
+  }
+
+  private get breaker() {
+    return CircuitBreakerRegistry.getBreaker("Faktory");
   }
 
   static initialize(): FaktoryDEXService {
@@ -70,7 +75,7 @@ export class FaktoryDEXService implements DEXProvider {
     if (token) return token;
 
     try {
-      const results = await this.sdk.getVerifiedTokens({ search: tokenContractId });
+      const results = await this.breaker.execute(() => this.sdk.getVerifiedTokens({ search: tokenContractId }));
       const found = results.results.find(
         (t) =>
           t.tokenContract.toLowerCase() === tokenContractId.toLowerCase() ||
@@ -106,7 +111,7 @@ export class FaktoryDEXService implements DEXProvider {
     this.lastFetchAttemptAt = now;
     try {
       await this.ensureInitialized();
-      const verified = await this.sdk.getVerifiedTokens({ limit: 200 });
+      const verified = await this.breaker.execute(() => this.sdk.getVerifiedTokens({ limit: 200 }));
       this.swappableTokens = verified.results.map((t: any) => ({
         contractId: t.tokenContract,
         symbol: t.symbol,
@@ -162,7 +167,7 @@ export class FaktoryDEXService implements DEXProvider {
 
       let amountOut = 0;
       if (inIsStx) {
-        const quote = await this.sdk.getIn(token.dexContract, dummySender, amountIn);
+        const quote = await this.breaker.execute(() => this.sdk.getIn(token.dexContract, dummySender, amountIn));
         const [_, contractName] = token.dexContract.split(".");
         const isExternal = !contractName.endsWith("faktory-dex");
 
@@ -174,7 +179,7 @@ export class FaktoryDEXService implements DEXProvider {
         }
         amountOut = Number(quoteAmountStr) / (10 ** token.decimals);
       } else {
-        const quote = await this.sdk.getOut(token.dexContract, dummySender, amountIn);
+        const quote = await this.breaker.execute(() => this.sdk.getOut(token.dexContract, dummySender, amountIn));
         const quoteAmountStr = (quote as any).value.value["stx-out"]?.value || "0";
         amountOut = Number(quoteAmountStr) / 1000000;
       }
@@ -182,7 +187,7 @@ export class FaktoryDEXService implements DEXProvider {
       const feeBps = 50;
       let priceImpact = 0;
       try {
-        const tokenDetails = await this.sdk.getToken(token.dexContract);
+        const tokenDetails = await this.breaker.execute(() => this.sdk.getToken(token.dexContract));
         const spotPrice = tokenDetails.data.price;
         if (spotPrice > 0) {
           const executionPrice = inIsStx ? (amountIn / amountOut) : (amountOut / amountIn);
@@ -230,19 +235,19 @@ export class FaktoryDEXService implements DEXProvider {
 
       let tx: any;
       if (inIsStx) {
-        tx = await this.sdk.getBuyParams({
+        tx = await this.breaker.execute(() => this.sdk.getBuyParams({
           dexContract: token.dexContract,
           inAmount: amountIn,
           senderAddress,
           slippage,
-        });
+        }));
       } else {
-        tx = await this.sdk.getSellParams({
+        tx = await this.breaker.execute(() => this.sdk.getSellParams({
           dexContract: token.dexContract,
           amount: amountIn,
           senderAddress,
           slippage,
-        });
+        }));
       }
 
       return {
@@ -269,7 +274,7 @@ export class FaktoryDEXService implements DEXProvider {
       if (this.isStx(tokenSymbol)) return 1.0;
       const token = await this.getOrFetchToken(tokenSymbol);
       if (!token) return 0;
-      const tokenDetails = await this.sdk.getToken(token.dexContract);
+      const tokenDetails = await this.breaker.execute(() => this.sdk.getToken(token.dexContract));
       return tokenDetails.data.price || 0;
     } catch {
       return 0;

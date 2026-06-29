@@ -153,6 +153,7 @@ model LimitOrder {
   status      String    @default("ACTIVE")
   forceAfter  DateTime?
   expiresAt   DateTime?
+  failureCount Int       @default(0)
   createdAt   DateTime  @default(now())
   filledAt    DateTime?
   txId        String?
@@ -179,6 +180,7 @@ model TradingStrategy {
   type      String
   config    Json
   isActive  Boolean  @default(true)
+  failureCount Int    @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -196,6 +198,7 @@ model TradeAgent {
   state     Json      @default("{}")
   model     String    @default("deepseek-v4-pro")
   isActive  Boolean   @default(true)
+  failureCount Int     @default(0)
   createdAt DateTime  @default(now())
   updatedAt DateTime @updatedAt
 
@@ -242,4 +245,16 @@ model ContactMessage {
   email     String
   message   String
   createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  message   String
+  type      String   // "INFO" | "WARNING" | "ERROR" | "SUCCESS"
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
 }

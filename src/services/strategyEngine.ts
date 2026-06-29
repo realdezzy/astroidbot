@@ -10,6 +10,7 @@ import { RiskManager } from "./riskManager.js";
 import { TransactionService } from "./transaction.js";
 import { PriceHistoryService } from "./priceHistory.js";
 import { WebSocketManager } from "../api/websocket.js";
+import { NotificationService } from "./notificationService.js";
 import type { RebalanceAction, TokenBalance, SwappableToken, AISentimentResult, PortfolioTarget } from "../types.js";
 
 export class StrategyEngine {
@@ -22,6 +23,50 @@ export class StrategyEngine {
       StrategyEngine.instance = new StrategyEngine();
     }
     return StrategyEngine.instance;
+  }
+
+  private async handleStrategySuccess(strategyId: number): Promise<void> {
+    const db = DatabaseService.getInstance();
+    await db.prisma.tradingStrategy.update({
+      where: { id: strategyId },
+      data: { failureCount: 0 },
+    });
+  }
+
+  private async handleStrategyFailure(strategyId: number, userId: number, errorMsg: string): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const strategy = await db.prisma.tradingStrategy.findUnique({
+      where: { id: strategyId },
+    });
+    if (!strategy) return;
+
+    const newFailureCount = strategy.failureCount + 1;
+    if (newFailureCount >= 5) {
+      await db.prisma.tradingStrategy.update({
+        where: { id: strategyId },
+        data: { failureCount: newFailureCount, isActive: false },
+      });
+
+      await db.prisma.auditLog.create({
+        data: {
+          userId,
+          action: "STRATEGY_AUTO_DISABLE",
+          details: `Strategy ${strategy.type} (ID: ${strategyId}) automatically disabled after 5 consecutive failures. Last error: ${errorMsg}`,
+        },
+      });
+
+      await NotificationService.getInstance().send({
+        userId,
+        title: "Strategy Automatically Disabled",
+        message: `Your ${strategy.type} strategy has been disabled due to 5 consecutive failures. Last failure: ${errorMsg}`,
+        type: "ERROR",
+      });
+    } else {
+      await db.prisma.tradingStrategy.update({
+        where: { id: strategyId },
+        data: { failureCount: newFailureCount },
+      });
+    }
   }
 
   async runCycle(): Promise<{ actionsExecuted: number; totalPnl: number }> {
@@ -81,8 +126,16 @@ export class StrategyEngine {
             settings,
           );
           actionsExecuted += result.executed;
+
+          if (result.attempted > 0 && result.executed === 0) {
+            await this.handleStrategyFailure(strategy.id, strategy.userId, "All trade executions failed in the cycle");
+          } else {
+            await this.handleStrategySuccess(strategy.id);
+          }
         } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
           logger.error(`Strategy ${strategy.type} failed`, { userId: strategy.userId, walletId: wallet.id, error });
+          await this.handleStrategyFailure(strategy.id, strategy.userId, errorMsg);
         }
       }
 
@@ -136,10 +189,18 @@ export class StrategyEngine {
           );
           actionsExecuted += result.executed;
           ranAtLeastOne = true;
+
+          if (result.attempted > 0 && result.executed === 0) {
+            await this.handleStrategyFailure(strategy.id, strategy.userId, "All trade executions failed in the cycle");
+          } else {
+            await this.handleStrategySuccess(strategy.id);
+          }
         } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
           logger.error(`Agent strategy ${strategy.type} failed`, {
             userId: strategy.userId, walletId, error,
           });
+          await this.handleStrategyFailure(strategy.id, strategy.userId, errorMsg);
         }
       }
 
@@ -159,7 +220,7 @@ export class StrategyEngine {
     balances: TokenBalance[],
     tokens: SwappableToken[],
     settings: { slippageBps: number; maxPositionPct: number; dailyLossLimit: number; rebalanceThreshold: number },
-  ): Promise<{ executed: number }> {
+  ): Promise<{ executed: number; attempted: number }> {
     // Record price history for all tokens (needed by momentum/mean-reversion/etc.)
     for (const b of balances) {
       if (b.usdValue > 0 && b.balance > 0) {
@@ -167,20 +228,24 @@ export class StrategyEngine {
       }
     }
 
+    let res: any;
     switch (type) {
-      case "portfolio_rebalance": return this.runPortfolioRebalance(strategyId, userId, walletId, address, balances, tokens, config, settings);
-      case "grid": return this.runGrid(userId, walletId, address, balances, config, settings);
-      case "dca": return this.runDCA(config, userId, walletId, address, settings);
-      case "sniper": return this.runSniper(config, userId, walletId, address, settings, tokens);
-      case "copy": return this.runCopy(config, userId, walletId, address, settings, tokens);
-      case "momentum": return this.runMomentum(config, userId, walletId, address, settings, tokens);
-      case "mean_reversion": return this.runMeanReversion(config, userId, walletId, address, settings);
-      case "twap": return this.runTWAP(config, userId, walletId, address, settings);
-      case "stop_loss_tp": return this.runStopLossTP(config, userId, walletId, address, settings, balances);
-      case "rotational": return this.runRotational(config, userId, walletId, address, settings, tokens);
-      case "breakout": return this.runBreakout(config, userId, walletId, address, settings);
-      default: return { executed: 0 };
+      case "portfolio_rebalance": res = await this.runPortfolioRebalance(strategyId, userId, walletId, address, balances, tokens, config, settings); break;
+      case "grid": res = await this.runGrid(userId, walletId, address, balances, config, settings); break;
+      case "dca": res = await this.runDCA(config, userId, walletId, address, settings); break;
+      case "sniper": res = await this.runSniper(config, userId, walletId, address, settings, tokens); break;
+      case "copy": res = await this.runCopy(config, userId, walletId, address, settings, tokens); break;
+      case "momentum": res = await this.runMomentum(config, userId, walletId, address, settings, tokens); break;
+      case "mean_reversion": res = await this.runMeanReversion(config, userId, walletId, address, settings); break;
+      case "twap": res = await this.runTWAP(config, userId, walletId, address, settings); break;
+      case "stop_loss_tp": res = await this.runStopLossTP(config, userId, walletId, address, settings, balances); break;
+      case "rotational": res = await this.runRotational(config, userId, walletId, address, settings, tokens); break;
+      case "breakout": res = await this.runBreakout(config, userId, walletId, address, settings); break;
+      default: res = { executed: 0, attempted: 0 }; break;
     }
+    const executed = res.executed ?? 0;
+    const attempted = res.attempted ?? res.executed ?? 0;
+    return { executed, attempted };
   }
 
   // ── AI refresh helper: only call LLM when enough time has elapsed ──
@@ -780,8 +845,9 @@ export class StrategyEngine {
     actions: RebalanceAction[],
     walletId: number, userId: number, senderAddress: string,
     slippageBps: number,
-  ): Promise<{ executed: number }> {
+  ): Promise<{ executed: number; attempted: number }> {
     let executed = 0;
+    let attempted = 0;
     const registry = DEXRegistry.getInstance();
     const txService = TransactionService.getInstance();
     const db = DatabaseService.getInstance();
@@ -791,6 +857,7 @@ export class StrategyEngine {
     const useGasless = settings?.useGasless ?? false;
 
     for (const action of actions) {
+      attempted++;
       const bestQuoteResult = await registry.getBestQuote(action.tokenIn, action.tokenOut, action.amountIn);
       if (!bestQuoteResult || bestQuoteResult.quote.amountOut <= 0) continue;
 
@@ -837,6 +904,6 @@ export class StrategyEngine {
       }
     }
 
-    return { executed };
+    return { executed, attempted };
   }
 }

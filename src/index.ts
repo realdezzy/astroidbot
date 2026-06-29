@@ -11,6 +11,7 @@ import { bootstrap } from "./bootstrap.js";
 import { runCycle } from "./engine/cycleOrchestrator.js";
 import { processTradeJob } from "./workers/tradeWorker.js";
 import { processConfirmJob } from "./workers/confirmWorker.js";
+import { processNotificationJob } from "./services/notificationService.js";
 
 
 async function main(): Promise<void> {
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
   const qm = QueueManager.getInstance();
   qm.registerWorker(QUEUES.TRADE_EXECUTION, processTradeJob, 5);
   qm.registerWorker(QUEUES.TRADE_CONFIRMATION, processConfirmJob, 3);
+  qm.registerWorker(QUEUES.NOTIFICATION, processNotificationJob, 2);
   logger.info("Job queue workers started");
 
   const cm = ConfigManager.getInstance();
