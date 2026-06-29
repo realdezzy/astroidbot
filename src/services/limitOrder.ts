@@ -158,6 +158,9 @@ export class LimitOrderService {
           continue;
         }
 
+        const settings = await db.findTradeSettings(order.userId, "personal");
+        const useGasless = settings?.useGasless ?? false;
+
         const result = await txService.execute(
           {
             tokenIn: order.tokenIn,
@@ -173,7 +176,7 @@ export class LimitOrderService {
           wallet.id,
           wallet.address,
           est.amountOut,
-          false,
+          useGasless,
           payload.postConditions
         );
 

@@ -69,7 +69,7 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
     { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
     payload.contractAddress, payload.contractName,
     payload.functionName, payload.functionArgs,
-    walletId, senderAddress, est.amountOut, false, payload.postConditions,
+    walletId, senderAddress, est.amountOut, settings?.useGasless ?? false, payload.postConditions,
   );
 
   if ("txId" in result) {

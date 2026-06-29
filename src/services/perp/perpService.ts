@@ -82,6 +82,9 @@ export class PerpService {
       createSTXPostCondition(wallet.address, FungibleConditionCode.LessEqual, stxLimit)
     ];
 
+    const settings = await db.findTradeSettings(userId, "personal");
+    const useGasless = settings?.useGasless ?? false;
+
     const result = await txService.execute(
       action,
       contractAddress,
@@ -91,7 +94,7 @@ export class PerpService {
       walletId,
       wallet.address,
       margin * 2,
-      false,
+      useGasless,
       postConditionsOverride
     );
 
@@ -171,6 +174,9 @@ export class PerpService {
       createSTXPostCondition(wallet.address, FungibleConditionCode.LessEqual, txFee)
     ];
 
+    const settings = await db.findTradeSettings(userId, "personal");
+    const useGasless = settings?.useGasless ?? false;
+
     const result = await txService.execute(
       action,
       contractAddress,
@@ -180,7 +186,7 @@ export class PerpService {
       position.walletId,
       wallet.address,
       position.size,
-      false,
+      useGasless,
       postConditionsOverride
     );
 

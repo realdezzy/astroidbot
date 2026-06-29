@@ -165,6 +165,8 @@ export class UserController {
           maxPositionPct: 25.0,
           dailyLossLimit: 5.0,
           rebalanceThreshold: 2.0,
+          useGasless: false,
+          gaslessFeeToken: "USDC",
         }
       );
     } catch (error) {
@@ -183,6 +185,8 @@ export class UserController {
         maxPositionPct?: number;
         dailyLossLimit?: number;
         rebalanceThreshold?: number;
+        useGasless?: boolean;
+        gaslessFeeToken?: string;
       };
 
       const settings = await db.upsertTradeSettings({
@@ -193,6 +197,8 @@ export class UserController {
         maxPositionPct: data.maxPositionPct,
         dailyLossLimit: data.dailyLossLimit,
         rebalanceThreshold: data.rebalanceThreshold,
+        useGasless: data.useGasless,
+        gaslessFeeToken: data.gaslessFeeToken,
       });
 
       res.json(settings);
@@ -536,13 +542,16 @@ export class UserController {
         return res.status(400).json({ error: `Failed to build swap payload for ${selectedProviderName}` });
       }
 
+      const settings = await db.findTradeSettings(req.userId!, "personal");
+      const useGasless = settings?.useGasless ?? false;
+
       const txService = TransactionService.getInstance();
       const action = { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason: "Manual trade via web" };
       const result = await txService.execute(
         action, payload.contractAddress, payload.contractName,
         payload.functionName, payload.functionArgs,
         wallet.id, wallet.address, est.amountOut,
-        false, payload.postConditions
+        useGasless, payload.postConditions
       );
 
       if ("txId" in result) {

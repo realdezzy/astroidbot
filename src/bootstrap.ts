@@ -4,6 +4,8 @@ import { logger } from "./utils/logger.js";
 import { DatabaseService } from "./services/db.js";
 import { AlexDEXService } from "./services/dex/alex.js";
 import { BitflowDEXService } from "./services/dex/bitflow.js";
+import { VelarDEXService } from "./services/dex/velar.js";
+import { FaktoryDEXService } from "./services/dex/faktory.js";
 import { DEXRegistry } from "./services/dex/dexRegistry.js";
 import { TelegramService } from "./services/telegram.js";
 import { createServer } from "./api/server.js";
@@ -53,9 +55,27 @@ export async function bootstrap(): Promise<Server> {
     logger.warn("Bitflow pool prefetch failed", { error: err });
   });
 
+  VelarDEXService.initialize();
+  const velar = VelarDEXService.getInstance();
+  velar.getSwappableTokens(true).then((vTokens) => {
+    logger.info(`Loaded ${vTokens.length} Velar swappable tokens`);
+  }).catch((err) => {
+    logger.warn("Velar token prefetch failed", { error: err });
+  });
+
+  FaktoryDEXService.initialize();
+  const faktory = FaktoryDEXService.getInstance();
+  faktory.getSwappableTokens(true).then((fTokens) => {
+    logger.info(`Loaded ${fTokens.length} Faktory swappable tokens`);
+  }).catch((err) => {
+    logger.warn("Faktory token prefetch failed", { error: err });
+  });
+
   const registry = DEXRegistry.getInstance();
   registry.registerProvider(bitflow);
   registry.registerProvider(alex);
+  registry.registerProvider(velar);
+  registry.registerProvider(faktory);
 
   const httpServer = createServer();
 

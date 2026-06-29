@@ -48,6 +48,10 @@ vi.mock("../src/services/db.js", () => {
         address: "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE",
       };
     }),
+    findTradeSettings: vi.fn().mockResolvedValue({
+      useGasless: false,
+      gaslessFeeToken: "USDC",
+    }),
     prisma: mockPrisma,
   };
 

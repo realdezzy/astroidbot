@@ -1279,16 +1279,18 @@ async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
 
   if (action === "settings") {
     const key = parsed.key as string;
-    const value = parsed.value as number;
+    const value = parsed.value as any;
     if (!key || value === undefined) return;
     const db = DatabaseService.getInstance();
     const s = await db.findTradeSettings(user.id, "personal");
     await db.upsertTradeSettings({
       userId: user.id, context: "personal",
-      slippageBps: key === "slippageBps" ? value : s?.slippageBps,
-      maxPositionPct: key === "maxPositionPct" ? value : s?.maxPositionPct,
-      dailyLossLimit: key === "dailyLossLimit" ? value : s?.dailyLossLimit,
-      rebalanceThreshold: key === "rebalanceThreshold" ? value : s?.rebalanceThreshold,
+      slippageBps: key === "slippageBps" ? Number(value) : s?.slippageBps,
+      maxPositionPct: key === "maxPositionPct" ? Number(value) : s?.maxPositionPct,
+      dailyLossLimit: key === "dailyLossLimit" ? Number(value) : s?.dailyLossLimit,
+      rebalanceThreshold: key === "rebalanceThreshold" ? Number(value) : s?.rebalanceThreshold,
+      useGasless: key === "useGasless" ? (value === true || value === "true" || value === 1 || value === "enabled") : s?.useGasless,
+      gaslessFeeToken: key === "gaslessFeeToken" ? String(value) : s?.gaslessFeeToken,
     });
     const reply = `✅ ${key} set to ${value}`;
     ctx.session.chatHistory.push({ role: "assistant", content: reply });

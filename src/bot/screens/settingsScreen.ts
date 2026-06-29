@@ -44,6 +44,9 @@ export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<
       "thresh_down": () => {
         settings!.rebalanceThreshold = Math.max(0.5, (settings?.rebalanceThreshold ?? 2) - 0.5);
       },
+      "gasless_toggle": () => {
+        settings!.useGasless = !settings!.useGasless;
+      },
     };
 
     const combo = `${field}_${dir}`;
@@ -56,6 +59,7 @@ export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<
         maxPositionPct: settings.maxPositionPct,
         dailyLossLimit: settings.dailyLossLimit,
         rebalanceThreshold: settings.rebalanceThreshold,
+        useGasless: settings.useGasless,
       });
     }
   }
@@ -68,6 +72,7 @@ export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<
     `Max Position: ${s.maxPositionPct}%`,
     `Daily Loss:   ${s.dailyLossLimit}%`,
     `Rebalance:    ${s.rebalanceThreshold}%`,
+    `VelumX Gasless: ${s.useGasless ? "🟢 Enabled" : "🔴 Disabled"}`,
   ].join("\n");
 
   const keyboard = new InlineKeyboard()
@@ -86,6 +91,8 @@ export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<
     .text("◀ Rebal", "action:toggle_settings:thresh:down")
     .text(`${s.rebalanceThreshold}%`, "action:noop")
     .text("Rebal ▶", "action:toggle_settings:thresh:up")
+    .row()
+    .text(s.useGasless ? "Disable Gasless" : "Enable Gasless", "action:toggle_settings:gasless:toggle")
     .row()
     .text("← Back", "screen:back")
     .text("🏠 Home", "home");

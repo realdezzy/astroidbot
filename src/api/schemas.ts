@@ -56,6 +56,8 @@ export const updateSettingsSchema = z.object({
   maxPositionPct: z.number().min(0).max(100).optional(),
   dailyLossLimit: z.number().min(0).max(100).optional(),
   rebalanceThreshold: z.number().min(0).max(100).optional(),
+  useGasless: z.boolean().optional(),
+  gaslessFeeToken: z.string().optional(),
 });
 
 export const tradeQuerySchema = z.object({

@@ -787,6 +787,9 @@ export class StrategyEngine {
     const db = DatabaseService.getInstance();
     const wss = WebSocketManager.getInstance();
 
+    const settings = await db.findTradeSettings(userId, "personal");
+    const useGasless = settings?.useGasless ?? false;
+
     for (const action of actions) {
       const bestQuoteResult = await registry.getBestQuote(action.tokenIn, action.tokenOut, action.amountIn);
       if (!bestQuoteResult || bestQuoteResult.quote.amountOut <= 0) continue;
@@ -816,7 +819,7 @@ export class StrategyEngine {
         action,
         payload.contractAddress, payload.contractName,
         payload.functionName, payload.functionArgs,
-        walletId, senderAddress, est.amountOut, false, payload.postConditions,
+        walletId, senderAddress, est.amountOut, useGasless, payload.postConditions,
       );
 
       if ("txId" in result) {

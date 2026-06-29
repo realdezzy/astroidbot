@@ -124,6 +124,8 @@ export class DatabaseService {
     maxPositionPct?: number;
     dailyLossLimit?: number;
     rebalanceThreshold?: number;
+    useGasless?: boolean;
+    gaslessFeeToken?: string;
   }) {
     return this.prisma.tradeSettings.upsert({
       where: {
@@ -139,6 +141,8 @@ export class DatabaseService {
         maxPositionPct: data.maxPositionPct ?? 25.0,
         dailyLossLimit: data.dailyLossLimit ?? 5.0,
         rebalanceThreshold: data.rebalanceThreshold ?? 2.0,
+        useGasless: data.useGasless ?? false,
+        gaslessFeeToken: data.gaslessFeeToken ?? "USDC",
       },
       update: {
         chain: data.chain,
@@ -146,6 +150,8 @@ export class DatabaseService {
         maxPositionPct: data.maxPositionPct,
         dailyLossLimit: data.dailyLossLimit,
         rebalanceThreshold: data.rebalanceThreshold,
+        useGasless: data.useGasless,
+        gaslessFeeToken: data.gaslessFeeToken,
       },
     });
   }

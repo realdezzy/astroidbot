@@ -5,6 +5,7 @@ import {
   AnchorMode,
   PostConditionMode,
   FungibleConditionCode,
+  PostConditionType,
   createSTXPostCondition,
   createFungiblePostCondition,
   Cl,
@@ -18,10 +19,12 @@ import { DatabaseService } from "./db.js";
 import { KMSService } from "./kms.js";
 import { RedisService } from "./redis.js";
 import type { RebalanceAction } from "../types.js";
+import { VelumXClient } from "@velumx/sdk";
 
 export class TransactionService {
   private static instance: TransactionService;
   private readonly network: StacksMainnet | StacksTestnet | StacksMocknet;
+  private readonly activeConfirmations = new Set<string>();
 
   private constructor() {
     const config = ConfigManager.getInstance().config;
@@ -85,68 +88,130 @@ export class TransactionService {
         ? (functionArgs as ClarityValue[])
         : parseClarityArgs(functionArgs as string[]);
 
-      // 1. Build a placeholder transaction with a base fee to measure size in bytes
-      const placeholderFee = 10_000n;
-      const placeholderPostConditions = postConditionsOverride && postConditionsOverride.length > 0
-        ? postConditionsOverride
-        : this.buildPostConditions(action, senderAddress, contractAddress, placeholderFee);
-
-      const placeholderTx = await makeContractCall({
-        contractAddress,
-        contractName,
-        functionName,
-        functionArgs: parsedArgs,
-        fee: placeholderFee,
-        nonce,
-        senderKey: privateKey,
-        network: this.network,
-        anchorMode: AnchorMode.OnChainOnly,
-        postConditionMode: PostConditionMode.Allow,
-        postConditions: placeholderPostConditions,
-      });
-
-      const txSize = placeholderTx.serialize().length;
-      const feeRate = await this.fetchFeeRate();
-      const txFee = BigInt(Math.max(10_000, Math.floor(txSize * feeRate * 1.2)));
-
-      // 2. Build the final transaction with the calculated fee and correct post conditions
-      const postConditions = postConditionsOverride && postConditionsOverride.length > 0
-        ? postConditionsOverride
-        : this.buildPostConditions(action, senderAddress, contractAddress, txFee);
-
-      const tx = await makeContractCall({
-        contractAddress,
-        contractName,
-        functionName,
-        functionArgs: parsedArgs,
-        fee: txFee,
-        nonce,
-        senderKey: privateKey,
-        network: this.network,
-        anchorMode: AnchorMode.OnChainOnly,
-        postConditionMode: PostConditionMode.Allow,
-        postConditions,
-      });
-
+      let tx: any = null;
+      let txId: string = "";
       const config = ConfigManager.getInstance().config;
+      let usedGaslessExecution = false;
 
-      if (config.DRY_RUN) {
-        logger.info("DRY RUN: would broadcast transaction", {
+      if (useGasless && config.VELUMX_RELAYER_URL && config.VELUMX_API_KEY) {
+        try {
+          logger.info("Attempting gasless transaction execution via VelumX", {
+            contractAddress,
+            contractName,
+            functionName,
+            sender: senderAddress,
+          });
+
+          const postConditions = this.normalizePostConditions(
+            action,
+            senderAddress,
+            contractAddress,
+            0n, // fee is 0 for sender in sponsored tx
+            postConditionsOverride
+          );
+
+          tx = await makeContractCall({
+            contractAddress,
+            contractName,
+            functionName,
+            functionArgs: parsedArgs,
+            fee: 0n,
+            nonce,
+            senderKey: privateKey,
+            network: this.network,
+            anchorMode: AnchorMode.OnChainOnly,
+            postConditionMode: PostConditionMode.Allow,
+            postConditions,
+            sponsored: true,
+          });
+
+          if (config.DRY_RUN) {
+            logger.info("DRY RUN: would broadcast sponsored transaction", {
+              contractAddress,
+              contractName,
+              functionName,
+              nonce,
+              sender: senderAddress,
+            });
+            return { txId: "dry-run-tx-id" };
+          }
+
+          txId = await this.broadcastViaVelumX(tx, config.VELUMX_RELAYER_URL, config.VELUMX_API_KEY);
+          usedGaslessExecution = true;
+        } catch (velumxError) {
+          const errMsg = velumxError instanceof Error ? velumxError.message : String(velumxError);
+          logger.error("VelumX gasless execution failed, falling back to standard transaction execution", {
+            error: errMsg,
+            sender: senderAddress,
+          });
+          tx = null;
+        }
+      }
+
+      if (!usedGaslessExecution) {
+        // 1. Build a placeholder transaction with a base fee to measure size in bytes
+        const placeholderFee = 10_000n;
+        const placeholderPostConditions = this.normalizePostConditions(
+          action,
+          senderAddress,
+          contractAddress,
+          placeholderFee,
+          postConditionsOverride
+        );
+
+        const placeholderTx = await makeContractCall({
           contractAddress,
           contractName,
           functionName,
+          functionArgs: parsedArgs,
+          fee: placeholderFee,
           nonce,
-          sender: senderAddress,
-          gasless: useGasless,
+          senderKey: privateKey,
+          network: this.network,
+          anchorMode: AnchorMode.OnChainOnly,
+          postConditionMode: PostConditionMode.Allow,
+          postConditions: placeholderPostConditions,
         });
-        return { txId: "dry-run-tx-id" };
-      }
 
-      let txId: string;
+        const txSize = placeholderTx.serialize().length;
+        const feeRate = await this.fetchFeeRate();
+        const txFee = BigInt(Math.max(10_000, Math.floor(txSize * feeRate * 1.2)));
 
-      if (useGasless && config.VELUMX_RELAYER_URL && config.VELUMX_API_KEY) {
-        txId = await this.broadcastViaVelumX(tx, config.VELUMX_RELAYER_URL, config.VELUMX_API_KEY);
-      } else {
+        // 2. Build the final transaction with the calculated fee and correct post conditions
+        const postConditions = this.normalizePostConditions(
+          action,
+          senderAddress,
+          contractAddress,
+          txFee,
+          postConditionsOverride
+        );
+
+        tx = await makeContractCall({
+          contractAddress,
+          contractName,
+          functionName,
+          functionArgs: parsedArgs,
+          fee: txFee,
+          nonce,
+          senderKey: privateKey,
+          network: this.network,
+          anchorMode: AnchorMode.OnChainOnly,
+          postConditionMode: PostConditionMode.Allow,
+          postConditions,
+        });
+
+        if (config.DRY_RUN) {
+          logger.info("DRY RUN: would broadcast transaction", {
+            contractAddress,
+            contractName,
+            functionName,
+            nonce,
+            sender: senderAddress,
+            gasless: false,
+          });
+          return { txId: "dry-run-tx-id" };
+        }
+
         const result = await broadcastTransaction(tx, this.network);
         if ("error" in result && result.error) {
           logger.error("Transaction broadcast rejected by node", {
@@ -175,7 +240,7 @@ export class TransactionService {
         }
       }
 
-      logger.info("Transaction broadcast", { txId, nonce, sender: senderAddress, gasless: useGasless });
+      logger.info("Transaction broadcast", { txId, nonce, sender: senderAddress, gasless: usedGaslessExecution });
       return { txId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -371,74 +436,83 @@ export class TransactionService {
   }
 
   async confirmTransaction(txId: string, tradeId: number): Promise<boolean> {
-
-    if (txId === "dry-run-tx-id") {
-      logger.info("DRY RUN: skipping confirmation for dry-run tx");
-      return true;
+    if (this.activeConfirmations.has(txId)) {
+      logger.info("Confirmation poll already in progress for transaction, skipping duplicate poll", { txId });
+      return false;
     }
 
-    const maxAttempts = 120;
-    const pollIntervalMs = 5000;
+    this.activeConfirmations.add(txId);
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const result = await this.fetchTransactionStatus(txId);
-
-        if (result.status === "success") {
-          await DatabaseService.getInstance().updateTradeStatus(tradeId, "CONFIRMED", txId);
-          await DatabaseService.getInstance().prisma.limitOrder.updateMany({
-            where: { txId },
-            data: { status: "FILLED", filledAt: new Date() },
-          });
-          logger.info("Transaction confirmed", { txId, attempt });
-          return true;
-        }
-
-        if (result.status.startsWith("abort") || result.status === "failed") {
-          await DatabaseService.getInstance().updateTradeStatus(
-            tradeId,
-            "FAILED",
-            txId,
-            `Transaction failed with status: ${result.status}`
-          );
-          await DatabaseService.getInstance().prisma.limitOrder.updateMany({
-            where: { txId },
-            data: { status: "ACTIVE", txId: null },
-          });
-          logger.warn("Transaction failed", { txId, status: result.status });
-          return false;
-        }
-
-        logger.debug("Transaction still pending", { txId, attempt, status: result.status });
-        await this.sleep(pollIntervalMs);
-      } catch {
-        logger.warn("Failed to fetch tx status, retrying", { txId, attempt });
-        await this.sleep(pollIntervalMs);
+    try {
+      if (txId === "dry-run-tx-id") {
+        logger.info("DRY RUN: skipping confirmation for dry-run tx");
+        return true;
       }
-    }
 
-    logger.warn("Transaction confirmation timed out", { txId });
-    return false;
+      const maxAttempts = 120;
+      const pollIntervalMs = 5000;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const result = await this.fetchTransactionStatus(txId);
+
+          if (result.status === "success") {
+            await DatabaseService.getInstance().updateTradeStatus(tradeId, "CONFIRMED", txId);
+            await DatabaseService.getInstance().prisma.limitOrder.updateMany({
+              where: { txId },
+              data: { status: "FILLED", filledAt: new Date() },
+            });
+            logger.info("Transaction confirmed", { txId, attempt });
+            return true;
+          }
+
+          if (result.status.startsWith("abort") || result.status === "failed") {
+            await DatabaseService.getInstance().updateTradeStatus(
+              tradeId,
+              "FAILED",
+              txId,
+              `Transaction failed with status: ${result.status}`
+            );
+            await DatabaseService.getInstance().prisma.limitOrder.updateMany({
+              where: { txId },
+              data: { status: "ACTIVE", txId: null },
+            });
+            logger.warn("Transaction failed", { txId, status: result.status });
+            return false;
+          }
+
+          logger.debug("Transaction still pending", { txId, attempt, status: result.status });
+          await this.sleep(pollIntervalMs);
+        } catch (error) {
+          logger.warn("Failed to fetch tx status, retrying", { txId, attempt, error: error instanceof Error ? error.message : String(error) });
+          await this.sleep(pollIntervalMs);
+        }
+      }
+
+      logger.warn("Transaction confirmation timed out", { txId });
+      return false;
+    } finally {
+      this.activeConfirmations.delete(txId);
+    }
   }
 
-  // Broadcasts transaction via the VelumX relayer for gasless execution.
   private async broadcastViaVelumX(
     tx: Awaited<ReturnType<typeof makeContractCall>>,
     relayerUrl: string,
     apiKey: string
   ): Promise<string> {
     const serialized = Buffer.from(tx.serialize()).toString("hex");
-    const response = await this.fetchWithFallback(relayerUrl + "/v1/relay", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({ tx: serialized }),
+    const networkName = ConfigManager.getInstance().config.STACKS_NETWORK === "mainnet" ? "mainnet" : "testnet";
+    const velumx = new VelumXClient({
+      paymasterUrl: relayerUrl,
+      apiKey: apiKey,
+      network: networkName,
     });
-    const txId: string | undefined = response.txId ?? response.txid;
+
+    const result = await velumx.sponsor(serialized);
+    const txId = result.txid;
     if (!txId) {
-      throw new Error("VelumX relayer returned no txId");
+      throw new Error("VelumX relayer returned no txid");
     }
     logger.info("Transaction relayed via VelumX", { txId });
     return txId;
@@ -540,10 +614,12 @@ export class TransactionService {
         .filter(Boolean),
     ];
 
+    const formattedTxId = txId.startsWith("0x") ? txId : `0x${txId}`;
+
     for (const url of urls) {
       try {
         const response = await axios.get(
-          `${url}/extended/v1/tx/${txId}`,
+          `${url}/extended/v1/tx/${formattedTxId}`,
           { timeout: 5000 }
         );
         return { status: response.data?.tx_status ?? "pending" };
@@ -551,7 +627,7 @@ export class TransactionService {
         if (axios.isAxiosError(err) && err.response?.status === 404) {
           return { status: "not_found" };
         }
-        logger.warn("RPC node failed during status check, trying fallback", { url, txId });
+        logger.warn("RPC node failed during status check, trying fallback", { url, txId: formattedTxId });
       }
     }
 
@@ -571,6 +647,45 @@ export class TransactionService {
       timeout: 10_000,
     });
     return response.data as Record<string, string>;
+  }
+
+  private normalizePostConditions(
+    action: RebalanceAction,
+    senderAddress: string,
+    contractAddress: string,
+    txFee: bigint,
+    overridePostConditions?: any[]
+  ): any[] {
+    let postConditions: any[] = [];
+
+    if (overridePostConditions && overridePostConditions.length > 0) {
+      postConditions = [...overridePostConditions];
+    } else {
+      postConditions = this.buildPostConditions(action, senderAddress, contractAddress, txFee);
+    }
+
+    const tokenInUpper = action.tokenIn.toUpperCase();
+    const isSTXIn = tokenInUpper === "STX" ||
+                    tokenInUpper === "WSTX" ||
+                    action.tokenIn.toLowerCase().endsWith(".wstx") ||
+                    action.tokenIn.toLowerCase().endsWith(".token-stx");
+
+    if (isSTXIn) {
+      // User is spending STX: ensure correct native STX post-condition is present
+      // 1. Remove any existing native STX post-conditions to avoid duplicates/conflicts
+      postConditions = postConditions.filter(
+        (pc) => pc.conditionType !== PostConditionType.STX
+      );
+
+      // 2. Add the correct native STX post-condition
+      const amountInBigInt = parseTokenAmount(action.amountIn, 6);
+      const stxLimit = amountInBigInt + txFee;
+      postConditions.push(
+        createSTXPostCondition(senderAddress, FungibleConditionCode.LessEqual, stxLimit)
+      );
+    }
+
+    return postConditions;
   }
 
   private buildPostConditions(
