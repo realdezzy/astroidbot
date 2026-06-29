@@ -149,9 +149,10 @@ describe("TransactionService (from src/)", () => {
       };
       // Simulating a dummy incorrect/empty/SentEq 0 post condition
       const dummyIncorrectSTXCondition = {
-        conditionType: 0, // STX condition type
-        principal: {},
-        amount: 0n,
+        type: "stx-postcondition",
+        address: "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
+        condition: "eq",
+        amount: "0",
       };
 
       const result = (txService as any).normalizePostConditions(
@@ -164,8 +165,8 @@ describe("TransactionService (from src/)", () => {
 
       // It should replace the condition with a proper LessEqual condition for 500,000 + 3,816 = 503,816
       expect(result).toHaveLength(1);
-      expect(result[0].conditionType).toBe(0);
-      expect(result[0].amount).toBe(503816n);
+      expect(result[0].type).toBe("stx-postcondition");
+      expect(BigInt(result[0].amount)).toBe(503816n);
     });
   });
 

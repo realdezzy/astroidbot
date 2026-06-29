@@ -6,12 +6,11 @@ import {
   PostConditionMode,
   FungibleConditionCode,
   PostConditionType,
-  createSTXPostCondition,
-  createFungiblePostCondition,
   Cl,
+  Pc,
   type ClarityValue,
 } from "@stacks/transactions";
-import { StacksMainnet, StacksTestnet, StacksMocknet } from "@stacks/network";
+import { createNetwork } from "@stacks/network";
 import axios from "axios";
 import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
@@ -24,23 +23,28 @@ import { CircuitBreakerRegistry } from "../utils/circuitBreaker.js";
 
 export class TransactionService {
   private static instance: TransactionService;
-  private readonly network: StacksMainnet | StacksTestnet | StacksMocknet;
+  private readonly network: any;
   private readonly activeConfirmations = new Set<string>();
 
   private constructor() {
     const config = ConfigManager.getInstance().config;
-
+    let netName: "mainnet" | "testnet" | "devnet" | "mocknet";
     switch (config.STACKS_NETWORK) {
       case "mainnet":
-        this.network = new StacksMainnet({ url: config.STACKS_API_URL });
+        netName = "mainnet";
         break;
       case "testnet":
-        this.network = new StacksTestnet({ url: config.STACKS_API_URL });
+        netName = "testnet";
         break;
       case "mocknet":
-        this.network = new StacksMocknet({ url: config.STACKS_API_URL });
+      default:
+        netName = "mocknet";
         break;
     }
+    this.network = createNetwork({
+      network: netName,
+      client: { baseUrl: config.STACKS_API_URL }
+    });
   }
 
   static getInstance(): TransactionService {
@@ -120,7 +124,6 @@ export class TransactionService {
             nonce,
             senderKey: privateKey,
             network: this.network,
-            anchorMode: AnchorMode.OnChainOnly,
             postConditionMode: PostConditionMode.Allow,
             postConditions,
             sponsored: true,
@@ -169,7 +172,6 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.OnChainOnly,
           postConditionMode: PostConditionMode.Allow,
           postConditions: placeholderPostConditions,
         });
@@ -196,7 +198,6 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.OnChainOnly,
           postConditionMode: PostConditionMode.Allow,
           postConditions,
         });
@@ -214,12 +215,12 @@ export class TransactionService {
         }
 
         const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
-        const result = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
+        const result = await stacksRpc.execute(() => broadcastTransaction({ transaction: tx, network: this.network }));
         if ("error" in result && result.error) {
           logger.error("Transaction broadcast rejected by node", {
             error: result.error,
             reason: result.reason,
-            reasonData: result.reason_data,
+            reasonData: "reason_data" in result ? result.reason_data : undefined,
             nonce,
             sender: senderAddress,
           });
@@ -231,7 +232,7 @@ export class TransactionService {
         const admitted = await this.verifyMempoolAdmission(txId);
         if (!admitted) {
           logger.warn("Transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
-          const retryResult = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
+          const retryResult = await stacksRpc.execute(() => broadcastTransaction({ transaction: tx, network: this.network }));
           if ("error" in retryResult && retryResult.error) {
             throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
           }
@@ -298,7 +299,6 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.OnChainOnly,
         });
       } else {
         // SIP-010 token transfer
@@ -331,7 +331,6 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.OnChainOnly,
           postConditionMode: PostConditionMode.Allow,
         });
       }
@@ -352,7 +351,6 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.OnChainOnly,
         });
       } else {
         const [contractAddress, contractName] = token.split(".");
@@ -383,7 +381,6 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          anchorMode: AnchorMode.OnChainOnly,
           postConditionMode: PostConditionMode.Allow,
         });
       }
@@ -400,12 +397,12 @@ export class TransactionService {
       }
 
       const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
-      const result = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
+      const result = await stacksRpc.execute(() => broadcastTransaction({ transaction: tx, network: this.network }));
       if ("error" in result && result.error) {
         logger.error("Transfer transaction broadcast rejected by node", {
           error: result.error,
           reason: result.reason,
-          reasonData: result.reason_data,
+          reasonData: "reason_data" in result ? result.reason_data : undefined,
           nonce,
           sender: senderAddress,
         });
@@ -417,7 +414,7 @@ export class TransactionService {
       const admitted = await this.verifyMempoolAdmission(txId);
       if (!admitted) {
         logger.warn("Transfer transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
-        const retryResult = await stacksRpc.execute(() => broadcastTransaction(tx, this.network));
+        const retryResult = await stacksRpc.execute(() => broadcastTransaction({ transaction: tx, network: this.network }));
         if ("error" in retryResult && retryResult.error) {
           throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
         }
@@ -695,7 +692,7 @@ export class TransactionService {
       // User is spending STX: ensure correct native STX post-condition is present
       // 1. Remove any existing native STX post-conditions to avoid duplicates/conflicts
       postConditions = postConditions.filter(
-        (pc) => pc.conditionType !== PostConditionType.STX
+        (pc) => pc.type !== "stx-postcondition"
       );
 
       // 2. Add the correct native STX post-condition
@@ -806,4 +803,58 @@ export function parseTokenAmount(amount: number | string, decimals: number): big
     fractionalPart = fractionalPart.slice(0, decimals);
   }
   return BigInt(integerPart + fractionalPart);
+}
+
+export function createSTXPostCondition(
+  address: string,
+  conditionCode: FungibleConditionCode,
+  amount: bigint | number
+) {
+  const pc = Pc.principal(address);
+  const amt = BigInt(amount);
+  if (conditionCode === FungibleConditionCode.Equal) {
+    return pc.willSendEq(amt).ustx();
+  } else if (conditionCode === FungibleConditionCode.GreaterEqual) {
+    return pc.willSendGte(amt).ustx();
+  } else if (conditionCode === FungibleConditionCode.Greater) {
+    return pc.willSendGt(amt).ustx();
+  } else if (conditionCode === FungibleConditionCode.LessEqual) {
+    return pc.willSendLte(amt).ustx();
+  } else if (conditionCode === FungibleConditionCode.Less) {
+    return pc.willSendLt(amt).ustx();
+  }
+  throw new Error(`Unsupported condition code: ${conditionCode}`);
+}
+
+export function createFungiblePostCondition(
+  address: string,
+  conditionCode: FungibleConditionCode,
+  amount: bigint | number,
+  assetInfo: string
+) {
+  const pc = Pc.principal(address);
+  const amt = BigInt(amount);
+  
+  const parts = assetInfo.split(/\.|::/);
+  const contractAddress = parts[0]!;
+  const contractName = parts[1]!;
+  const tokenName = parts[2] || parts[1]!;
+  
+  const contractId: `${string}.${string}` = `${contractAddress}.${contractName}`;
+
+  let step;
+  if (conditionCode === FungibleConditionCode.Equal) {
+    step = pc.willSendEq(amt);
+  } else if (conditionCode === FungibleConditionCode.GreaterEqual) {
+    step = pc.willSendGte(amt);
+  } else if (conditionCode === FungibleConditionCode.Greater) {
+    step = pc.willSendGt(amt);
+  } else if (conditionCode === FungibleConditionCode.LessEqual) {
+    step = pc.willSendLte(amt);
+  } else if (conditionCode === FungibleConditionCode.Less) {
+    step = pc.willSendLt(amt);
+  } else {
+    throw new Error(`Unsupported condition code: ${conditionCode}`);
+  }
+  return step.ft(contractId, tokenName);
 }

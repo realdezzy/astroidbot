@@ -1,37 +1,26 @@
 import {
   makeRandomPrivKey,
-  privateKeyToString,
   getAddressFromPrivateKey,
-  createStacksPrivateKey,
-  TransactionVersion,
 } from "@stacks/transactions";
 import { ConfigManager } from "../config.js";
 import { DatabaseService } from "./db.js";
 import { logger } from "../utils/logger.js";
 import { KMSService } from "./kms.js";
 
-
-function networkVersion(): TransactionVersion {
+function getNetworkString(): "mainnet" | "testnet" {
   const network = ConfigManager.getInstance().config.STACKS_NETWORK;
-  return network === "mainnet"
-    ? TransactionVersion.Mainnet
-    : TransactionVersion.Testnet;
+  return network === "mainnet" ? "mainnet" : "testnet";
 }
 
 export function generateWalletKeypair(): { privateKeyHex: string; address: string } {
-  const privKey = makeRandomPrivKey();
-  const privateKeyHex = privateKeyToString(privKey);
-  const address = getAddressFromPrivateKey(privateKeyHex, networkVersion());
+  const privateKeyHex = makeRandomPrivKey();
+  const address = getAddressFromPrivateKey(privateKeyHex, getNetworkString());
   return { privateKeyHex, address };
 }
 
 export function deriveAddressFromPrivateKey(privateKeyHex: string): string {
-  const normalized = privateKeyHex.endsWith("01")
-    ? privateKeyHex
-    : privateKeyHex;
-  // Validate key is parseable before deriving address
-  createStacksPrivateKey(normalized);
-  return getAddressFromPrivateKey(normalized, networkVersion());
+  // getAddressFromPrivateKey automatically validates the private key format and throws if invalid
+  return getAddressFromPrivateKey(privateKeyHex, getNetworkString());
 }
 
 export async function provisionDefaultWallet(userId: number): Promise<void> {

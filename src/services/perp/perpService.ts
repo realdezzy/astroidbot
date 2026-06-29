@@ -3,7 +3,8 @@ import { TransactionService } from "../transaction.js";
 import { ConfigManager } from "../../config.js";
 import { getTokensMeta } from "@velarprotocol/velar-sdk";
 import { logger } from "../../utils/logger.js";
-import { createSTXPostCondition, FungibleConditionCode } from "@stacks/transactions";
+import { FungibleConditionCode } from "@stacks/transactions";
+import { createSTXPostCondition } from "../transaction.js";
 
 async function getTokenDetails(symbol: string) {
   const tokens = await getTokensMeta();

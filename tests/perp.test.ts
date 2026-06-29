@@ -70,6 +70,7 @@ vi.mock("../src/services/transaction.js", () => {
     TransactionService: {
       getInstance: () => mockTxInstance,
     },
+    createSTXPostCondition: vi.fn().mockReturnValue({}),
   };
 });
 
