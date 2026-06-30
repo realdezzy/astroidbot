@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { z } from "zod";
 import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
@@ -14,11 +15,39 @@ import type {
   AISentimentResult,
   TokenBalance,
 } from "../types.js";
-import { STRATEGY_TYPES } from "../../shared/strategies.js";
+
+// Prompts, schemas, and intent helper imports
+import { buildParseCommandPrompt } from "./ai/prompts/parseCommand.js";
+import { buildSentimentPrompt } from "./ai/prompts/sentiment.js";
+import { buildPortfolioPrompt } from "./ai/prompts/portfolio.js";
+import { buildGridPrompt } from "./ai/prompts/grid.js";
+import {
+  SentimentSchema,
+  PortfolioSchema,
+  GridSchema,
+  ParseCommandSchema,
+} from "./ai/schemas.js";
+import { needsPortfolioContext } from "./ai/intent.js";
+
+const DEFAULT_MODELS: Record<string, string> = {
+  openai: "gpt-4o",
+  deepseek: "deepseek-chat",
+  google: "gemini-1.5-flash",
+};
+
+interface AIRequest<T> {
+  task: string;
+  prompt: string;
+  schema: z.ZodType<T>;
+  userId: number;
+  cacheTTL?: number;
+  metadata?: Record<string, unknown>;
+}
 
 export class AIOrchestrator {
   private static instance: AIOrchestrator;
   private openaiClient: OpenAI | null = null;
+  private deepseekClient: OpenAI | null = null;
   private googleClient: GoogleGenerativeAI | null = null;
   private readonly provider: string;
   private readonly model: string;
@@ -29,18 +58,18 @@ export class AIOrchestrator {
     this.provider = config.AI_PROVIDER;
     this.model = config.AI_MODEL;
 
-    if (this.provider === "openai" && config.OPENAI_API_KEY) {
+    if (config.OPENAI_API_KEY) {
       this.openaiClient = new OpenAI({ apiKey: config.OPENAI_API_KEY });
     }
 
-    if (this.provider === "deepseek" && config.DEEPSEEK_API_KEY) {
-      this.openaiClient = new OpenAI({
+    if (config.DEEPSEEK_API_KEY) {
+      this.deepseekClient = new OpenAI({
         apiKey: config.DEEPSEEK_API_KEY,
         baseURL: "https://api.deepseek.com/v1",
       });
     }
 
-    if (this.provider === "google" && config.GOOGLE_AI_API_KEY) {
+    if (config.GOOGLE_AI_API_KEY) {
       this.googleClient = new GoogleGenerativeAI(config.GOOGLE_AI_API_KEY);
     }
   }
@@ -52,41 +81,191 @@ export class AIOrchestrator {
     return AIOrchestrator.instance;
   }
 
+  /**
+   * Unified request handler for LLM interactions.
+   * Leverages caching, model routing, schema validation, and provider failover.
+   */
+  async request<T>(req: AIRequest<T>): Promise<T> {
+    const inputHash = crypto.createHash("sha256").update(req.prompt).digest("hex");
+    // Versioned cache key to prevent stale responses after prompt changes
+    const cacheKey = `llm:v1:${req.task}:${inputHash}`;
+    const cacheTtl = req.cacheTTL ?? 600;
+
+    const redis = RedisService.getInstance();
+    if (cacheTtl > 0) {
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          logger.info("LLM cache hit", { task: req.task, hash: inputHash.slice(0, 8) });
+          const parsed = JSON.parse(cached);
+          const validated = req.schema.parse(parsed);
+          return validated;
+        }
+      } catch (err) {
+        logger.warn("Failed to retrieve or validate cached LLM response", { error: err });
+      }
+    }
+
+    // Provider failover sequence: try primary first, then others
+    const providers = [this.provider];
+    if (this.provider !== "openai") providers.push("openai");
+    if (this.provider !== "deepseek") providers.push("deepseek");
+    if (this.provider !== "google") providers.push("google");
+
+    let responseText = "";
+    let finalProvider = "";
+    let finalModel = "";
+    let promptTokens = 0;
+    let completionTokens = 0;
+
+    for (const p of providers) {
+      try {
+        if (p === "openai" && this.openaiClient) {
+          finalModel = p === this.provider ? this.model : (DEFAULT_MODELS.openai ?? "gpt-4o");
+          const completion = await this.openaiClient.chat.completions.create({
+            model: finalModel,
+            messages: [
+              {
+                role: "system",
+                content: "You are a Stacks blockchain trading bot. Respond only in valid JSON.",
+              },
+              { role: "user", content: req.prompt },
+            ],
+            temperature: 0.3,
+            response_format: { type: "json_object" as const },
+          });
+          responseText = completion.choices[0]?.message?.content ?? "";
+          promptTokens = completion.usage?.prompt_tokens ?? 0;
+          completionTokens = completion.usage?.completion_tokens ?? 0;
+          finalProvider = "openai";
+          break;
+        }
+
+        if (p === "deepseek" && this.deepseekClient) {
+          finalModel = p === this.provider ? this.model : (DEFAULT_MODELS.deepseek ?? "deepseek-chat");
+          const completion = await this.deepseekClient.chat.completions.create({
+            model: finalModel,
+            messages: [
+              {
+                role: "system",
+                content: "You are a Stacks blockchain trading bot. Respond only in valid JSON.",
+              },
+              { role: "user", content: req.prompt },
+            ],
+            temperature: 0.3,
+          });
+          responseText = completion.choices[0]?.message?.content ?? "";
+          promptTokens = completion.usage?.prompt_tokens ?? 0;
+          completionTokens = completion.usage?.completion_tokens ?? 0;
+          finalProvider = "deepseek";
+          break;
+        }
+
+        if (p === "google" && this.googleClient) {
+          finalModel = p === this.provider ? this.model : (DEFAULT_MODELS.google ?? "gemini-1.5-flash");
+          const geminiModel = this.googleClient.getGenerativeModel({
+            model: finalModel,
+            generationConfig: {
+              responseMimeType: "application/json",
+            },
+          });
+          const result = await geminiModel.generateContent(req.prompt);
+          responseText = result.response.text();
+          promptTokens = 0;
+          completionTokens = 0;
+          finalProvider = "google";
+          break;
+        }
+      } catch (err) {
+        logger.warn(`AI provider failover active — failed: ${p}`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (!responseText) {
+      throw new Error("All AI providers failed or returned empty response");
+    }
+
+    const cleanedJsonStr = extractJson(responseText);
+    const parsedObj = JSON.parse(cleanedJsonStr);
+    const validated = req.schema.parse(parsedObj);
+
+    // Save recommendation to database asynchronously
+    this.saveRecommendation(req.userId, req.task, inputHash, {
+      provider: finalProvider,
+      model: finalModel,
+      promptTokens,
+      completionTokens,
+      response: responseText,
+    }).catch((err) => {
+      logger.warn("Asynchronous save recommendation failed", { error: err });
+    });
+
+    if (cacheTtl > 0) {
+      redis.set(cacheKey, JSON.stringify(validated), cacheTtl).catch((err) => {
+        logger.warn("Failed to cache LLM response in Redis", { error: err });
+      });
+    }
+
+    return validated;
+  }
+
+  /**
+   * Legacy method for compatiblity. Executes request with z.any() validation.
+   */
+  async callLLM(
+    userId: number,
+    context: string,
+    prompt: string
+  ): Promise<string> {
+    const res = await this.request({
+      task: context,
+      prompt,
+      schema: z.any(),
+      userId,
+      cacheTTL: context.startsWith("agent-") ? 600 : 0,
+    });
+    return typeof res === "string" ? res : JSON.stringify(res);
+  }
+
   async parseCommand(
     userId: number,
     input: string,
     history?: { role: "user" | "assistant"; content: string }[]
   ): Promise<Record<string, unknown> | null> {
     let userContextStr = "";
-    try {
 
-      const db = DatabaseService.getInstance();
-      const wallets = await db.findWalletsByUserId(userId);
-      if (wallets.length > 0) {
-        const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+    // Intent classification: skip costly DB queries & balance fetches for simple chats/greetings
+    if (needsPortfolioContext(input)) {
+      try {
+        const db = DatabaseService.getInstance();
+        const wallets = await db.findWalletsByUserId(userId);
+        if (wallets.length > 0) {
+          const tokens = await DEXRegistry.getInstance().getSwappableTokens();
 
-        let grandTotal = 0;
-        let totalPnl = 0;
-        const walletDetails: string[] = [];
+          let grandTotal = 0;
+          let totalPnl = 0;
+          const walletDetails: string[] = [];
 
-        for (const wallet of wallets) {
-          const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
-          const total = balances.reduce((s, b) => s + b.usdValue, 0);
-          grandTotal += total;
+          for (const wallet of wallets) {
+            const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
+            const total = balances.reduce((s, b) => s + b.usdValue, 0);
+            grandTotal += total;
 
-          const tokenDetails = balances
-            .map(b => `${b.symbol}: ${b.balance.toFixed(4)} ($${b.usdValue.toFixed(2)})`)
-            .join(", ");
-          walletDetails.push(
-            `- Wallet "${wallet.name}" (${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}): Total $${total.toFixed(2)}. Holdings: [${tokenDetails || "No tokens"}]`
-          );
-        }
+            const tokenDetails = balances
+              .map(b => `${b.symbol}: ${b.balance.toFixed(4)} ($${b.usdValue.toFixed(2)})`)
+              .join(", ");
+            walletDetails.push(
+              `- Wallet "${wallet.name}" (${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}): Total $${total.toFixed(2)}. Holdings: [${tokenDetails || "No tokens"}]`
+            );
+          }
 
-        try {
-          totalPnl = await RiskManager.getInstance().getDailyPnl(userId);
-        } catch { }
+          try {
+            totalPnl = await RiskManager.getInstance().getDailyPnl(userId);
+          } catch { }
 
-        userContextStr = `
+          userContextStr = `
 User Portfolio/Wallet Context:
 - Active Wallets: ${wallets.length}
 - Grand Total Balance across all wallets: $${grandTotal.toFixed(2)}
@@ -94,11 +273,16 @@ User Portfolio/Wallet Context:
 Wallet Breakdown:
 ${walletDetails.join("\n")}
 `;
-      } else {
-        userContextStr = `\nUser Portfolio/Wallet Context:\n- The user has no wallets configured yet.\n`;
+        } else {
+          userContextStr = `\nUser Portfolio/Wallet Context:\n- The user has no wallets configured yet.\n`;
+        }
+      } catch (e) {
+        logger.error("Failed to build user context for parseCommand", {
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
-    } catch (e) {
-      logger.error("Failed to build user context for parseCommand", { error: e instanceof Error ? e.message : String(e) });
+    } else {
+      logger.info("Simple command intent detected — skipping portfolio fetches", { input });
     }
 
     let historyStr = "";
@@ -109,63 +293,17 @@ ${walletDetails.join("\n")}
         "\n";
     }
 
-    const prompt = `You are AstroidBot AI assistant, a powerful trading assistant on the Stacks blockchain. Parse the user's natural language input into a structured command.
-
-AstroidBot Platform Information:
-- Core Features: automated portfolio rebalancing, DCA strategies, grid trading, multi-wallet management, limit orders, and fast swaps on Stacks DEXs (ALEX & Bitflow).
-- Telegram Commands/Screens:
-  * '/start' or Main Menu: Home panel
-  * '/trade': Swap tokens
-  * '/portfolio': View balances and allocations
-  * '/wallets': Create, import, reveal, or delete wallets
-  * '/trades': Swap trade history
-  * '/orders': Active limit orders
-  * '/agents': AI automated trading agents
-  * '/settings': Risk, slippage, and position configuration
-  * '/link_email': Link email to access the web dashboard
-  * '/help': Command list
-- Web Dashboard Pages:
-  * '/dashboard': Overview and portfolio stats
-  * '/trade': Dex swap interface
-  * '/wallets': Wallet manager
-  * '/trades': History of trades
-  * '/limit-orders': Limit order dashboard
-  * '/agents': AI automated agents
-  * '/tokens': Stacks tokens lists and analytics
-  * '/settings': Personal settings
-  * '/account': Account settings and password changes
-
-Available actions:
-1. trade: { action: "trade", tokenIn: string, tokenOut: string, amountIn: number, direction: "BUY" | "SELL" }
-2. settings: { action: "settings", key: "slippageBps" | "maxPositionPct" | "dailyLossLimit" | "rebalanceThreshold", value: number }
-3. info: { action: "info", topic: "portfolio" | "wallets" | "orders" | "status" | "settings" | "trades" | "agents" }
-4. halt: { action: "halt" }
-5. resume: { action: "resume" }
-6. create_strategy: { action: "create_strategy", type: ${STRATEGY_TYPES.map(t => `"${t}"`).join(" | ")}, config: object }
-7. perp_trade: { action: "perp_trade", market: string, direction: "LONG" | "SHORT", margin: number, leverage: number }
-   - Use this when the user explicitly requests leveraged trading, margin, long, short, or perpetual contracts (e.g. 'long BTC with 5x leverage' or 'open a 3x short on STX').
-8. clarify: { action: "clarify", prompt: string, originalInput: string }
-   - CRITICAL: Use this when the user input suggests making a trade or order (e.g. 'trade STX', 'buy STX', 'place STX order') but is AMBIGUOUS because it doesn't specify if it is a spot swap, a limit trade (limit order), or a perpetual leverage trade. The prompt must be a friendly question asking them to clarify their intent (e.g. 'Would you like to execute a spot swap, set a limit order, or open a perpetual leverage position?').
-9. chat: { action: "chat", replyText: string, suggestedScreen?: "main" | "portfolio" | "wallets" | "trades" | "orders" | "agents" | "settings" | "trade", suggestedLink?: string }
-   - Use this for greetings (e.g. 'hello', 'hi'), general platform questions (e.g. 'how do I import a wallet?', 'what can you do?'), page requests, or general conversation.
-   - You must explain the platform features when greeted or asked.
-   - If they request to go to a page or screen (e.g. 'take me to the wallets page' or 'open limit orders'), you should set "suggestedScreen" to the corresponding screen name, and/or set "suggestedLink" to the web page path (e.g. '/wallets', '/settings', '/dashboard', '/trade', '/trades', '/limit-orders', '/agents', '/tokens', '/account').
-   - IMPORTANT rules for replyText:
-     * If the user is asking for their wallet balance, total assets, or holdings, answer concisely using the User Portfolio/Wallet Context provided below. DO NOT redirect them or tell them to go to a page unless they specifically ask to go to a page (e.g. "take me to my portfolio page").
-     * If the user asks how much they made/lost today, or what their daily profit/loss (PnL) is, answer concisely using the 24h PnL from the User Portfolio/Wallet Context provided below.
-     * Keep your response helpful, natural, and highly concise. Do not include suggestedScreen or suggestedLink unless they specifically requested navigation (e.g. "go to the trade screen", "open wallets page").
-10. unknown: { action: "unknown", reason: string }
-
-${userContextStr}
-${historyStr}
-User input: "${input}"
-
-Respond ONLY with valid JSON, no other text.`;
-
-    const response = await this.callLLM(userId, "parse_command", prompt);
+    const prompt = buildParseCommandPrompt(userContextStr, historyStr, input);
     try {
-      return JSON.parse(extractJson(response));
-    } catch {
+      return await this.request({
+        task: "parse_command",
+        prompt,
+        schema: ParseCommandSchema,
+        userId,
+        cacheTTL: 300,
+      }) as Record<string, unknown>;
+    } catch (e) {
+      logger.warn("Failed to parse command response", { error: e });
       return null;
     }
   }
@@ -183,9 +321,28 @@ Respond ONLY with valid JSON, no other text.`;
     tokenSymbols: string[],
     recentPriceData: Record<string, number[]>
   ): Promise<AISentimentResult> {
-    const prompt = this.buildSentimentPrompt(tokenSymbols, recentPriceData);
-    const response = await this.callLLM(userId, "sentiment", prompt);
-    return this.parseSentimentResponse(response);
+    const prompt = buildSentimentPrompt(tokenSymbols, recentPriceData);
+    try {
+      const result = await this.request({
+        task: "sentiment",
+        prompt,
+        schema: SentimentSchema,
+        userId,
+        cacheTTL: 900,
+      });
+      return {
+        ...result,
+        timestamp: new Date(),
+      };
+    } catch (e) {
+      logger.warn("Sentiment analysis failed — falling back to neutral defaults", { error: e });
+      return {
+        overallSentiment: "NEUTRAL",
+        confidence: 0.3,
+        reasoning: "Failover default due to parsing error",
+        timestamp: new Date(),
+      };
+    }
   }
 
   async generatePortfolioTargets(
@@ -193,9 +350,35 @@ Respond ONLY with valid JSON, no other text.`;
     currentBalances: TokenBalance[],
     sentiment: AISentimentResult
   ): Promise<PortfolioTarget[]> {
-    const prompt = this.buildPortfolioPrompt(currentBalances, sentiment);
-    const response = await this.callLLM(userId, "portfolio", prompt);
-    return this.parsePortfolioResponse(response, currentBalances);
+    const prompt = buildPortfolioPrompt(currentBalances, sentiment);
+    try {
+      const result = await this.request({
+        task: "portfolio",
+        prompt,
+        schema: PortfolioSchema,
+        userId,
+        cacheTTL: 900,
+      });
+
+      const targets = result.targets;
+      if (targets.length === 0) {
+        return this.equalWeightTargets(currentBalances);
+      }
+
+      const totalWeight = targets.reduce((sum, t) => sum + (t.targetWeight ?? 0), 0);
+      if (Math.abs(totalWeight - 1.0) > 0.01) {
+        logger.warn("Portfolio weights don't sum to 1.0 — normalizing weights", { totalWeight });
+        return targets.map((t) => ({
+          token: t.token,
+          targetWeight: t.targetWeight / totalWeight,
+        }));
+      }
+
+      return targets;
+    } catch (e) {
+      logger.warn("Portfolio target generation failed — falling back to equal weights", { error: e });
+      return this.equalWeightTargets(currentBalances);
+    }
   }
 
   async generateGridSpreads(
@@ -204,169 +387,30 @@ Respond ONLY with valid JSON, no other text.`;
     volatility: number,
     currentMidPrice: number
   ): Promise<GridSpreadConfig> {
-    const prompt = this.buildGridPrompt(tokenPair, volatility, currentMidPrice);
-    const response = await this.callLLM(userId, "market_making", prompt);
-    return this.parseGridResponse(response, tokenPair, currentMidPrice);
-  }
-
-  private buildSentimentPrompt(
-    symbols: string[],
-    priceData: Record<string, number[]>
-  ): string {
-    const dataStr = symbols
-      .map((s) => {
-        const prices = priceData[s] ?? [];
-        const priceStr = prices.slice(-7).join(", ");
-        const change = prices.length >= 2
-          ? (((prices[prices.length - 1]! - prices[0]!) / prices[0]!) * 100).toFixed(2)
-          : "N/A";
-        return `${s}: recent prices [${priceStr}], 7d change: ${change}%`;
-      })
-      .join("\n");
-
-    return `Analyze the following Stacks blockchain token price data and provide market sentiment.
-
-Token data:
-${dataStr}
-
-Respond in JSON format:
-{
-  "overallSentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "confidence": number (0-1),
-  "reasoning": "string"
-}`;
-  }
-
-  private buildPortfolioPrompt(
-    balances: TokenBalance[],
-    sentiment: AISentimentResult
-  ): string {
-    const totalValue = balances.reduce((sum, b) => sum + b.usdValue, 0);
-
-    const balanceStr = balances
-      .map((b) => {
-        const pct = totalValue > 0 ? ((b.usdValue / totalValue) * 100).toFixed(1) : "0";
-        return `${b.symbol}: $${b.usdValue.toFixed(2)} (${pct}% of portfolio)`;
-      })
-      .join("\n");
-
-    return `You are a portfolio manager for a Stacks blockchain trading bot.
-
-Current portfolio (total value: $${totalValue.toFixed(2)}):
-${balanceStr}
-
-Market sentiment: ${sentiment.overallSentiment} (confidence: ${sentiment.confidence})
-Reasoning: ${sentiment.reasoning}
-
-Propose target portfolio weight allocations for each token. Weights must sum to 1.0.
-Consider: diversification, risk management, current market sentiment, and token fundamentals.
-
-Respond in JSON format:
-{
-  "targets": [
-    { "token": "SYMBOL", "targetWeight": number }
-  ]
-}`;
-  }
-
-  private buildGridPrompt(
-    tokenPair: string,
-    volatility: number,
-    midPrice: number
-  ): string {
-    return `Configure a grid-based market making strategy for the ${tokenPair} pair on Stacks DEX.
-
-Current mid-price: ${midPrice}
-Recent volatility: ${(volatility * 100).toFixed(2)}%
-
-Determine optimal grid parameters considering:
-- Higher volatility = wider spreads
-- Lower volatility = tighter spreads, more levels
-- Grid levels should be symmetric above and below mid-price
-
-Respond in JSON format:
-{
-  "levels": number (3-10),
-  "spreadBps": number (basis points per level)
-}`;
-  }
-
-  async callLLM(
-    userId: number,
-    context: string,
-    prompt: string
-  ): Promise<string> {
-    const inputHash = crypto.createHash("sha256").update(prompt).digest("hex");
-    const cacheKey = `llm:cache:${inputHash}`;
-
-    // Cache TTL by context: sentiment/targets 15min, grid 30min, parse 5min, agent 10min
-    const ttlMap: Record<string, number> = {
-      sentiment: 900,
-      portfolio: 900,
-      market_making: 1800,
-      parse_command: 300,
-    };
-    const cacheTtl = ttlMap[context] ?? 600;
-
-    // Check cache
-    const redis = RedisService.getInstance();
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      logger.info("LLM cache hit", { context, hash: inputHash.slice(0, 8) });
-      return cached;
+    const prompt = buildGridPrompt(tokenPair, volatility, currentMidPrice);
+    try {
+      const result = await this.request({
+        task: "market_making",
+        prompt,
+        schema: GridSchema,
+        userId,
+        cacheTTL: 1800,
+      });
+      return {
+        tokenPair,
+        midPrice: currentMidPrice,
+        levels: Math.min(10, Math.max(3, result.levels)),
+        spreadBps: Math.min(500, Math.max(10, result.spreadBps)),
+      };
+    } catch (e) {
+      logger.warn("Grid spreads configuration generation failed — falling back to defaults", { error: e });
+      return {
+        tokenPair,
+        midPrice: currentMidPrice,
+        levels: 5,
+        spreadBps: 30,
+      };
     }
-
-    let response = "";
-
-    if ((this.provider === "openai" || this.provider === "deepseek") && this.openaiClient) {
-      const completion = await this.openaiClient.chat.completions.create({
-        model: this.model,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a Stacks blockchain trading bot. Respond only in valid JSON.",
-          },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.3,
-        ...(this.provider === "openai" ? { response_format: { type: "json_object" as const } } : {}),
-      });
-
-      response = completion.choices[0]?.message?.content ?? "";
-      await this.saveRecommendation(userId, context, inputHash, {
-        provider: this.provider,
-        model: this.model,
-        promptTokens: completion.usage?.prompt_tokens ?? 0,
-        completionTokens: completion.usage?.completion_tokens ?? 0,
-        response,
-      });
-    } else if (this.provider === "google" && this.googleClient) {
-      const model = this.googleClient.getGenerativeModel({
-        model: this.model,
-      });
-      const result = await model.generateContent(prompt);
-      response = result.response.text();
-
-      await this.saveRecommendation(userId, context, inputHash, {
-        provider: "google",
-        model: this.model,
-        promptTokens: 0,
-        completionTokens: 0,
-        response,
-      });
-    } else {
-      throw new Error(
-        `AI provider "${this.provider}" is not configured or no API key provided`
-      );
-    }
-
-    // Cache the response
-    if (response) {
-      redis.set(cacheKey, response, cacheTtl).catch(() => {});
-    }
-
-    return response;
   }
 
   private async saveRecommendation(
@@ -400,82 +444,6 @@ Respond in JSON format:
     }
   }
 
-  private parseSentimentResponse(response: string): AISentimentResult {
-    try {
-      const parsed = JSON.parse(extractJson(response));
-      return {
-        overallSentiment: parsed.overallSentiment ?? "NEUTRAL",
-        confidence: parsed.confidence ?? 0.5,
-        reasoning: parsed.reasoning ?? "",
-        timestamp: new Date(),
-      };
-    } catch {
-      logger.warn("Failed to parse sentiment response, using default");
-      return {
-        overallSentiment: "NEUTRAL",
-        confidence: 0.3,
-        reasoning: "Failed to parse AI response",
-        timestamp: new Date(),
-      };
-    }
-  }
-
-  private parsePortfolioResponse(
-    response: string,
-    balances: TokenBalance[]
-  ): PortfolioTarget[] {
-    try {
-      const parsed = JSON.parse(extractJson(response));
-      const targets: PortfolioTarget[] = parsed.targets ?? [];
-
-      if (targets.length === 0) {
-        return this.equalWeightTargets(balances);
-      }
-
-      const totalWeight = targets.reduce(
-        (sum, t) => sum + (t.targetWeight ?? 0),
-        0
-      );
-
-      if (Math.abs(totalWeight - 1.0) > 0.01) {
-        logger.warn("Portfolio weights don't sum to 1.0, normalizing");
-        return targets.map((t) => ({
-          token: t.token,
-          targetWeight: t.targetWeight / totalWeight,
-        }));
-      }
-
-      return targets;
-    } catch {
-      logger.warn("Failed to parse portfolio response, using equal weights");
-      return this.equalWeightTargets(balances);
-    }
-  }
-
-  private parseGridResponse(
-    response: string,
-    tokenPair: string,
-    midPrice: number
-  ): GridSpreadConfig {
-    try {
-      const parsed = JSON.parse(extractJson(response));
-      return {
-        tokenPair,
-        midPrice,
-        levels: Math.min(10, Math.max(3, parsed.levels ?? 5)),
-        spreadBps: Math.min(500, Math.max(10, parsed.spreadBps ?? 30)),
-      };
-    } catch {
-      logger.warn("Failed to parse grid response, using defaults");
-      return {
-        tokenPair,
-        midPrice,
-        levels: 5,
-        spreadBps: 30,
-      };
-    }
-  }
-
   private equalWeightTargets(balances: TokenBalance[]): PortfolioTarget[] {
     if (balances.length === 0) return [];
     const weight = 1.0 / balances.length;
@@ -485,11 +453,9 @@ Respond in JSON format:
 
 function extractJson(text: string): string {
   let cleaned = text.trim();
-  // Strip markdown code fences
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   }
-  // Find first { and last }
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start !== -1 && end !== -1 && end > start) {
