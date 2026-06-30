@@ -179,6 +179,7 @@ model TradingStrategy {
   agentId   Int?
   type      String
   config    Json
+  state     Json     @default("{}")
   isActive  Boolean  @default(true)
   failureCount Int    @default(0)
   createdAt DateTime @default(now())

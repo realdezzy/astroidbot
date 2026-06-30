@@ -197,15 +197,15 @@ describe("TransactionService (from src/)", () => {
       // Override sleep to resolve immediately and speed up the test
       const sleepSpy = vi.spyOn(txService as any, "sleep").mockResolvedValue(undefined);
 
-      // Trigger first poll
-      const firstPollPromise = txService.confirmTransaction("0xtesttxid123", 123);
+      // Trigger first poll (blocking loop)
+      const firstPollPromise = txService.confirmTransaction("0xtesttxid123", 123, true);
 
       // Trigger second poll on same txId while first is running
-      const secondPollPromise = txService.confirmTransaction("0xtesttxid123", 123);
+      const secondPollPromise = txService.confirmTransaction("0xtesttxid123", 123, true);
 
-      // The second poll should skip and return false immediately
+      // The second poll should skip and return "pending" immediately
       const secondPollResult = await secondPollPromise;
-      expect(secondPollResult).toBe(false);
+      expect(secondPollResult).toBe("pending");
 
       // Wait for first poll to complete
       await firstPollPromise;

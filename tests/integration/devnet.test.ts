@@ -128,8 +128,8 @@ describe("TransactionService Devnet Integration Test", () => {
       console.log(`Transaction successfully broadcasted to local Devnet! TxID: ${result.txId}`);
 
       console.log("Waiting for confirmation on local Devnet...");
-      const confirmed = await txService.confirmTransaction(result.txId, 9999);
-      expect(confirmed).toBe(true);
+      const state = await txService.confirmTransaction(result.txId, 9999, true);
+      expect(state).toBe("confirmed");
     }
   }, 600000); // 10 minutes timeout
 });

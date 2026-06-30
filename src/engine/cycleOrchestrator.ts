@@ -61,21 +61,25 @@ export async function runCycle(): Promise<void> {
       logger.info("Agent cycles dispatched", { count: activeAgents.length });
     }
 
-    // Retry pending confirmations from previous cycles
+    // Retry pending confirmations from previous cycles (single-check per cycle).
     const pendingTrades = await db.findPendingTrades();
     for (const trade of pendingTrades) {
-      if (trade.txId && trade.txId !== "dry-run-tx-id") {
-        txService.confirmTransaction(trade.txId, trade.id).then((confirmed) => {
-          if (confirmed) {
-            wss.broadcastTradeEvent(trade.userId, "trade_confirmed", {
-              tradeId: trade.id,
-              txId: trade.txId,
-            });
-          }
-        }).catch((err) => {
-          logger.error("Confirmation retry failed", { tradeId: trade.id, error: err });
-        });
-      }
+      txService.confirmTransaction(trade.txId ?? "dry-run-tx-id", trade.id).then((state) => {
+        if (state === "confirmed") {
+          wss.broadcastTradeEvent(trade.userId, "trade_confirmed", {
+            tradeId: trade.id,
+            txId: trade.txId,
+          });
+        } else if (state === "failed") {
+          wss.broadcastTradeEvent(trade.userId, "trade_failed", {
+            tradeId: trade.id,
+            txId: trade.txId,
+            error: "Transaction failed or timed out",
+          });
+        }
+      }).catch((err) => {
+        logger.error("Confirmation retry failed", { tradeId: trade.id, error: err });
+      });
     }
 
     const walletList = wallets.map((w) => ({ id: w.id, userId: w.userId, address: w.address }));

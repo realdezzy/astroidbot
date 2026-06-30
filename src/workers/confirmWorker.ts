@@ -19,18 +19,29 @@ export async function processConfirmJob(job: Job<ConfirmJob>): Promise<void> {
   const db = DatabaseService.getInstance();
   const wss = WebSocketManager.getInstance();
 
-  const confirmed = await txService.confirmTransaction(txId, tradeId);
+  const state = await txService.confirmTransaction(txId, tradeId);
 
-  if (confirmed) {
+  if (state === "confirmed") {
     wss.broadcastTradeEvent(userId, "trade_confirmed", { tradeId, txId });
     logger.info(`Trade ${tradeId} confirmed`, { txId });
-  } else if (job.attemptsMade >= (job.opts.attempts || 20) - 1) {
-    // Last attempt — mark as failed
+    return;
+  }
+
+  if (state === "failed") {
+    wss.broadcastTradeEvent(userId, "trade_failed", { tradeId, txId, error: "Transaction failed or timed out" });
+    logger.warn(`Trade ${tradeId} failed`, { txId });
+    return;
+  }
+
+  // state === "pending"
+  const maxAttempts = job.opts.attempts ?? 20;
+  if (job.attemptsMade >= maxAttempts - 1) {
     await db.updateTradeStatus(tradeId, "FAILED", txId, "Confirmation timed out");
     wss.broadcastTradeEvent(userId, "trade_failed", { tradeId, error: "Confirmation timed out" });
-    logger.warn(`Trade ${tradeId} confirmation timed out`, { txId });
-    // Don't throw — let the job complete as "done" (we logged the failure)
-  } else {
-    throw new Error(`Trade ${tradeId} not yet confirmed`);
+    logger.warn(`Trade ${tradeId} confirmation timed out after ${maxAttempts} attempts`, { txId });
+    return;
   }
+
+  // Throw to trigger BullMQ backoff retry.
+  throw new Error(`Trade ${tradeId} not yet confirmed`);
 }

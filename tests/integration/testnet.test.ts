@@ -121,8 +121,8 @@ describe("TransactionService Testnet Integration Test", () => {
       console.log(`Transaction successfully broadcasted to Stacks Testnet! TxID: ${result.txId}`);
 
       console.log("Waiting for confirmation on Stacks Testnet...");
-      const confirmed = await txService.confirmTransaction(result.txId, 9999);
-      expect(confirmed).toBe(true);
+      const state = await txService.confirmTransaction(result.txId, 9999, true);
+      expect(state).toBe("confirmed");
     }
   }, 600000); // 10 minutes timeout
 });

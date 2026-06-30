@@ -435,75 +435,103 @@ export class TransactionService {
     }
   }
 
-  async confirmTransaction(txId: string, tradeId: number): Promise<boolean> {
-    if (this.activeConfirmations.has(txId)) {
-      logger.info("Confirmation poll already in progress for transaction, skipping duplicate poll", { txId });
-      return false;
+  // Single-check mode (default): query chain once and return current state.
+  // poll=true: blocking loop — used only by integration tests.
+  async confirmTransaction(
+    txId: string,
+    tradeId: number,
+    poll = false
+  ): Promise<"confirmed" | "failed" | "pending"> {
+    const db = DatabaseService.getInstance();
+
+    // Resolve dry-run transactions immediately.
+    if (txId === "dry-run-tx-id") {
+      await db.updateTradeStatus(tradeId, "CONFIRMED", txId);
+      await db.prisma.limitOrder.updateMany({
+        where: { txId },
+        data: { status: "FILLED", filledAt: new Date() },
+      });
+      logger.info("DRY RUN: trade marked confirmed", { tradeId });
+      return "confirmed";
     }
 
-    this.activeConfirmations.add(txId);
+    if (poll) {
+      // Blocking loop path — integration tests only.
+      if (this.activeConfirmations.has(txId)) {
+        logger.info("Confirmation poll already in progress, skipping duplicate", { txId });
+        return "pending";
+      }
+      this.activeConfirmations.add(txId);
+      try {
+        return await this.pollUntilFinal(txId, tradeId, db);
+      } finally {
+        this.activeConfirmations.delete(txId);
+      }
+    }
 
+    // Single-check path — normal BullMQ-driven flow.
+    return this.checkOnce(txId, tradeId, db);
+  }
+
+  private async checkOnce(
+    txId: string,
+    tradeId: number,
+    db: DatabaseService
+  ): Promise<"confirmed" | "failed" | "pending"> {
+    let result: { status: string };
     try {
-      if (txId === "dry-run-tx-id") {
-        logger.info("DRY RUN: skipping confirmation for dry-run tx");
-        return true;
-      }
+      result = await this.fetchTransactionStatus(txId);
+    } catch (error) {
+      logger.warn("Failed to fetch tx status", { txId, error: error instanceof Error ? error.message : String(error) });
+      return "pending";
+    }
 
-      const maxAttempts = 120;
-      const pollIntervalMs = 5000;
+    if (result.status === "success") {
+      await db.updateTradeStatus(tradeId, "CONFIRMED", txId);
+      await db.prisma.limitOrder.updateMany({
+        where: { txId },
+        data: { status: "FILLED", filledAt: new Date() },
+      });
+      logger.info("Transaction confirmed", { txId });
+      return "confirmed";
+    }
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const result = await this.fetchTransactionStatus(txId);
-
-          if (result.status === "success") {
-            await DatabaseService.getInstance().updateTradeStatus(tradeId, "CONFIRMED", txId);
-            await DatabaseService.getInstance().prisma.limitOrder.updateMany({
-              where: { txId },
-              data: { status: "FILLED", filledAt: new Date() },
-            });
-            logger.info("Transaction confirmed", { txId, attempt });
-            return true;
-          }
-
-          if (result.status.startsWith("abort") || result.status === "failed") {
-            await DatabaseService.getInstance().updateTradeStatus(
-              tradeId,
-              "FAILED",
-              txId,
-              `Transaction failed with status: ${result.status}`
-            );
-            await DatabaseService.getInstance().prisma.limitOrder.updateMany({
-              where: { txId },
-              data: { status: "ACTIVE", txId: null },
-            });
-            logger.warn("Transaction failed", { txId, status: result.status });
-            return false;
-          }
-
-          logger.debug("Transaction still pending", { txId, attempt, status: result.status });
-          await this.sleep(pollIntervalMs);
-        } catch (error) {
-          logger.warn("Failed to fetch tx status, retrying", { txId, attempt, error: error instanceof Error ? error.message : String(error) });
-          await this.sleep(pollIntervalMs);
-        }
-      }
-
-      logger.warn("Transaction confirmation timed out", { txId });
-      await DatabaseService.getInstance().updateTradeStatus(
-        tradeId,
-        "FAILED",
-        txId,
-        "Transaction confirmation timed out"
-      );
-      await DatabaseService.getInstance().prisma.limitOrder.updateMany({
+    if (result.status.startsWith("abort") || result.status === "failed") {
+      await db.updateTradeStatus(tradeId, "FAILED", txId, `Transaction failed with status: ${result.status}`);
+      await db.prisma.limitOrder.updateMany({
         where: { txId },
         data: { status: "ACTIVE", txId: null },
       });
-      return false;
-    } finally {
-      this.activeConfirmations.delete(txId);
+      logger.warn("Transaction failed on-chain", { txId, status: result.status });
+      return "failed";
     }
+
+    logger.debug("Transaction still pending", { txId, status: result.status });
+    return "pending";
+  }
+
+  private async pollUntilFinal(
+    txId: string,
+    tradeId: number,
+    db: DatabaseService
+  ): Promise<"confirmed" | "failed" | "pending"> {
+    const maxAttempts = 120;
+    const pollIntervalMs = 5000;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const state = await this.checkOnce(txId, tradeId, db);
+      if (state !== "pending") return state;
+      logger.debug("Transaction still pending (poll)", { txId, attempt });
+      await this.sleep(pollIntervalMs);
+    }
+
+    logger.warn("Transaction confirmation timed out", { txId });
+    await db.updateTradeStatus(tradeId, "FAILED", txId, "Transaction confirmation timed out");
+    await db.prisma.limitOrder.updateMany({
+      where: { txId },
+      data: { status: "ACTIVE", txId: null },
+    });
+    return "failed";
   }
 
   private async broadcastViaVelumX(

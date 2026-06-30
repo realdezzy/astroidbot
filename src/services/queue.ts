@@ -28,9 +28,11 @@ interface ConfirmJob {
   userId: number;
 }
 
-interface StrategyJob {
-  userId: number;
+export interface StrategyRunJob {
+  strategyId: number;
   strategyType: string;
+  userId: number;
+  walletId: number;
 }
 
 const DEFAULT_OPTS: JobsOptions = {
@@ -90,11 +92,14 @@ export class QueueManager {
     return job.id!;
   }
 
-  async enqueueStrategy(data: StrategyJob): Promise<string> {
+  async enqueueStrategyRun(data: StrategyRunJob): Promise<string> {
+    // jobId deduplication: prevents the same strategy/wallet pair from being queued
+    // more than once per cycle if the scheduler fires while a previous job is still active.
+    const jobId = `strategy:${data.strategyId}:wallet:${data.walletId}`;
     const job = await this.getQueue(QUEUES.STRATEGY_CYCLE).add(
-      `strategy-${data.strategyType}`,
+      `run-${data.strategyType}`,
       data,
-      { ...DEFAULT_OPTS, removeOnComplete: { count: 100 } }
+      { ...DEFAULT_OPTS, jobId }
     );
     return job.id!;
   }
