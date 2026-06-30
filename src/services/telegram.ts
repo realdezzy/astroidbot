@@ -5,7 +5,7 @@ import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { BotStatus } from "../types.js";
 import { registerRouter } from "../bot/router.js";
-import type { BotContext } from "../bot/types.js";
+import type { BotContext } from "../types/bot.js";
 
 export class TelegramService {
   private static instance: TelegramService;

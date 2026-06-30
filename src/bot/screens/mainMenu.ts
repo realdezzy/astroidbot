@@ -1,5 +1,5 @@
 import { InlineKeyboard } from "grammy";
-import type { BotContext } from "../types.js";
+import type { BotContext } from "../../types/bot.js";
 import { BotStatus } from "../../types.js";
 import { TelegramService } from "../../services/telegram.js";
 import { DatabaseService } from "../../services/db.js";

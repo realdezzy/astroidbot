@@ -1,4 +1,4 @@
-import { STRATEGY_TYPES } from "../../../shared/strategies.js";
+import { STRATEGY_TYPES } from "../../../../shared/strategies.js";
 
 export function buildParseCommandPrompt(
   userContextStr: string,
@@ -37,7 +37,7 @@ Available actions:
 3. info: { action: "info", topic: "portfolio" | "wallets" | "orders" | "status" | "settings" | "trades" | "agents" }
 4. halt: { action: "halt" }
 5. resume: { action: "resume" }
-6. create_strategy: { action: "create_strategy", type: ${STRATEGY_TYPES.map(t => `"${t}"`).join(" | ")}, config: object }
+6. create_strategy: { action: "create_strategy", type: ${STRATEGY_TYPES.map((t: string) => `"${t}"`).join(" | ")}, config: object }
 7. perp_trade: { action: "perp_trade", market: string, direction: "LONG" | "SHORT", margin: number, leverage: number }
    - Use this when the user explicitly requests leveraged trading, margin, long, short, or perpetual contracts (e.g. 'long BTC with 5x leverage' or 'open a 3x short on STX').
 8. clarify: { action: "clarify", prompt: string, originalInput: string }

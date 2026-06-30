@@ -95,7 +95,7 @@ export class QueueManager {
   async enqueueStrategyRun(data: StrategyRunJob): Promise<string> {
     // jobId deduplication: prevents the same strategy/wallet pair from being queued
     // more than once per cycle if the scheduler fires while a previous job is still active.
-    const jobId = `strategy:${data.strategyId}:wallet:${data.walletId}`;
+    const jobId = `strategy-${data.strategyId}-wallet-${data.walletId}`;
     const job = await this.getQueue(QUEUES.STRATEGY_CYCLE).add(
       `run-${data.strategyType}`,
       data,

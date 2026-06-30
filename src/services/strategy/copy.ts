@@ -2,7 +2,7 @@ import axios from "axios";
 import { ConfigManager } from "../../config.js";
 import { DatabaseService } from "../db.js";
 import type { RebalanceAction } from "../../types.js";
-import type { Strategy, StrategyContext, StrategyState } from "./types.js";
+import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class CopyStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {

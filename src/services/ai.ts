@@ -26,7 +26,7 @@ import {
   PortfolioSchema,
   GridSchema,
   ParseCommandSchema,
-} from "./ai/schemas.js";
+} from "../validation/ai/schemas.js";
 import { needsPortfolioContext } from "./ai/intent.js";
 
 const DEFAULT_MODELS: Record<string, string> = {

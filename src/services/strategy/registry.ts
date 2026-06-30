@@ -9,7 +9,7 @@ import { TwapStrategy } from "./twap.js";
 import { StopLossTpStrategy } from "./stopLossTp.js";
 import { RotationalStrategy } from "./rotational.js";
 import { BreakoutStrategy } from "./breakout.js";
-import type { Strategy } from "./types.js";
+import type { Strategy } from "../../types/strategy.js";
 
 // Add new strategy types here — no changes needed elsewhere.
 export const STRATEGY_REGISTRY: Record<string, new () => Strategy> = {

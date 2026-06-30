@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
-import { updateSettingsSchema, tradeQuerySchema } from "../schemas.js";
+import { updateSettingsSchema, tradeQuerySchema } from "../../validation/api/schemas.js";
 import { UserController } from "../controllers/userController.js";
 
 const router = Router();

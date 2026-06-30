@@ -6,7 +6,7 @@ import { PriceHistoryService } from "../services/priceHistory.js";
 import { RiskManager } from "../services/riskManager.js";
 import { NotificationService } from "../services/notificationService.js";
 import { STRATEGY_REGISTRY } from "../services/strategy/registry.js";
-import type { StrategyContext, StrategyState } from "../services/strategy/types.js";
+import type { StrategyContext, StrategyState } from "../types/strategy.js";
 import type { StrategyRunJob } from "../services/queue.js";
 import { executeApprovedActions } from "../services/strategyEngine.js";
 import { logger } from "../utils/logger.js";

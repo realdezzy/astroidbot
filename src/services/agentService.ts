@@ -3,11 +3,13 @@ import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { AIOrchestrator } from "./ai.js";
-import { QueueManager } from "./queue.js";
-import { StrategyEngine } from "./strategyEngine.js";
+import { StrategyEngine, executeApprovedActions } from "./strategyEngine.js";
 import { PortfolioManager } from "./portfolio.js";
 import { NotificationService } from "./notificationService.js";
-
+import { RiskManager } from "./riskManager.js";
+import { buildAgentPrompt } from "./ai/prompts/agent.js";
+import { AgentDecisionSchema } from "../validation/ai/schemas.js";
+import type { RebalanceAction } from "../types.js";
 
 interface AgentRunResult {
   actions: number;
@@ -70,11 +72,6 @@ export class AgentService {
     }
   }
 
-  /**
-   * Run one cycle for an agent:
-   *   1. Execute all of the agent's deterministic strategies via StrategyEngine.
-   *   2. If aiMode != "off", invoke the AI overlay for an additional decision.
-   */
   async runAgentCycle(agentId: number): Promise<AgentRunResult> {
     const db = DatabaseService.getInstance();
     const agent = await db.prisma.tradeAgent.findUnique({ where: { id: agentId } });
@@ -97,7 +94,9 @@ export class AgentService {
           try {
             const balances = await pm.fetchBalances(w.address, tokens, agent.userId);
             const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
-            await db.updateWalletBalance(w.id, stxBal);
+            if (stxBal !== w.balance) {
+              await db.updateWalletBalance(w.id, stxBal);
+            }
             return { ...w, balance: stxBal };
           } catch {
             return w;
@@ -109,7 +108,6 @@ export class AgentService {
       const cfg = (agent.config as Record<string, unknown>) ?? {};
       const aiMode = ((agent as { aiMode?: string }).aiMode) ?? "off";
 
-      // 1. Execute deterministic strategies belonging to this agent
       const strategies = await db.prisma.tradingStrategy.findMany({
         where: { agentId, userId: agent.userId, isActive: true },
       });
@@ -127,16 +125,15 @@ export class AgentService {
         actionsExecuted += result.actions;
       }
 
-      // 2. Optional AI overlay
       let aiDecision: { action: string; reason: string } | undefined;
       if (aiMode === "advisor" || aiMode === "autonomous") {
-        aiDecision = await this.runAiOverlay(agent, updatedWallets, state, cfg, aiMode === "autonomous");
-        if (aiDecision && aiMode === "autonomous" && aiDecision.action === "trade") {
+        const result = await this.runAiOverlay(agent, updatedWallets, state, cfg, aiMode === "autonomous");
+        aiDecision = { action: result.action, reason: result.reason };
+        if (result.executed) {
           actionsExecuted += 1;
         }
       }
 
-      // Update state
       state.lastRun = new Date().toISOString();
       state.lastStrategiesExecuted = strategiesExecuted;
       state.lastActions = actionsExecuted;
@@ -169,96 +166,85 @@ export class AgentService {
     state: Record<string, unknown>,
     config: Record<string, unknown>,
     autonomous: boolean,
-  ): Promise<{ action: string; reason: string }> {
+  ): Promise<{ action: string; reason: string; executed: boolean }> {
     const ai = AIOrchestrator.getInstance();
     const db = DatabaseService.getInstance();
 
     let stxPrice = 0;
     try { stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX"); } catch { }
 
-    const prompt = this.buildAgentPrompt(agent, wallets, state, config, stxPrice);
-    const response = await ai.callLLM(agent.userId, `agent-${agent.id}`, prompt);
-    const decision = JSON.parse(response);
+    const prompt = buildAgentPrompt(agent, wallets, state, config, stxPrice);
+    
+    let decision;
+    try {
+      decision = await ai.request({
+        task: `agent-${agent.id}`,
+        prompt,
+        schema: AgentDecisionSchema,
+        userId: agent.userId,
+        cacheTTL: 0,
+      });
+    } catch (err) {
+      logger.error("AI agent decision request failed", { error: err });
+      return { action: "hold", reason: "AI request failed", executed: false };
+    }
 
-    const inputHash = crypto.createHash("sha256").update(prompt).digest("hex");
-    await db.createAIRecommendation({
-      userId: agent.userId,
-      context: `agent-${agent.id}`,
-      inputHash,
-      modelProvider: agent.model,
-      modelName: agent.model,
-      promptTokens: 0,
-      completionTokens: 0,
-      recommendation: decision,
-    });
+    let executed = false;
 
     if (autonomous && decision.action === "trade" && decision.trade) {
       const t = decision.trade;
       const wallet = wallets.find((w) => w.id === (t.walletId ?? wallets[0]?.id));
       if (wallet) {
-        const maxPct = (config.maxPositionPct as number) ?? 25;
+        const settings = await db.findTradeSettings(agent.userId, "personal");
+        const maxPct = (config.maxPositionPct as number) ?? (settings?.maxPositionPct ?? 25);
         const maxAmount = (wallet.balance * maxPct) / 100;
-        const cappedAmount = Math.min(t.amountIn ?? 1, maxAmount);
+        const cappedAmount = Math.min(t.amountIn, maxAmount);
 
-        await QueueManager.getInstance().enqueueTrade({
-          walletId: wallet.id,
-          userId: agent.userId,
-          senderAddress: wallet.address,
+        const action: RebalanceAction = {
           tokenIn: t.tokenIn ?? "STX",
-          tokenOut: t.tokenOut ?? "sUSDT",
+          tokenOut: t.tokenOut,
           amountIn: cappedAmount,
-          direction: t.direction ?? "BUY",
+          direction: t.direction,
           reason: `Agent "${agent.name}" (AI): ${t.reason ?? "autonomous"}`,
-        });
+        };
+
+        const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+        const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId);
+
+        const riskSettings = {
+          slippageBps: settings?.slippageBps ?? 100,
+          maxPositionPct: maxPct,
+          dailyLossLimit: settings?.dailyLossLimit ?? 1000,
+        };
+
+        const { approved } = await RiskManager.getInstance().evaluateActions(
+          agent.userId,
+          [action],
+          balances,
+          riskSettings
+        );
+
+        if (approved.length > 0) {
+          const res = await executeApprovedActions(
+            approved,
+            wallet.id,
+            agent.userId,
+            wallet.address,
+            riskSettings.slippageBps
+          );
+          if (res.executed > 0) {
+            executed = true;
+          }
+        } else {
+          logger.warn("AI agent trade action rejected by RiskManager", { agentId: agent.id });
+        }
       }
     }
 
     return {
-      action: decision.action ?? "hold",
-      reason: decision.reason ?? "No reason provided",
+      action: decision.action,
+      reason: decision.reason,
+      executed,
     };
-  }
-
-  private buildAgentPrompt(
-    agent: { name: string; context: string; config: unknown; state: unknown },
-    wallets: Array<{ id: number; address: string; balance: number }>,
-    state: Record<string, unknown>,
-    config: Record<string, unknown>,
-    stxPrice: number,
-  ): string {
-    const walletInfo = wallets
-      .map((w) => `#${w.id} ${w.address.slice(0, 10)}... balance: ${w.balance.toFixed(2)} STX`)
-      .join("\n");
-
-    return `You are an autonomous trading agent named "${agent.name}" on the Stacks blockchain.
-
-Context: ${agent.context}
-Config: ${JSON.stringify(config)}
-Current state: ${JSON.stringify(state)}
-STX Price: $${stxPrice > 0 ? stxPrice.toFixed(4) : "unknown"}
-
-Wallets:
-${walletInfo}
-
-Available tokens on ALEX: STX, sUSDT, USDA, ALEX, WELSH, DIKO, and others.
-
-Rules:
-- Never trade more than ${config.maxPositionPct ?? 25}% of a wallet's balance in one trade
-- If STX price is unknown or you're unsure, prefer "hold"
-- Diversify across available tokens
-- Respond ONLY with valid JSON, nothing else:
-
-{
-  "action": "trade" | "hold",
-  "reason": "brief explanation",
-  "trade": {
-    "walletId": number,
-    "tokenIn": "STX",
-    "tokenOut": "sUSDT",
-    "amountIn": 1.0,
-    "direction": "BUY" | "SELL",
-    "reason": "why"
-  }
-}`;
   }
 }

@@ -1,4 +1,4 @@
-import type { TokenBalance, SwappableToken, RebalanceAction, PortfolioTarget } from "../../types.js";
+import type { TokenBalance, SwappableToken, RebalanceAction, PortfolioTarget } from "../types.js";
 
 export interface TradeSettings {
   slippageBps: number;

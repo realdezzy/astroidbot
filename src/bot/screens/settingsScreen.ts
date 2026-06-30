@@ -1,5 +1,5 @@
 import { InlineKeyboard } from "grammy";
-import type { BotContext } from "../types.js";
+import type { BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
 
 export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<void> {

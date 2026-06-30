@@ -22,13 +22,13 @@ import { generateWalletKeypair, deriveAddressFromPrivateKey } from "../services/
 import { encrypt } from "../utils/crypto.js";
 import { escapeMd } from "./utils.js";
 import { sendEmail, buildOtpEmail } from "../utils/email.js";
-import type { BotContext } from "./types.js";
+import type { BotContext } from "../types/bot.js";
 import bcrypt from "bcrypt";
 import axios from "axios";
 import { spawn } from "child_process";
 import OpenAI, { toFile } from "openai";
 
-export { type BotContext } from "./types.js";
+export { type BotContext } from "../types/bot.js";
 
 
 function isAdmin(ctx: BotContext): boolean {

@@ -34,3 +34,16 @@ export const ParseCommandSchema = z.object({
     "unknown"
   ]),
 }).passthrough();
+
+export const AgentDecisionSchema = z.object({
+  action: z.enum(["trade", "hold"]),
+  reason: z.string(),
+  trade: z.object({
+    walletId: z.number().optional(),
+    tokenIn: z.string().default("STX"),
+    tokenOut: z.string(),
+    amountIn: z.number().positive(),
+    direction: z.enum(["BUY", "SELL"]),
+    reason: z.string().optional(),
+  }).optional(),
+});

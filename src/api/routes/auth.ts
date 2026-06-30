@@ -12,7 +12,7 @@ import {
   linkTelegramSchema,
   linkEmailSchema,
   refreshTokenSchema,
-} from "../schemas.js";
+} from "../../validation/api/schemas.js";
 
 const router = Router();
 

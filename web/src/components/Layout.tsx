@@ -98,13 +98,13 @@ export function Layout() {
       {/* Desktop Sidebar */}
       <aside className="hidden md:flex w-64 bg-sidebar-bg border-r border-sidebar-border flex-col transition-colors duration-300">
         <div className="p-6 border-b border-sidebar-border flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <a href="/" className="flex items-center gap-3">
             <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
             <div>
               <h1 className="text-lg font-bold text-title-text">AstroidBot</h1>
               <p className="text-xs text-muted-text">AI Trading</p>
             </div>
-          </div>
+          </a>
         </div>
 
         <nav className="flex-1 p-4 space-y-1">

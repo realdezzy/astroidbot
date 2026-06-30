@@ -4,7 +4,7 @@ import { PortfolioManager } from "../portfolio.js";
 import { PriceHistoryService } from "../priceHistory.js";
 import { RiskManager } from "../riskManager.js";
 import type { RebalanceAction } from "../../types.js";
-import type { Strategy, StrategyContext, StrategyState } from "./types.js";
+import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class PortfolioRebalanceStrategy implements Strategy {
   async execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]> {
