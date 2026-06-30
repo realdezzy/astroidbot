@@ -8,6 +8,22 @@ import {
 import { ConfigManager } from "../src/config.js";
 import { beforeAll, vi } from "vitest";
 
+vi.mock("../src/services/db.js", () => {
+  const mockDbInstance = {
+    updateTradeStatus: vi.fn().mockResolvedValue(true),
+    prisma: {
+      limitOrder: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    },
+  };
+  return {
+    DatabaseService: {
+      getInstance: () => mockDbInstance,
+    },
+  };
+});
+
 describe("TransactionService (from src/)", () => {
   beforeAll(() => {
     process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";

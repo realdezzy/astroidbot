@@ -490,6 +490,16 @@ export class TransactionService {
       }
 
       logger.warn("Transaction confirmation timed out", { txId });
+      await DatabaseService.getInstance().updateTradeStatus(
+        tradeId,
+        "FAILED",
+        txId,
+        "Transaction confirmation timed out"
+      );
+      await DatabaseService.getInstance().prisma.limitOrder.updateMany({
+        where: { txId },
+        data: { status: "ACTIVE", txId: null },
+      });
       return false;
     } finally {
       this.activeConfirmations.delete(txId);
