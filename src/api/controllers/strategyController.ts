@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { DatabaseService } from "../../services/db.js";
 import { logger } from "../../utils/logger.js";
 import { ValidationError, NotFoundError, InternalError } from "../errors.js";
+import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 
 export class StrategyController {
   static async getStrategies(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -121,6 +122,77 @@ export class StrategyController {
       res.json({ ok: true });
     } catch (error) {
       logger.error("Failed to delete strategy", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async getStrategyDetail(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = parseInt(String(req.params.id ?? ""), 10);
+      if (isNaN(id)) return next(new ValidationError("Invalid strategy ID"));
+
+      const db = DatabaseService.getInstance();
+      const strategy = await db.prisma.tradingStrategy.findUnique({ where: { id } });
+      if (!strategy || strategy.userId !== req.userId) {
+        return next(new NotFoundError("Strategy"));
+      }
+
+      const config = strategy.config as Record<string, unknown> || {};
+      const walletIds = Array.isArray(config.walletIds) ? config.walletIds : [];
+
+      const trades = await db.prisma.trade.findMany({
+        where: {
+          userId: req.userId!,
+          walletId: { in: walletIds },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      });
+
+      let pnl = 0;
+      let stxPrice = 2.0;
+      try {
+        stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX") || 2.0;
+      } catch {
+        // ignore price fetch failure, fallback to 2.0
+      }
+
+      trades.forEach((t) => {
+        if (t.status === "CONFIRMED") {
+          const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn);
+          const amountOutUsd = t.amountOutUsd ?? (t.tokenOut === "STX" ? t.amountOut * stxPrice : t.amountOut);
+          pnl += t.direction === "BUY" ? -amountInUsd : amountOutUsd;
+        }
+      });
+
+      res.json({
+        strategy: {
+          id: strategy.id,
+          type: strategy.type,
+          config,
+          isActive: strategy.isActive,
+          createdAt: strategy.createdAt,
+          updatedAt: strategy.updatedAt,
+        },
+        trades: trades.map((t) => ({
+          id: t.id,
+          direction: t.direction,
+          tokenIn: t.tokenIn,
+          tokenOut: t.tokenOut,
+          amountIn: t.amountIn,
+          amountOut: t.amountOut,
+          feeAmount: t.feeAmount,
+          feeBps: t.feeBps,
+          txId: t.txId,
+          status: t.status,
+          createdAt: t.createdAt,
+          confirmedAt: t.confirmedAt,
+        })),
+        pnl,
+        totalTrades: trades.length,
+      });
+    } catch (error) {
+      logger.error("Failed to fetch strategy details", { error });
       next(new InternalError());
     }
   }

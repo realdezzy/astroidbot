@@ -23,6 +23,7 @@ const updateStrategySchema = z.object({
 });
 
 router.get("/", authenticate, StrategyController.getStrategies);
+router.get("/:id/detail", authenticate, StrategyController.getStrategyDetail);
 router.post("/", authenticate, validateBody(createStrategySchema), StrategyController.createStrategy);
 router.put("/:id", authenticate, validateBody(updateStrategySchema), StrategyController.updateStrategy);
 router.delete("/:id", authenticate, StrategyController.deleteStrategy);

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    name: Backend & Frontend Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: astroidbot_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASTROIDBOT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/astroidbot_test
+      AES_KEY: ci-test-key-not-for-production
+      JWT_SECRET: ci-test-jwt-secret-min-32-chars-xyz
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run build
+
+      - name: Run backend tests
+        run: npm test
+
+      - name: Install web dependencies
+        run: npm ci --legacy-peer-deps
+        working-directory: web
+
+      - name: Run frontend tests
+        run: npm test
+        working-directory: web

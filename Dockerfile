@@ -9,6 +9,23 @@ COPY shared/ /app/shared/
 COPY web/ ./
 RUN npm run build
 
+FROM node:23-alpine AS test
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --legacy-peer-deps
+
+COPY prisma/ ./prisma/
+RUN npx prisma generate
+
+COPY shared/ ./shared/
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY tsconfig.json vitest.config.ts ./
+
+RUN npm run build && npm test
+
 FROM node:23-alpine AS backend
 
 ENV NODE_ENV=production

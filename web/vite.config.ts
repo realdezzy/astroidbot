@@ -27,4 +27,9 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
   },
+  test: {
+    environment: "happy-dom",
+    globals: true,
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  },
 });
