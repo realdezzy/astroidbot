@@ -136,7 +136,7 @@ export class BitflowDEXService implements DEXProvider {
       const newPools: LocalPool[] = [];
 
       const popularSymbols = new Set([
-        "STX", "WSTX", "ALEX", "WALEX", "USDA", "WUSDA", "XBTC", "WBTC", "AEWBTC", "LEO", "DIKO", "WELAR", "ROO", "WELSH"
+        "STX", "WSTX", "ALEX", "WALEX", "USDA", "WUSDA", "USDCX", "XBTC", "WBTC", "AEWBTC", "LEO", "DIKO", "WELAR", "ROO", "WELSH"
       ]);
       const targetTokens = sdkTokens.filter((t) => {
         const sym = t.symbol.toUpperCase();
@@ -290,12 +290,9 @@ export class BitflowDEXService implements DEXProvider {
         };
       }
 
-      const tokenInDecimals = this.tokens.find(
-        (t) => t.symbol.toUpperCase() === tokenIn.toUpperCase() || t.contractId.toUpperCase() === tokenIn.toUpperCase()
-      )?.decimals ?? 6;
-      const rawAmountIn = Math.round(amountIn * (10 ** tokenInDecimals));
-
-      const quote = await callSilently(() => this.breaker.execute(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, rawAmountIn)));
+      // SDK scales input and output internally via callReadOnlyFunctionHelper.
+      // Pass human-readable amountIn; bestRoute.quote is already human-readable.
+      const quote = await callSilently(() => this.breaker.execute(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn)));
       const bestRoute = quote.bestRoute ?? quote.allRoutes?.[0];
       if (!bestRoute) {
         const local = this.localQuote(tokenIn, tokenOut, amountIn);
@@ -311,7 +308,7 @@ export class BitflowDEXService implements DEXProvider {
       const feeBps = pool?.feeRate ?? 30;
 
       return {
-        amountOut: bestRoute.quote ? bestRoute.quote / (10 ** (bestRoute.tokenYDecimals ?? 6)) : 0,
+        amountOut: bestRoute.quote ?? 0,
         priceImpact: 0,
         feeBps,
         feeAmount: amountIn * (feeBps / 10000),
@@ -337,15 +334,11 @@ export class BitflowDEXService implements DEXProvider {
       const sdk = this.getSDK();
       if (!sdk) return 0;
 
-      const tokenDecimals = this.tokens.find(
-        (t) => t.symbol.toUpperCase() === tokenSymbol.toUpperCase()
-      )?.decimals ?? 6;
-      const rawAmountIn = 10 ** tokenDecimals;
-
-      const quote = await callSilently(() => this.breaker.execute(() => sdk.getQuoteForRoute(tokenId, "token-usda", rawAmountIn)));
+      // SDK handles scaling internally; pass 1 unit and read back the human-readable price.
+      const quote = await callSilently(() => this.breaker.execute(() => sdk.getQuoteForRoute(tokenId, "token-usda", 1)));
       const bestRoute = quote.allRoutes?.[0] ?? quote.bestRoute;
       if (bestRoute?.quote) {
-        return bestRoute.quote / (10 ** (bestRoute.tokenYDecimals ?? 6));
+        return bestRoute.quote;
       }
       return 0;
     } catch {
@@ -381,28 +374,23 @@ export class BitflowDEXService implements DEXProvider {
       const tokenOutId = this.resolveTokenId(tokenOut);
       if (!tokenInId || !tokenOutId) return null;
 
-      const tokenInDecimals = this.tokens.find(
-        (t) => t.symbol.toUpperCase() === tokenIn.toUpperCase() || t.contractId.toUpperCase() === tokenIn.toUpperCase()
-      )?.decimals ?? 6;
-      const tokenOutDecimals = this.tokens.find(
-        (t) => t.symbol.toUpperCase() === tokenOut.toUpperCase() || t.contractId.toUpperCase() === tokenOut.toUpperCase()
-      )?.decimals ?? 6;
-
-      const rawAmountIn = Math.round(amountIn * (10 ** tokenInDecimals));
-      const rawMinAmountOut = Math.round(minAmountOut * (10 ** tokenOutDecimals));
-
-      const quote = await this.breaker.execute(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, rawAmountIn));
+      // SDK handles decimal scaling internally; pass human-readable amounts.
+      const quote = await this.breaker.execute(() => sdk.getQuoteForRoute(tokenInId, tokenOutId, amountIn));
       const bestRoute = quote.bestRoute ?? quote.allRoutes?.[0];
       if (!bestRoute) return null;
 
       const swapExecutionData = {
         route: bestRoute.route,
-        amount: rawAmountIn,
+        amount: amountIn,
         tokenXDecimals: bestRoute.tokenXDecimals,
         tokenYDecimals: bestRoute.tokenYDecimals,
       };
 
-      const slippageTolerance = Math.max(0, (rawAmountIn - rawMinAmountOut) / rawAmountIn);
+      // Slippage must be computed in tokenOut units (not cross-token comparison).
+      const expectedOut = bestRoute.quote ?? 0;
+      const slippageTolerance = expectedOut > 0
+        ? Math.max(0, (expectedOut - minAmountOut) / expectedOut)
+        : 0.015;
       const swapParams = await this.breaker.execute(() => sdk.prepareSwap(swapExecutionData, senderAddress, slippageTolerance));
       if (!swapParams) return null;
 
