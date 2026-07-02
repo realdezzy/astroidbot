@@ -57,7 +57,7 @@ export function Trade() {
   const [selectedWalletIds, setSelectedWalletIds] = useState<number[]>([]);
   const [direction, setDirection] = useState<"BUY" | "SELL">("BUY");
   const [tokenIn, setTokenIn] = useState("STX");
-  const [tokenOut, setTokenOut] = useState("sUSDT");
+  const [tokenOut, setTokenOut] = useState("USDCx");
   const [amount, setAmount] = useState("");
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);

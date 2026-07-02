@@ -166,7 +166,7 @@ export class RiskManager {
       return balance.usdValue / balance.balance;
     }
     const symbol = balance.symbol.toUpperCase();
-    if (symbol === "SUSDT" || symbol === "USDA" || symbol === "USDC") return 1;
+    if (symbol === "USDCX" || symbol === "USDA" || symbol === "USDC") return 1;
     return 0;
   }
 

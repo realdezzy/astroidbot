@@ -437,7 +437,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
       const symbol = text.toUpperCase();
       const tokens = await DEXRegistry.getInstance().getSwappableTokens();
       const found = tokens.some((t) => t.symbol.toUpperCase() === symbol);
-      if (!found && symbol !== "STX" && symbol !== "SUSDT") {
+      if (!found && symbol !== "STX" && symbol !== "USDCX") {
         return ctx.reply(`❌ Token *${escapeMd(symbol)}* is not recognized by any DEX provider. Please try another symbol:`, { parse_mode: "Markdown" });
       }
       ctx.session.tradeTokenIn = symbol;
@@ -449,7 +449,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
       const symbol = text.toUpperCase();
       const tokens = await DEXRegistry.getInstance().getSwappableTokens();
       const found = tokens.some((t) => t.symbol.toUpperCase() === symbol);
-      if (!found && symbol !== "STX" && symbol !== "SUSDT") {
+      if (!found && symbol !== "STX" && symbol !== "USDCX") {
         return ctx.reply(`❌ Token *${escapeMd(symbol)}* is not recognized by any DEX provider. Please try another symbol:`, { parse_mode: "Markdown" });
       }
       if (symbol === ctx.session.tradeTokenIn) {
@@ -581,7 +581,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("Voice transcription failed", { error: msg });
-      await ctx.reply("❌ Voice transcription failed. Please type your command instead, e.g. 'buy 5 STX for sUSDT' or 'show portfolio'.");
+      await ctx.reply("❌ Voice transcription failed. Please type your command instead, e.g. 'buy 5 STX for USDCx' or 'show portfolio'.");
     }
   });
 
@@ -791,7 +791,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
       const wallet = await db.findWalletById(walletId);
       if (!wallet || wallet.userId !== user.id) return;
       const tokenIn = ctx.session.tradeTokenIn ?? "STX";
-      const tokenOut = ctx.session.tradeTokenOut ?? "sUSDT";
+      const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
       const rawAmount = ctx.session.tradeAmount;
       const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));
       if (amount <= 0) return;
@@ -1175,7 +1175,7 @@ async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
     if (greetingRegex.test(text)) {
       const reply = "👋 *Hello!* I am AstroidBot, your AI Stacks trading assistant.\n\n" +
         "I can help you with:\n" +
-        "• *Trades*: e.g. `buy 10 STX for sUSDT`\n" +
+        "• *Trades*: e.g. `buy 10 STX for USDCx`\n" +
         "• *Automated strategies*: DCA, Grid, and Portfolio Rebalancing\n" +
         "• *Wallets*: e.g. `show my wallets` or create/import wallets\n" +
         "• *Limit Orders*: e.g. `open limit orders`\n\n" +
@@ -1252,11 +1252,11 @@ async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
     const qm = (await import("../services/queue.js")).QueueManager.getInstance();
     await qm.enqueueTrade({
       walletId: wallet.id, userId: user.id, senderAddress: wallet.address,
-      tokenIn: (t.tokenIn as string) ?? "STX", tokenOut: (t.tokenOut as string) ?? "sUSDT",
+      tokenIn: (t.tokenIn as string) ?? "STX", tokenOut: (t.tokenOut as string) ?? "USDCx",
       amountIn: (t.amountIn as number) ?? 1, direction: ((t.direction as string) ?? "BUY") as "BUY" | "SELL",
       reason: `NL: ${text}`,
     });
-    const reply = `✅ Trade enqueued: ${(t.direction as string) ?? "BUY"} ${t.amountIn ?? ""} ${(t.tokenIn as string) ?? "STX"} → ${(t.tokenOut as string) ?? "sUSDT"}`;
+    const reply = `✅ Trade enqueued: ${(t.direction as string) ?? "BUY"} ${t.amountIn ?? ""} ${(t.tokenIn as string) ?? "STX"} → ${(t.tokenOut as string) ?? "USDCx"}`;
     ctx.session.chatHistory.push({ role: "assistant", content: reply });
     ctx.session.chatHistory = ctx.session.chatHistory.slice(-6);
     await ctx.reply(reply);

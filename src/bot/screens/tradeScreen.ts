@@ -43,7 +43,7 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
   if (stage === "pick_token_in") {
     const keyboard = new InlineKeyboard()
       .text("STX", "action:trade_token_in_select:STX")
-      .text("sUSDT", "action:trade_token_in_select:sUSDT")
+      .text("USDCx", "action:trade_token_in_select:USDCx")
       .row()
       .text("ALEX", "action:trade_token_in_select:ALEX")
       .text("WELSH", "action:trade_token_in_select:WELSH")
@@ -66,7 +66,7 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     const keyboard = new InlineKeyboard();
 
     if (tokenIn !== "STX") keyboard.text("STX", "action:trade_token_out_select:STX");
-    if (tokenIn !== "sUSDT") keyboard.text("sUSDT", "action:trade_token_out_select:sUSDT");
+    if (tokenIn !== "USDCx") keyboard.text("USDCx", "action:trade_token_out_select:USDCx");
     keyboard.row();
     if (tokenIn !== "ALEX") keyboard.text("ALEX", "action:trade_token_out_select:ALEX");
     if (tokenIn !== "WELSH") keyboard.text("WELSH", "action:trade_token_out_select:WELSH");
@@ -86,7 +86,7 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
   if (stage === "enter_amount") {
     ctx.session.waitingFor = "trade_amount_custom";
     const tokenIn = ctx.session.tradeTokenIn ?? "STX";
-    const tokenOut = ctx.session.tradeTokenOut ?? "sUSDT";
+    const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
 
     const text = `🛒 *Quick Trade - Step 4/5*\n\nSwap: *${escapeMd(tokenIn)}* → *${escapeMd(tokenOut)}*\n\nEnter the amount of *${escapeMd(tokenIn)}* to spend:\n\nType /cancel to abort.`;
     const keyboard = new InlineKeyboard().text("❌ Cancel", "action:cancel_session");
@@ -98,7 +98,7 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     const walletId = ctx.session.tradeWalletId ?? wallets[0]!.id;
     const wallet = wallets.find((w) => w.id === walletId) ?? wallets[0]!;
     const tokenIn = ctx.session.tradeTokenIn ?? "STX";
-    const tokenOut = ctx.session.tradeTokenOut ?? "sUSDT";
+    const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
     const rawAmount = ctx.session.tradeAmount;
     const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));
 

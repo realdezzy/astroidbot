@@ -182,10 +182,10 @@ export class DatabaseService {
         const priceOut = await registry.getTokenPrice(data.tokenOut);
 
         if (amountInUsd === undefined) {
-          amountInUsd = data.amountIn * (priceIn || (data.tokenIn.toUpperCase() === "SUSDT" || data.tokenIn.toUpperCase() === "USDA" ? 1 : 0));
+          amountInUsd = data.amountIn * (priceIn || (data.tokenIn.toUpperCase() === "USDCX" || data.tokenIn.toUpperCase() === "USDA" ? 1 : 0));
         }
         if (amountOutUsd === undefined) {
-          amountOutUsd = data.amountOut * (priceOut || (data.tokenOut.toUpperCase() === "SUSDT" || data.tokenOut.toUpperCase() === "USDA" ? 1 : 0));
+          amountOutUsd = data.amountOut * (priceOut || (data.tokenOut.toUpperCase() === "USDCX" || data.tokenOut.toUpperCase() === "USDA" ? 1 : 0));
         }
       } catch {
         // ignore errors
@@ -227,8 +227,8 @@ export class DatabaseService {
           const priceIn = await registry.getTokenPrice(trade.tokenIn);
           const priceOut = await registry.getTokenPrice(trade.tokenOut);
 
-          extraData.amountInUsd = trade.amountIn * (priceIn || (trade.tokenIn.toUpperCase() === "SUSDT" || trade.tokenIn.toUpperCase() === "USDA" ? 1 : 0));
-          extraData.amountOutUsd = trade.amountOut * (priceOut || (trade.tokenOut.toUpperCase() === "SUSDT" || trade.tokenOut.toUpperCase() === "USDA" ? 1 : 0));
+          extraData.amountInUsd = trade.amountIn * (priceIn || (trade.tokenIn.toUpperCase() === "USDCX" || trade.tokenIn.toUpperCase() === "USDA" ? 1 : 0));
+          extraData.amountOutUsd = trade.amountOut * (priceOut || (trade.tokenOut.toUpperCase() === "USDCX" || trade.tokenOut.toUpperCase() === "USDA" ? 1 : 0));
         }
       } catch {
         // ignore errors

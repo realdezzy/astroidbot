@@ -19,7 +19,7 @@ STX Price: $${stxPrice > 0 ? stxPrice.toFixed(4) : "unknown"}
 Wallets:
 ${walletInfo}
 
-Available tokens on ALEX: STX, sUSDT, USDA, ALEX, WELSH, DIKO, and others.
+Available tokens on ALEX: STX, USDCx, USDA, ALEX, WELSH, DIKO, and others.
 
 Rules:
 - Never trade more than ${config.maxPositionPct ?? 25}% of a wallet's balance in one trade
@@ -33,7 +33,7 @@ Rules:
   "trade": {
     "walletId": number,
     "tokenIn": "STX",
-    "tokenOut": "sUSDT",
+    "tokenOut": "USDCx",
     "amountIn": 1.0,
     "direction": "BUY" | "SELL",
     "reason": "why"

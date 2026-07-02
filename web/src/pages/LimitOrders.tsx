@@ -39,7 +39,7 @@ export function LimitOrders() {
   const [form, setForm] = useState({
     walletIds: [] as number[],
     tokenIn: "STX",
-    tokenOut: "sUSDT",
+    tokenOut: "USDCx",
     direction: "BUY",
     targetPrice: 0,
     amountIn: 0,

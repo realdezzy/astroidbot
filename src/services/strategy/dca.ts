@@ -7,7 +7,7 @@ export class DCAStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
     const { userId, walletId, config, settings } = ctx;
     const tokenIn = (config.tokenIn as string) ?? "STX";
-    const tokenOut = (config.tokenOut as string) ?? "sUSDT";
+    const tokenOut = (config.tokenOut as string) ?? "USDCx";
     const amount = (config.amount as number) ?? 1;
     const intervalMinutes = (config.intervalMinutes as number) ?? 60;
     const priceCondition = (config.priceCondition as string) ?? "always";

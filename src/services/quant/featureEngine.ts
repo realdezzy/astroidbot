@@ -1,4 +1,4 @@
-import { PriceHistoryService } from "../priceHistory.js";
+import { CandleService, type CandleData } from "./candleService.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
 import { logger } from "../../utils/logger.js";
 
@@ -17,7 +17,7 @@ export interface Features {
   ema12: number;
   ema26: number;
   // Volatility
-  historicalVolatility: number; // Annualised std of log returns over 30 periods
+  historicalVolatility: number; // Annualised std of log returns
   atr: number;
   bollingerWidth: number; // (upper - lower) / middle
   // Current price
@@ -26,7 +26,6 @@ export interface Features {
 
 export class FeatureEngine {
   private static instance: FeatureEngine;
-  private priceHistory = PriceHistoryService.getInstance();
 
   private constructor() {}
 
@@ -38,39 +37,41 @@ export class FeatureEngine {
   }
 
   async compute(token: string): Promise<Features> {
-    const [prices, currentPrice] = await Promise.all([
-      this.priceHistory.getHistory(token, 500),
-      DEXRegistry.getInstance().getTokenPrice(token).catch(() => 0),
+    const registry = DEXRegistry.getInstance();
+    const [candles, currentPrice] = await Promise.all([
+      CandleService.getInstance().getCandles(token.toUpperCase(), "5m", 200),
+      registry.getTokenPrice(token).catch(() => 0),
     ]);
 
-    if (prices.length < 2 || currentPrice === 0) {
+    if (candles.length < 30 || currentPrice === 0) {
       return this.emptyFeatures(currentPrice);
     }
 
-    const last = prices[prices.length - 1]!;
+    const closePrices = candles.map((c) => c.close);
 
     return {
       currentPrice,
-      return1h: this.periodReturn(prices, 60),
-      return4h: this.periodReturn(prices, 240),
-      return24h: this.periodReturn(prices, 1440),
-      return7d: this.periodReturn(prices, 10080),
-      rsi14: this.rsi(prices, 14),
-      macdHistogram: this.macdHistogram(prices),
-      vwapDistance: this.vwapDistance(prices),
-      sma20: this.sma(prices, 20),
-      ema12: this.ema(prices, 12),
-      ema26: this.ema(prices, 26),
-      historicalVolatility: this.historicalVol(prices, 30),
-      atr: this.atr(prices, 14),
-      bollingerWidth: this.bollingerWidth(prices, 20),
+      return1h: this.periodReturn(closePrices, 12), // 12 * 5m = 1h
+      return4h: this.periodReturn(closePrices, 48), // 48 * 5m = 4h
+      return24h: this.periodReturn(closePrices, 288), // 288 * 5m = 24h (cap to candles.length if needed)
+      return7d: this.periodReturn(closePrices, candles.length - 1),
+      rsi14: this.rsi(closePrices, 14),
+      macdHistogram: this.macdHistogram(closePrices),
+      vwapDistance: this.vwapDistance(candles),
+      sma20: this.sma(closePrices, 20),
+      ema12: this.ema(closePrices, 12),
+      ema26: this.ema(closePrices, 26),
+      historicalVolatility: this.historicalVol(closePrices, 30),
+      atr: this.atr(candles, 14),
+      bollingerWidth: this.bollingerWidth(closePrices, 20),
     };
   }
 
   // Returns ratio of change over the last N periods.
   private periodReturn(prices: number[], n: number): number {
-    if (prices.length <= n) return 0;
-    const start = prices[prices.length - 1 - n]!;
+    if (prices.length === 0) return 0;
+    const lookback = Math.min(prices.length - 1, n);
+    const start = prices[prices.length - 1 - lookback]!;
     const end = prices[prices.length - 1]!;
     if (start === 0) return 0;
     return (end - start) / start;
@@ -98,8 +99,9 @@ export class FeatureEngine {
     return 100 - 100 / (1 + rs);
   }
 
-  // Exponential Moving Average via the standard multiplier formula.
+  // Exponential Moving Average.
   private ema(prices: number[], periods: number): number {
+    if (prices.length === 0) return 0;
     if (prices.length < periods) return prices[prices.length - 1] ?? 0;
     const k = 2 / (periods + 1);
     const slice = prices.slice(-Math.min(prices.length, periods * 3));
@@ -121,7 +123,6 @@ export class FeatureEngine {
   private macdHistogram(prices: number[]): number {
     if (prices.length < 35) return 0;
     const macdLine = this.ema(prices, 12) - this.ema(prices, 26);
-    // Approximate signal by applying EMA9 to the last 35-period set of MACD values.
     const macdSeries: number[] = [];
     for (let i = Math.max(0, prices.length - 35); i < prices.length; i++) {
       const slice = prices.slice(0, i + 1);
@@ -131,12 +132,22 @@ export class FeatureEngine {
     return macdLine - signalLine;
   }
 
-  // Volume-weighted average price using price as proxy for volume (equal weighting).
-  private vwapDistance(prices: number[]): number {
-    if (prices.length === 0) return 0;
-    const vwap = prices.reduce((s, p) => s + p, 0) / prices.length;
-    const last = prices[prices.length - 1]!;
-    return vwap === 0 ? 0 : (last - vwap) / vwap;
+  // Volume-weighted average price (VWAP) using real candle prices and volumes.
+  private vwapDistance(candles: CandleData[]): number {
+    if (candles.length === 0) return 0;
+    let totalPV = 0;
+    let totalVolume = 0;
+
+    for (const c of candles) {
+      const typicalPrice = (c.high + c.low + c.close) / 3;
+      totalPV += typicalPrice * c.volume;
+      totalVolume += c.volume;
+    }
+
+    if (totalVolume === 0) return 0;
+    const vwap = totalPV / totalVolume;
+    const lastPrice = candles[candles.length - 1]!.close;
+    return (lastPrice - vwap) / vwap;
   }
 
   // Annualised historical volatility using standard deviation of log returns.
@@ -154,19 +165,27 @@ export class FeatureEngine {
     if (logReturns.length < 2) return 0;
     const mean = logReturns.reduce((s, r) => s + r, 0) / logReturns.length;
     const variance = logReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / logReturns.length;
-    // Annualise assuming polling interval approximates minutes in trading.
-    return Math.sqrt(variance) * Math.sqrt(525600);
+    // Annualise assuming 5-minute candles (105120 periods per year)
+    return Math.sqrt(variance) * Math.sqrt(105120);
   }
 
-  // Average True Range approximation (no high/low data — uses |close - prev close|).
-  private atr(prices: number[], periods: number): number {
-    const slice = prices.slice(-(periods + 1));
-    if (slice.length < 2) return 0;
+  // Real Average True Range calculation using high/low/close.
+  private atr(candles: CandleData[], periods: number): number {
+    if (candles.length < 2) return 0;
+
     const trueRanges: number[] = [];
-    for (let i = 1; i < slice.length; i++) {
-      trueRanges.push(Math.abs(slice[i]! - slice[i - 1]!));
+    for (let i = 1; i < candles.length; i++) {
+      const c = candles[i]!;
+      const prev = candles[i - 1]!;
+      const tr = Math.max(
+        c.high - c.low,
+        Math.abs(c.high - prev.close),
+        Math.abs(c.low - prev.close)
+      );
+      trueRanges.push(tr);
     }
-    return trueRanges.reduce((s, r) => s + r, 0) / trueRanges.length;
+
+    return this.ema(trueRanges, periods);
   }
 
   // Bollinger Band width = (upper - lower) / SMA.
@@ -176,16 +195,25 @@ export class FeatureEngine {
     const mean = slice.reduce((s, p) => s + p, 0) / slice.length;
     const std = Math.sqrt(slice.reduce((s, p) => s + (p - mean) ** 2, 0) / slice.length);
     if (mean === 0) return 0;
-    return (2 * 2 * std) / mean; // 2 standard deviations upper and lower
+    return (2 * 2 * std) / mean; // 2 standard deviations
   }
 
   private emptyFeatures(currentPrice: number): Features {
     return {
       currentPrice,
-      return1h: 0, return4h: 0, return24h: 0, return7d: 0,
-      rsi14: 50, macdHistogram: 0, vwapDistance: 0,
-      sma20: currentPrice, ema12: currentPrice, ema26: currentPrice,
-      historicalVolatility: 0, atr: 0, bollingerWidth: 0,
+      return1h: 0,
+      return4h: 0,
+      return24h: 0,
+      return7d: 0,
+      rsi14: 50,
+      macdHistogram: 0,
+      vwapDistance: 0,
+      sma20: currentPrice,
+      ema12: currentPrice,
+      ema26: currentPrice,
+      historicalVolatility: 0,
+      atr: 0,
+      bollingerWidth: 0,
     };
   }
 }

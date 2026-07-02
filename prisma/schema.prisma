@@ -259,3 +259,31 @@ model Notification {
 
   @@index([userId, read])
 }
+
+model Candle {
+  id        Int      @id @default(autoincrement())
+  token     String
+  timeframe String   // "1m", "5m", "15m", "1h", "4h", "1d"
+  timestamp DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float    @default(0)
+
+  @@unique([token, timeframe, timestamp])
+  @@index([token, timeframe, timestamp])
+}
+
+model PoolStatsHistory {
+  id                  Int      @id @default(autoincrement())
+  token               String
+  timestamp           DateTime @default(now())
+  liquidityUsd        Float
+  tvlUsd              Float
+  volume24hUsd        Float
+  holderConcentration Float    @default(0)
+  netWhaleFlowUsd     Float    @default(0)
+
+  @@index([token, timestamp])
+}

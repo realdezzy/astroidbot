@@ -212,7 +212,7 @@ export function AgentChat() {
             };
           } else {
             const tokenIn = (parsed.tokenIn as string) ?? "STX";
-            const tokenOut = (parsed.tokenOut as string) ?? "sUSDT";
+            const tokenOut = (parsed.tokenOut as string) ?? "USDCx";
             const amountIn = (parsed.amountIn as number) ?? 1;
             const direction = (parsed.direction as string) ?? "BUY";
 
@@ -441,7 +441,7 @@ export function AgentChat() {
             };
           } else {
             const tokenIn = (result.tokenIn as string) ?? "STX";
-            const tokenOut = (result.tokenOut as string) ?? "sUSDT";
+            const tokenOut = (result.tokenOut as string) ?? "USDCx";
             const amountIn = (result.amountIn as number) ?? 1;
             const direction = (result.direction as string) ?? "BUY";
 
@@ -639,7 +639,7 @@ export function AgentChat() {
   const SUGGESTIONS = [
     "What are trading agents?",
     "Show my wallets list",
-    "Swap 10 STX for sUSDT",
+    "Swap 10 STX for USDCx",
     "Halt the bot execution",
     "Set slippageBps to 150",
   ];
@@ -781,7 +781,7 @@ export function AgentChat() {
                 placeholder={
                   isRecording
                     ? "Listening... Speak clearly now."
-                    : "Type your query (e.g. 'swap 10 STX for sUSDT')"
+                    : "Type your query (e.g. 'swap 10 STX for USDCx')"
                 }
                 className="flex-1 bg-transparent text-sm text-title-text placeholder:text-muted-text/60 focus:outline-none py-1.5"
                 disabled={loading || !!streamingMessageId}

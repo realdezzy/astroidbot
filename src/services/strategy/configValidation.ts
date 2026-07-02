@@ -25,7 +25,7 @@ const schemas: Record<string, z.ZodObject<any>> = {
     minTradeUsd: positiveNumber.max(1_000_000).default(5),
   }),
   grid: baseSchema.extend({
-    tokenPair: tokenPair.default("STX/sUSDT"),
+    tokenPair: tokenPair.default("STX/USDCx"),
     levels: positiveInt.min(3).max(50).default(5),
     spreadBps: boundedSlippageBps.default(30),
     maxPositionPct: percentage.default(25),
@@ -36,7 +36,7 @@ const schemas: Record<string, z.ZodObject<any>> = {
   }),
   dca: baseSchema.extend({
     tokenIn: token.default("STX"),
-    tokenOut: token.default("sUSDT"),
+    tokenOut: token.default("USDCx"),
     amount: positiveNumber.max(1_000_000).default(1),
     intervalMinutes: positiveInt.max(365 * 24 * 60).default(60),
     priceCondition: z.enum(["always", "below", "above"]).default("always"),
@@ -71,12 +71,12 @@ const schemas: Record<string, z.ZodObject<any>> = {
     maPeriods: positiveInt.max(10_000).default(20),
     entryDeviationPct: positiveNumber.max(10_000).default(5),
     exitDeviationPct: nonNegativeNumber.max(10_000).default(1),
-    tokenPair: tokenPair.default("STX/sUSDT"),
+    tokenPair: tokenPair.default("STX/USDCx"),
     positionSizeUsd: positiveNumber.max(1_000_000).default(10),
   }),
   twap: baseSchema.extend({
     tokenIn: token.default("STX"),
-    tokenOut: token.default("sUSDT"),
+    tokenOut: token.default("USDCx"),
     totalAmount: positiveNumber.max(1_000_000).default(10),
     slices: positiveInt.max(1_000).default(10),
     windowMinutes: positiveInt.max(365 * 24 * 60).default(60),
@@ -97,7 +97,7 @@ const schemas: Record<string, z.ZodObject<any>> = {
   breakout: baseSchema.extend({
     lookbackPeriods: positiveInt.max(10_000).default(20),
     breakoutPct: positiveNumber.max(10_000).default(3),
-    tokenPair: tokenPair.default("STX/sUSDT"),
+    tokenPair: tokenPair.default("STX/USDCx"),
     positionSizeUsd: positiveNumber.max(1_000_000).default(10),
   }),
 };

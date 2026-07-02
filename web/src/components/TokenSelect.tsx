@@ -17,7 +17,7 @@ interface TokenSelectProps {
   className?: string;
 }
 
-const POPULAR_SYMBOLS = ["STX", "sUSDT", "USDA", "ALEX", "WELSH"];
+const POPULAR_SYMBOLS = ["STX", "USDCx", "USDA", "ALEX", "WELSH"];
 
 export function TokenSelect({
   tokens,

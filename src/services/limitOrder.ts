@@ -156,7 +156,7 @@ export class LimitOrderService {
         const targetToken = order.direction === "BUY" ? order.tokenOut : order.tokenIn;
 
         // Use DEXRegistry to get current price via a 1-unit quote
-        const priceQuote = await registry.getBestQuote(order.tokenIn, "sUSDT", 1).catch(() => null);
+        const priceQuote = await registry.getBestQuote(order.tokenIn, "USDCx", 1).catch(() => null);
         const currentPrice = priceQuote?.quote.amountOut ?? 0;
 
         let shouldExecute = false;

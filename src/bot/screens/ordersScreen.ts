@@ -68,10 +68,10 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
     return;
   }
 
-  const pair = (ctx.session.limitPair as string) ?? "STX/sUSDT";
+  const pair = (ctx.session.limitPair as string) ?? "STX/USDCx";
   const [tknIn, tknOut] = pair.split("/");
   const tokenIn = tknIn ?? "STX";
-  const tokenOut = tknOut ?? "sUSDT";
+  const tokenOut = tknOut ?? "USDCx";
   const dir = (ctx.session.limitDir as string) ?? "BUY";
   const rawAmount = ctx.session.limitAmount;
   const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));

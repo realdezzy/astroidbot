@@ -7,7 +7,7 @@ export class TwapStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
     const { userId, walletId, config, settings } = ctx;
     const tokenIn = (config.tokenIn as string) ?? "STX";
-    const tokenOut = (config.tokenOut as string) ?? "sUSDT";
+    const tokenOut = (config.tokenOut as string) ?? "USDCx";
     const totalAmount = (config.totalAmount as number) ?? 1;
     const slices = (config.slices as number) ?? 10;
     const windowMinutes = (config.windowMinutes as number) ?? 60;

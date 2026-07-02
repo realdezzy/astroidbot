@@ -8,9 +8,9 @@ export class MeanReversionStrategy implements Strategy {
     const maPeriods = (config.maPeriods as number) ?? 50; // Increased default to 50
     const entryDeviation = (config.entryDeviationPct as number) ?? 5;
     const exitDeviation = (config.exitDeviationPct as number) ?? 1;
-    const tokenPair = ((config.tokenPair as string) ?? "STX/sUSDT").split("/");
+    const tokenPair = ((config.tokenPair as string) ?? "STX/USDCx").split("/");
     const tokenIn = tokenPair[0] ?? "STX";
-    const tokenOut = tokenPair[1] ?? "sUSDT";
+    const tokenOut = tokenPair[1] ?? "USDCx";
     const positionSize = (config.positionSizeUsd as number) ?? 10;
     const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
     const enableTrendFilter = config.enableTrendFilter !== false;

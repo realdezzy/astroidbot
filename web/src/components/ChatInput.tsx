@@ -37,7 +37,7 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
 
   const placeholder = contextHint
     ? `Ask about ${contextHint}... e.g. "what are agents?"`
-    : "Type a command... e.g. 'buy 10 STX with sUSDT' or 'show portfolio'";
+    : "Type a command... e.g. 'buy 10 STX with USDCx' or 'show portfolio'";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,7 +62,7 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
           body: JSON.stringify({
             walletId,
             tokenIn: result.tokenIn ?? "STX",
-            tokenOut: result.tokenOut ?? "sUSDT",
+            tokenOut: result.tokenOut ?? "USDCx",
             amountIn: result.amountIn ?? 1,
             direction: result.direction ?? "BUY",
           }),
@@ -89,7 +89,7 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
       } else if (action === "halt" || action === "resume") {
         setResponse(`✅ Bot ${action === "halt" ? "halted" : "resumed"}`);
       } else {
-        setResponse("🤔 I didn't understand that. Try: 'buy 10 STX for sUSDT' or 'show portfolio'");
+        setResponse("🤔 I didn't understand that. Try: 'buy 10 STX for USDCx' or 'show portfolio'");
       }
     } catch {
       setResponse("❌ Something went wrong. Try again.");
