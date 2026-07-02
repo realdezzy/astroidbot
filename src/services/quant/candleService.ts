@@ -27,30 +27,30 @@ export class CandleService {
    */
   getPeriodStart(timestamp: number, timeframe: string): Date {
     const date = new Date(timestamp);
-    const m = date.getMinutes();
-    const h = date.getHours();
+    const m = date.getUTCMinutes();
+    const h = date.getUTCHours();
 
     switch (timeframe) {
       case "1m":
-        date.setSeconds(0, 0);
+        date.setUTCSeconds(0, 0);
         break;
       case "5m":
-        date.setMinutes(m - (m % 5), 0, 0);
+        date.setUTCMinutes(m - (m % 5), 0, 0);
         break;
       case "15m":
-        date.setMinutes(m - (m % 15), 0, 0);
+        date.setUTCMinutes(m - (m % 15), 0, 0);
         break;
       case "1h":
-        date.setMinutes(0, 0, 0);
+        date.setUTCMinutes(0, 0, 0);
         break;
       case "4h":
-        date.setHours(h - (h % 4), 0, 0, 0);
+        date.setUTCHours(h - (h % 4), 0, 0, 0);
         break;
       case "1d":
-        date.setHours(0, 0, 0, 0);
+        date.setUTCHours(0, 0, 0, 0);
         break;
       default:
-        date.setSeconds(0, 0);
+        date.setUTCSeconds(0, 0);
     }
     return date;
   }

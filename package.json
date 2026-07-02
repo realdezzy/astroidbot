@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "@bitflowlabs/core-sdk": "^3.1.0",
-    "@faktoryfun/core-sdk": "^0.3.8",
     "@google/generative-ai": "^0.21.0",
     "@prisma/client": "^6.0.0",
     "@stacks/network": "^7.0.2",

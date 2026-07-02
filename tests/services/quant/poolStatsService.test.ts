@@ -91,6 +91,7 @@ describe("PoolStatsService", () => {
       { volume24hUsd: 100000, timestamp: oneHourAgo },
       { volume24hUsd: 30000, timestamp: twelveHoursAgo },
       { volume24hUsd: 30000, timestamp: new Date(now - 24 * 60 * 60 * 1000) },
+      { volume24hUsd: 30000, timestamp: new Date(now - 36 * 60 * 60 * 1000) },
     ]);
 
     const trend = await service.getVolumeTrend("STX");

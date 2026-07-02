@@ -163,8 +163,8 @@ describe("TransactionService (from src/)", () => {
         direction: "BUY" as const,
         reason: "Test",
       };
-      // Simulating a dummy incorrect/empty/SentEq 0 post condition
-      const dummyIncorrectSTXCondition = {
+      // DEX SDK-supplied override post-conditions should pass through unchanged
+      const dummyOverrideCondition = {
         type: "stx-postcondition",
         address: "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
         condition: "eq",
@@ -176,12 +176,36 @@ describe("TransactionService (from src/)", () => {
         "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
         "SP2",
         3816n,
-        [dummyIncorrectSTXCondition]
+        [dummyOverrideCondition]
       );
 
-      // It should replace the condition with a proper LessEqual condition for 500,000 + 3,816 = 503,816
+      // Override conditions are trusted and returned as-is
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(dummyOverrideCondition);
+    });
+
+    it("should build proper STX post-condition with fee when no overrides are given", async () => {
+      const action = {
+        tokenIn: "STX",
+        tokenOut: "SOME-TOKEN",
+        amountIn: 0.5,
+        direction: "BUY" as const,
+        reason: "Test",
+      };
+
+      // No override → buildPostConditions computes the STX limit with fee
+      const txService = TransactionService.getInstance();
+      const result = (txService as any).normalizePostConditions(
+        action,
+        "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
+        "SP2",
+        3816n,
+        undefined
+      );
+
       expect(result).toHaveLength(1);
       expect(result[0].type).toBe("stx-postcondition");
+      // 0.5 STX = 500,000 microSTX + 3,816 fee = 503,816
       expect(BigInt(result[0].amount)).toBe(503816n);
     });
   });
