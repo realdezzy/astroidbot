@@ -557,7 +557,8 @@ export class TransactionService {
     relayerUrl: string,
     apiKey: string
   ): Promise<string> {
-    const txHex = Buffer.from(tx.serialize()).toString("hex");
+    // tx.serialize() already returns a hex string in @stacks/transactions v7+.
+    const txHex = tx.serialize();
     const networkName = ConfigManager.getInstance().config.STACKS_NETWORK === "mainnet" ? "mainnet" : "testnet";
 
     // paymasterUrl is the full API base (e.g. https://api.velumx.xyz/api/v1).
@@ -730,44 +731,22 @@ export class TransactionService {
     txFee: bigint,
     overridePostConditions?: any[]
   ): any[] {
-    let postConditions: any[] = [];
+    // Provider-supplied post conditions are computed in exact base units by the DEX SDK.
+    // Trust them entirely rather than rebuilding — our local rebuild only understands
+    // BUY/SELL direction and would overwrite the SDK's strict Equal/GreaterEqual conditions.
+    if (overridePostConditions && overridePostConditions.length > 0) {
+      return [...overridePostConditions];
+    }
 
     try {
-      postConditions = this.buildPostConditions(action, senderAddress, contractAddress, txFee);
+      return this.buildPostConditions(action, senderAddress, contractAddress, txFee);
     } catch (error) {
-      if (overridePostConditions && overridePostConditions.length > 0) {
-        logger.warn("Falling back to provider post-conditions after local post-condition build failed", {
-          error: error instanceof Error ? error.message : String(error),
-          tokenIn: action.tokenIn,
-        });
-        postConditions = [...overridePostConditions];
-      } else {
-        throw error;
-      }
+      logger.warn("Failed to build post conditions, using empty set", {
+        error: error instanceof Error ? error.message : String(error),
+        tokenIn: action.tokenIn,
+      });
+      return [];
     }
-
-    const tokenInUpper = action.tokenIn.toUpperCase();
-    const isSTXIn = tokenInUpper === "STX" ||
-                    tokenInUpper === "WSTX" ||
-                    action.tokenIn.toLowerCase().endsWith(".wstx") ||
-                    action.tokenIn.toLowerCase().endsWith(".token-stx");
-
-    if (isSTXIn) {
-      // User is spending STX: ensure correct native STX post-condition is present
-      // 1. Remove any existing native STX post-conditions to avoid duplicates/conflicts
-      postConditions = postConditions.filter(
-        (pc) => pc.type !== "stx-postcondition"
-      );
-
-      // 2. Add the correct native STX post-condition
-      const amountInBigInt = parseTokenAmount(action.amountIn, 6);
-      const stxLimit = amountInBigInt + txFee;
-      postConditions.push(
-        createSTXPostCondition(senderAddress, FungibleConditionCode.LessEqual, stxLimit)
-      );
-    }
-
-    return postConditions;
   }
 
   private buildPostConditions(
