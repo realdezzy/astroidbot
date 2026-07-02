@@ -4,6 +4,7 @@ import { DatabaseService } from "../../services/db.js";
 import { logger } from "../../utils/logger.js";
 import { ValidationError, NotFoundError, InternalError } from "../errors.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
+import { safeValidateStrategyConfig } from "../../services/strategy/configValidation.js";
 
 export class StrategyController {
   static async getStrategies(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -50,12 +51,17 @@ export class StrategyController {
         return next(new ValidationError("One or more wallet IDs are invalid or not owned by you"));
       }
 
+      const validatedConfig = safeValidateStrategyConfig(type, { ...config, walletIds });
+      if (!validatedConfig.success) {
+        return next(new ValidationError("Invalid strategy config", validatedConfig.error.flatten()));
+      }
+
       const strategy = await db.prisma.tradingStrategy.create({
         data: {
           userId: req.userId!,
           agentId,
           type,
-          config: { ...config, walletIds } as Prisma.InputJsonValue,
+          config: validatedConfig.data as Prisma.InputJsonValue,
           isActive: isActive ?? true,
         },
       });
@@ -96,7 +102,12 @@ export class StrategyController {
       const data: Record<string, unknown> = {};
       if (isActive !== undefined) data.isActive = isActive;
       if (config || walletIds !== undefined) {
-        data.config = { ...(existing.config as Record<string, unknown>), ...config, ...(walletIds !== undefined ? { walletIds } : {}) } as Prisma.InputJsonValue;
+        const nextConfig = { ...(existing.config as Record<string, unknown>), ...config, ...(walletIds !== undefined ? { walletIds } : {}) };
+        const validatedConfig = safeValidateStrategyConfig(existing.type, nextConfig);
+        if (!validatedConfig.success) {
+          return next(new ValidationError("Invalid strategy config", validatedConfig.error.flatten()));
+        }
+        data.config = validatedConfig.data as Prisma.InputJsonValue;
       }
 
       const updated = await db.prisma.tradingStrategy.update({ where: { id }, data });

@@ -4,22 +4,19 @@ import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class RotationalStrategy implements Strategy {
-  async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, config, settings, tokens } = ctx;
+  async execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]> {
+    const { config, settings, tokens, balances } = ctx;
     const topK = (config.topK as number) ?? 3;
     const rebalanceHours = (config.rebalancePeriodHours as number) ?? 24;
     const positionSize = (config.positionSizeUsd as number) ?? 10;
     const tokenUniverse = ((config.tokenUniverse as string) ?? "")
       .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
-    void settings;
+    const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
 
-    const db = DatabaseService.getInstance();
-    const lastRebalance = await db.prisma.trade.findFirst({
-      where: { userId, walletId, status: "CONFIRMED", direction: "BUY" },
-      orderBy: { createdAt: "desc" },
-    });
-    if (lastRebalance) {
-      const elapsed = (Date.now() - lastRebalance.createdAt.getTime()) / 3600000;
+    // Fix: use state-based last rotational execution time instead of querying generic trades table
+    const lastRebalanceTime = state.lastRebalanceTime as number | undefined;
+    if (lastRebalanceTime) {
+      const elapsed = (Date.now() - lastRebalanceTime) / 3600000;
       if (elapsed < rebalanceHours) return [];
     }
 
@@ -31,7 +28,7 @@ export class RotationalStrategy implements Strategy {
     const scored: Array<{ symbol: string; momentum: number }> = [];
 
     for (const t of universe) {
-      const momentum = await ph.computeMomentum(t.symbol, 20);
+      const momentum = await ph.computeMomentum(t.symbol, 50); // Increased periods to 50
       scored.push({ symbol: t.symbol, momentum });
     }
 
@@ -40,29 +37,39 @@ export class RotationalStrategy implements Strategy {
     const toSell = scored.slice(topK);
     const actions: RebalanceAction[] = [];
 
+    // Identify positions to exit based on live balances
     for (const item of toSell) {
-      const existing = await db.prisma.trade.findFirst({
-        where: { userId, walletId, tokenOut: item.symbol, status: "CONFIRMED", direction: "BUY" },
-      });
-      if (existing) {
+      const bal = balances.find(b => b.symbol.toUpperCase() === item.symbol.toUpperCase());
+      if (bal && bal.balance > 0.0001) {
         actions.push({
-          tokenIn: item.symbol, tokenOut: "STX",
-          amountIn: Math.min(positionSize, existing.amountIn),
-          direction: "SELL", reason: `Rotational sell: ${item.symbol}`,
+          tokenIn: item.symbol,
+          tokenOut: "STX",
+          amountIn: bal.balance, // Sell the entire position
+          direction: "SELL",
+          slippageBps,
+          reason: `Rotational sell: ${item.symbol}`,
         });
       }
     }
 
+    // Identify new positions to buy
     for (const item of top) {
-      const existing = await db.prisma.trade.findFirst({
-        where: { userId, walletId, tokenOut: item.symbol, status: "CONFIRMED", direction: "BUY" },
-      });
-      if (!existing) {
+      const bal = balances.find(b => b.symbol.toUpperCase() === item.symbol.toUpperCase());
+      const hasPosition = bal !== undefined && bal.balance > 0.0001;
+      if (!hasPosition) {
         actions.push({
-          tokenIn: "STX", tokenOut: item.symbol, amountIn: positionSize,
-          direction: "BUY", reason: `Rotational buy: ${item.symbol} #${scored.indexOf(item) + 1}`,
+          tokenIn: "STX",
+          tokenOut: item.symbol,
+          amountIn: positionSize,
+          direction: "BUY",
+          slippageBps,
+          reason: `Rotational buy: ${item.symbol} #${scored.indexOf(item) + 1}`,
         });
       }
+    }
+
+    if (actions.length > 0) {
+      state.lastRebalanceTime = Date.now();
     }
 
     return actions;

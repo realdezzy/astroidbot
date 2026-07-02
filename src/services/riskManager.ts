@@ -31,6 +31,19 @@ export class RiskManager {
       dailyLossLimit: number;
     }
   ): Promise<RiskEvaluation> {
+    if (!Number.isFinite(action.amountIn) || action.amountIn <= 0) {
+      return { approved: false, reason: "Trade amount must be a positive finite number" };
+    }
+    if (!Number.isFinite(settings.slippageBps) || settings.slippageBps <= 0 || settings.slippageBps > 10_000) {
+      return { approved: false, reason: "Invalid slippage setting" };
+    }
+    if (!Number.isFinite(settings.maxPositionPct) || settings.maxPositionPct < 0 || settings.maxPositionPct > 100) {
+      return { approved: false, reason: "Invalid max position setting" };
+    }
+    if (!Number.isFinite(settings.dailyLossLimit) || settings.dailyLossLimit < 0 || settings.dailyLossLimit > 100) {
+      return { approved: false, reason: "Invalid daily loss limit setting" };
+    }
+
     const totalValue = currentBalances.reduce(
       (sum, b) => sum + b.usdValue,
       0
@@ -40,32 +53,29 @@ export class RiskManager {
       return { approved: false, reason: "Portfolio has no value" };
     }
 
-    const dailyPnl = await this.calculateDailyPnl(userId);
-    if (dailyPnl < -settings.dailyLossLimit) {
+    const dailyPnlUsd = await this.calculateDailyPnlUsd(userId);
+    const dailyPnlPct = totalValue > 0 ? (dailyPnlUsd / totalValue) * 100 : 0;
+    if (dailyPnlPct < -settings.dailyLossLimit || dailyPnlUsd < -settings.dailyLossLimit) {
       if (!this.dailyPnlReported) {
         logger.warn("Daily loss limit reached", {
-          dailyPnl: dailyPnl.toFixed(2),
+          dailyPnlPct: dailyPnlPct.toFixed(2),
+          dailyPnlUsd: dailyPnlUsd.toFixed(2),
           limit: settings.dailyLossLimit,
         });
         this.dailyPnlReported = true;
       }
       return {
         approved: false,
-        reason: `Daily loss limit reached: ${dailyPnl.toFixed(2)}%`,
+        reason: `Daily loss limit reached: ${dailyPnlPct.toFixed(2)}%`,
       };
     }
 
-    if (action.direction === "SELL") {
-      const tokenBalance = currentBalances.find(
-        (b) => b.symbol === action.tokenIn ||
-          b.token === action.tokenIn
-      );
-      if (!tokenBalance || tokenBalance.balance < action.amountIn) {
-        return {
-          approved: false,
-          reason: `Insufficient ${action.tokenIn} balance for sell`,
-        };
-      }
+    const tokenInBalance = this.findBalance(currentBalances, action.tokenIn);
+    if (!tokenInBalance || tokenInBalance.balance < action.amountIn) {
+      return {
+        approved: false,
+        reason: `Insufficient ${action.tokenIn} balance for ${action.direction.toLowerCase()}`,
+      };
     }
 
     if (action.direction === "BUY") {
@@ -74,7 +84,8 @@ export class RiskManager {
           b.symbol === action.tokenOut || b.token === action.tokenOut
       );
       const currentUsdValue = tokenOutBalance?.usdValue ?? 0;
-      const newUsdValue = currentUsdValue + action.amountIn * 2.0;
+      const tokenInPrice = this.usdPrice(tokenInBalance);
+      const newUsdValue = currentUsdValue + action.amountIn * tokenInPrice;
       const newPct = (newUsdValue / totalValue) * 100;
 
       if (newPct > settings.maxPositionPct) {
@@ -140,10 +151,26 @@ export class RiskManager {
   }
 
   async getDailyPnl(userId: number): Promise<number> {
-    return this.calculateDailyPnl(userId);
+    return this.calculateDailyPnlUsd(userId);
   }
 
-  private async calculateDailyPnl(userId: number): Promise<number> {
+  private findBalance(balances: TokenBalance[], token: string): TokenBalance | undefined {
+    const normalized = token.toUpperCase();
+    return balances.find(
+      (b) => b.symbol.toUpperCase() === normalized || b.token.toUpperCase() === normalized
+    );
+  }
+
+  private usdPrice(balance: TokenBalance): number {
+    if (balance.balance > 0 && balance.usdValue > 0) {
+      return balance.usdValue / balance.balance;
+    }
+    const symbol = balance.symbol.toUpperCase();
+    if (symbol === "SUSDT" || symbol === "USDA" || symbol === "USDC") return 1;
+    return 0;
+  }
+
+  private async calculateDailyPnlUsd(userId: number): Promise<number> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -158,10 +185,12 @@ export class RiskManager {
       let totalPnl = 0;
       for (const trade of trades) {
         if (trade.status === "CONFIRMED" || trade.status === "BROADCAST") {
+          const amountInUsd = trade.amountInUsd ?? trade.amountIn;
+          const amountOutUsd = trade.amountOutUsd ?? trade.amountOut;
           if (trade.direction === "BUY") {
-            totalPnl -= trade.amountIn;
+            totalPnl -= amountInUsd;
           } else {
-            totalPnl += trade.amountOut - trade.amountIn;
+            totalPnl += amountOutUsd - amountInUsd;
           }
         }
       }

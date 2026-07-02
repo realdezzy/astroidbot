@@ -195,10 +195,11 @@ export class AgentService {
       const t = decision.trade;
       const wallet = wallets.find((w) => w.id === (t.walletId ?? wallets[0]?.id));
       if (wallet) {
-        const settings = await db.findTradeSettings(agent.userId, "personal");
-        const maxPct = (config.maxPositionPct as number) ?? (settings?.maxPositionPct ?? 25);
-        const maxAmount = (wallet.balance * maxPct) / 100;
-        const cappedAmount = Math.min(t.amountIn, maxAmount);
+          const settings = await db.findTradeSettings(agent.userId, "personal");
+          const maxPct = (config.maxPositionPct as number) ?? (settings?.maxPositionPct ?? 25);
+          const maxAmount = (wallet.balance * maxPct) / 100;
+          const perRunCap = Number(config.maxAutonomousTradeAmount ?? maxAmount);
+          const cappedAmount = Math.min(t.amountIn, maxAmount, Number.isFinite(perRunCap) && perRunCap > 0 ? perRunCap : maxAmount);
 
         const action: RebalanceAction = {
           tokenIn: t.tokenIn ?? "STX",
@@ -211,33 +212,55 @@ export class AgentService {
         const tokens = await DEXRegistry.getInstance().getSwappableTokens();
         const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId);
 
-        const riskSettings = {
-          slippageBps: settings?.slippageBps ?? 100,
-          maxPositionPct: maxPct,
-          dailyLossLimit: settings?.dailyLossLimit ?? 1000,
-        };
+          const riskSettings = {
+            slippageBps: settings?.slippageBps ?? 100,
+            maxPositionPct: maxPct,
+            dailyLossLimit: Math.min(settings?.dailyLossLimit ?? 5, 100),
+          };
 
-        const { approved } = await RiskManager.getInstance().evaluateActions(
+          const { approved } = await RiskManager.getInstance().evaluateActions(
           agent.userId,
           [action],
           balances,
           riskSettings
         );
 
-        if (approved.length > 0) {
-          const res = await executeApprovedActions(
-            approved,
-            wallet.id,
+          if (approved.length > 0) {
+            await db.prisma.auditLog.create({
+              data: {
+                userId: agent.userId,
+                action: "AI_AUTONOMOUS_TRADE_APPROVED",
+                details: JSON.stringify({
+                  agentId: agent.id,
+                  action,
+                  reason: decision.reason,
+                }),
+              },
+            });
+            const res = await executeApprovedActions(
+              approved,
+              wallet.id,
             agent.userId,
             wallet.address,
             riskSettings.slippageBps
           );
           if (res.executed > 0) {
             executed = true;
+            }
+          } else {
+            await db.prisma.auditLog.create({
+              data: {
+                userId: agent.userId,
+                action: "AI_AUTONOMOUS_TRADE_REJECTED",
+                details: JSON.stringify({
+                  agentId: agent.id,
+                  action,
+                  reason: decision.reason,
+                }),
+              },
+            });
+            logger.warn("AI agent trade action rejected by RiskManager", { agentId: agent.id });
           }
-        } else {
-          logger.warn("AI agent trade action rejected by RiskManager", { agentId: agent.id });
-        }
       }
     }
 

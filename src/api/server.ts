@@ -16,7 +16,7 @@ import { logger, loggerStorage } from "../utils/logger.js";
 import { AppError, InternalError } from "./errors.js";
 import { WebSocketManager } from "./websocket.js";
 import { DatabaseService } from "../services/db.js";
-import { authenticate } from "./middleware/auth.js";
+import { authenticate, requireAdmin } from "./middleware/auth.js";
 import { TelegramService } from "../services/telegram.js";
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/user.js";
@@ -66,10 +66,6 @@ export function createServer(): HttpServer {
             "wss://api.hiro.so",
             "https://api.deepl.com",
             "https://api.deepseek.com",
-            "wss://*",
-            "ws://*",
-            "http://*",
-            "https://*",
           ],
           objectSrc: ["'none'"],
           upgradeInsecureRequests: [],
@@ -154,7 +150,7 @@ export function createServer(): HttpServer {
     }
   });
 
-  app.get("/api/admin/queues", async (_req: Request, res: Response) => {
+  app.get("/api/admin/queues", authenticate, requireAdmin, async (_req: Request, res: Response) => {
     try {
       const stats = await QueueManager.getInstance().getQueueStats();
       res.json({ queues: stats });

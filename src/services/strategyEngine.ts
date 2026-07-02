@@ -6,6 +6,7 @@ import { TransactionService } from "./transaction.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { QueueManager } from "./queue.js";
 import type { RebalanceAction } from "../types.js";
+import { safeValidateStrategyConfig } from "./strategy/configValidation.js";
 
 // Exported for use by strategyWorker — handles DEX quoting, building, broadcasting,
 // and DB/WebSocket bookkeeping for a list of approved actions.
@@ -118,7 +119,12 @@ export class StrategyEngine {
       if (!activeUserIds.has(strategy.userId)) continue;
 
       const config = strategy.config as Record<string, unknown>;
-      const walletIds = Array.isArray(config.walletIds) ? (config.walletIds as number[]) : [];
+      const validatedConfig = safeValidateStrategyConfig(strategy.type, config);
+      if (!validatedConfig.success) {
+        logger.warn("Skipping strategy with invalid config", { strategyId: strategy.id, strategyType: strategy.type });
+        continue;
+      }
+      const walletIds = Array.isArray(validatedConfig.data.walletIds) ? (validatedConfig.data.walletIds as number[]) : [];
 
       for (const walletId of walletIds) {
         await qm.enqueueStrategyRun({
@@ -151,11 +157,17 @@ export class StrategyEngine {
     let enqueued = 0;
 
     for (const strategy of strategies) {
-      const walletIds = Array.isArray(strategy.config.walletIds)
-        ? (strategy.config.walletIds as number[])
+      const validatedConfig = safeValidateStrategyConfig(strategy.type, strategy.config);
+      if (!validatedConfig.success) {
+        logger.warn("Skipping agent strategy with invalid config", { strategyId: strategy.id, strategyType: strategy.type });
+        continue;
+      }
+
+      const validatedWalletIds = Array.isArray(validatedConfig.data.walletIds)
+        ? (validatedConfig.data.walletIds as number[])
         : [];
 
-      for (const walletId of walletIds) {
+      for (const walletId of validatedWalletIds) {
         await qm.enqueueStrategyRun({
           strategyId: strategy.id,
           strategyType: strategy.type,

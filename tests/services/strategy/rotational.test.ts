@@ -1,23 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RotationalStrategy } from "../../../src/services/strategy/rotational.js";
-import { DatabaseService } from "../../../src/services/db.js";
 import { PriceHistoryService } from "../../../src/services/priceHistory.js";
-import type { StrategyContext } from "../../../src/types/strategy.js";
-
-const mockFindFirst = vi.fn();
-vi.mock("../../../src/services/db.js", () => {
-  return {
-    DatabaseService: {
-      getInstance: () => ({
-        prisma: {
-          trade: {
-            findFirst: mockFindFirst,
-          },
-        },
-      }),
-    },
-  };
-});
+import type { StrategyContext, StrategyState } from "../../../src/types/strategy.js";
 
 const mockComputeMomentum = vi.fn();
 vi.mock("../../../src/services/priceHistory.js", () => {
@@ -61,7 +45,6 @@ describe("RotationalStrategy", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    mockFindFirst.mockResolvedValue(null);
     mockComputeMomentum.mockImplementation((symbol) => {
       if (symbol === "ALEX") return 10.0;
       if (symbol === "DIKO") return 5.0;
@@ -71,7 +54,7 @@ describe("RotationalStrategy", () => {
   });
 
   it("should trigger rotational buys for top-K momentum tokens when not owned", async () => {
-    const actions = await strategy.execute(mockCtx, {});
+    const actions = await strategy.execute({ ...mockCtx, balances: [] }, {});
     // Top-K (2) momentum tokens are ALEX (10.0) and DIKO (5.0). WELSH (-2.0) is not in top 2.
     // Since none are owned, it should buy ALEX and DIKO.
     expect(actions).toHaveLength(2);
@@ -82,17 +65,15 @@ describe("RotationalStrategy", () => {
 
   it("should rotate out of lower scored tokens and into higher scored tokens", async () => {
     // Mock that we already own DIKO and WELSH (WELSH is now lower scored)
-    mockFindFirst.mockImplementation(({ where }) => {
-      if (where.tokenOut === "WELSH") {
-        return Promise.resolve({ amountIn: 10 });
-      }
-      if (where.tokenOut === "DIKO") {
-        return Promise.resolve({ amountIn: 10 });
-      }
-      return Promise.resolve(null); // not owning ALEX
-    });
+    const ctxWithBalances = {
+      ...mockCtx,
+      balances: [
+        { symbol: "DIKO", balance: 10, usdValue: 20 },
+        { symbol: "WELSH", balance: 10, usdValue: 5 },
+      ],
+    };
 
-    const actions = await strategy.execute(mockCtx, {});
+    const actions = await strategy.execute(ctxWithBalances, {});
     // Should sell WELSH (to rotate out) and buy ALEX (top-performing not yet owned)
     expect(actions).toHaveLength(2);
     const sellAction = actions.find(a => a.direction === "SELL");
@@ -102,12 +83,12 @@ describe("RotationalStrategy", () => {
   });
 
   it("should respect rebalancePeriodHours gating", async () => {
-    // Mock that a trade occurred 5 hours ago (rebalancePeriodHours is 24)
-    mockFindFirst.mockResolvedValue({
-      createdAt: new Date(Date.now() - 5 * 3600000),
-    });
+    // Mock that a trade occurred 5 hours ago in strategy state (rebalancePeriodHours is 24)
+    const state: StrategyState = {
+      lastRebalanceTime: Date.now() - 5 * 3600000,
+    };
 
-    const actions = await strategy.execute(mockCtx, {});
+    const actions = await strategy.execute(mockCtx, state);
     expect(actions).toHaveLength(0);
   });
 });

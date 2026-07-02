@@ -1,4 +1,6 @@
 import type { TokenBalance, SwappableToken, RebalanceAction, PortfolioTarget } from "../types.js";
+import type { MarketContext, SignalForecast } from "./market.js";
+import type { Features } from "../services/quant/featureEngine.js";
 
 export interface TradeSettings {
   slippageBps: number;
@@ -18,6 +20,9 @@ export interface StrategyContext {
   tokens: SwappableToken[];
   settings: TradeSettings;
   config: Record<string, unknown>;
+  // Quantitative enrichments — undefined during cold-start or test stubs.
+  marketContext?: MarketContext;
+  features?: Map<string, Features>;
 }
 
 // Mutable runtime state persisted between cycles in the DB state column.
@@ -34,3 +39,6 @@ export interface StrategyState {
 export interface Strategy {
   execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]>;
 }
+
+// Re-export for strategies that wish to emit forecasts instead of raw actions.
+export type { SignalForecast };

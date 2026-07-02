@@ -1,4 +1,5 @@
 import { DatabaseService } from "../db.js";
+import { DEXRegistry } from "../dex/dexRegistry.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
@@ -14,40 +15,51 @@ export class DCAStrategy implements Strategy {
     const endDate = config.endDate as string | undefined;
     const totalBudget = (config.totalBudgetUsd as number) ?? 0;
     const maxSlippage = (config.maxSlippageBps as number) ?? settings.slippageBps;
-    void maxSlippage;
 
     if (endDate && new Date(endDate) < new Date()) return [];
 
     const db = DatabaseService.getInstance();
+    const registry = DEXRegistry.getInstance();
 
     if (totalBudget > 0) {
       const spentTrades = await db.prisma.trade.findMany({
         where: { userId, walletId, tokenOut, direction: "BUY", status: "CONFIRMED" },
       });
-      const totalSpent = spentTrades.reduce((s, t) => s + t.amountIn, 0);
+      // Track total spent in USD (amountOut * current price, or amountIn for STX)
+      const tokenOutPrice = await registry.getTokenPrice(tokenOut).catch(() => 0);
+      const totalSpent = spentTrades.reduce((sum, t) => {
+        // If we bought tokenOut, its USD value at time of trade was approximately what we paid (if STX, amountIn * stx price)
+        // Or we can use amountOut * current price as a proxy, or just sum amountIn.
+        // Let's sum the amountOut * price as a proxy, or fall back to amountIn if price is not available.
+        return sum + (t.amountOut * tokenOutPrice || t.amountIn); // Fallback to amountIn if tokenOutPrice is 0
+      }, 0);
       if (totalSpent >= totalBudget) return [];
     }
 
-    // Fix: scope to tokenIn + tokenOut + direction=BUY so manual trades don't pause DCA.
     const lastSlice = await db.prisma.trade.findFirst({
       where: { userId, walletId, tokenIn, tokenOut, direction: "BUY", status: "CONFIRMED" },
       orderBy: { confirmedAt: "desc" },
     });
 
     if (lastSlice) {
-      const elapsed = (Date.now() - lastSlice.createdAt.getTime()) / 60000;
+      // Use confirmedAt instead of createdAt to prevent drift due to slow confirmation times
+      const referenceTime = lastSlice.confirmedAt || lastSlice.createdAt;
+      const elapsed = (Date.now() - referenceTime.getTime()) / 60000;
       if (elapsed < intervalMinutes) return [];
     }
 
     if (priceCondition !== "always" && priceThreshold > 0) {
-      const { AlexDEXService } = await import("../dex/alex.js");
-      const price = await AlexDEXService.getInstance().getTokenPrice(tokenOut);
+      const price = await registry.getTokenPrice(tokenOut).catch(() => 0);
       if (priceCondition === "below" && price >= priceThreshold) return [];
       if (priceCondition === "above" && price <= priceThreshold) return [];
     }
 
     return [{
-      tokenIn, tokenOut, amountIn: amount, direction: "BUY",
+      tokenIn,
+      tokenOut,
+      amountIn: amount,
+      direction: "BUY",
+      slippageBps: maxSlippage,
       reason: `DCA: ${tokenIn}→${tokenOut} ${amount} every ${intervalMinutes}min`,
     }];
   }

@@ -14,6 +14,7 @@ export interface NotificationPayload {
 
 export class NotificationService {
   private static instance: NotificationService;
+  private static readonly QUEUE_TIMEOUT_MS = 1_000;
 
   private constructor() {}
 
@@ -26,7 +27,12 @@ export class NotificationService {
 
   async send(data: NotificationPayload): Promise<void> {
     try {
-      await QueueManager.getInstance().getQueue(QUEUES.NOTIFICATION).add("send-notification", data);
+      await Promise.race([
+        QueueManager.getInstance().getQueue(QUEUES.NOTIFICATION).add("send-notification", data),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Notification queue enqueue timed out")), NotificationService.QUEUE_TIMEOUT_MS)
+        ),
+      ]);
       logger.debug("Notification job enqueued", { userId: data.userId, title: data.title });
     } catch (err) {
       logger.error("Failed to enqueue notification, running synchronously", { error: err, data });

@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { BreakoutStrategy } from "../../../src/services/strategy/breakout.js";
-import { DatabaseService } from "../../../src/services/db.js";
-import { PriceHistoryService } from "../../../src/services/priceHistory.js";
 import type { StrategyContext, StrategyState } from "../../../src/types/strategy.js";
 
 const mockGetHistory = vi.fn();
@@ -14,21 +12,6 @@ vi.mock("../../../src/services/priceHistory.js", () => {
         getHistory: mockGetHistory,
         computeHigh: mockComputeHigh,
         computeLow: mockComputeLow,
-      }),
-    },
-  };
-});
-
-const mockFindFirst = vi.fn();
-vi.mock("../../../src/services/db.js", () => {
-  return {
-    DatabaseService: {
-      getInstance: () => ({
-        prisma: {
-          trade: {
-            findFirst: mockFindFirst,
-          },
-        },
       }),
     },
   };
@@ -63,7 +46,6 @@ describe("BreakoutStrategy", () => {
     mockGetHistory.mockResolvedValue([2.0]);
     mockComputeHigh.mockResolvedValue(1.8); // 1.8 * 1.03 = 1.854. 2.0 is > 1.854 (breakout!)
     mockComputeLow.mockResolvedValue(1.5);
-    mockFindFirst.mockResolvedValue(null);
   });
 
   it("should trigger BUY signal on crossover (breakout above high)", async () => {
@@ -77,6 +59,7 @@ describe("BreakoutStrategy", () => {
       tokenOut: "sUSDT",
       amountIn: 10,
       direction: "BUY",
+      slippageBps: 100,
       reason: "Breakout: sUSDT crossed above 20-period high",
     });
     expect(state.wasAboveHigh).toBe(true);
@@ -95,18 +78,25 @@ describe("BreakoutStrategy", () => {
     mockGetHistory.mockResolvedValue([1.35]); // current price 1.35
     mockComputeHigh.mockResolvedValue(1.8);
     mockComputeLow.mockResolvedValue(1.5); // 1.5 * 0.97 = 1.455. 1.35 is < 1.455 (breakdown!)
-    mockFindFirst.mockResolvedValue({ amountIn: 10 }); // owning position
+
+    const ctxWithBalance = {
+      ...mockCtx,
+      balances: [
+        { symbol: "sUSDT", balance: 10, usdValue: 20 },
+      ],
+    };
 
     const state: StrategyState = {
       wasAboveLow: false,
     };
-    const actions = await strategy.execute(mockCtx, state);
+    const actions = await strategy.execute(ctxWithBalance, state);
     expect(actions).toHaveLength(1);
     expect(actions[0]).toEqual({
       tokenIn: "sUSDT",
       tokenOut: "STX",
       amountIn: 10,
       direction: "SELL",
+      slippageBps: 100,
       reason: "Breakdown: sUSDT crossed below 20-period low",
     });
     expect(state.wasAboveLow).toBe(true);

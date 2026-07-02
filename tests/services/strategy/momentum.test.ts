@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MomentumStrategy } from "../../../src/services/strategy/momentum.js";
-import { PriceHistoryService } from "../../../src/services/priceHistory.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockComputeMomentum = vi.fn();
@@ -58,6 +57,7 @@ describe("MomentumStrategy", () => {
       tokenOut: "ALEX",
       amountIn: 50,
       direction: "BUY",
+      slippageBps: 100,
       reason: "Momentum: ALEX +5.0%",
     });
   });
@@ -89,8 +89,9 @@ describe("MomentumStrategy", () => {
     expect(actions[0]).toEqual({
       tokenIn: "ALEX",
       tokenOut: "STX",
-      amountIn: 50,
+      amountIn: 100, // Exits the full balance of ALEX
       direction: "SELL",
+      slippageBps: 100,
       reason: "Momentum exit: ALEX -2.0%",
     });
   });

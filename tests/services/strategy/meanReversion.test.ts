@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MeanReversionStrategy } from "../../../src/services/strategy/meanReversion.js";
 import { PriceHistoryService } from "../../../src/services/priceHistory.js";
-import { DatabaseService } from "../../../src/services/db.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockGetHistory = vi.fn();
@@ -12,21 +11,6 @@ vi.mock("../../../src/services/priceHistory.js", () => {
       getInstance: () => ({
         getHistory: mockGetHistory,
         computeMovingAverage: mockComputeMovingAverage,
-      }),
-    },
-  };
-});
-
-const mockFindFirst = vi.fn();
-vi.mock("../../../src/services/db.js", () => {
-  return {
-    DatabaseService: {
-      getInstance: () => ({
-        prisma: {
-          trade: {
-            findFirst: mockFindFirst,
-          },
-        },
       }),
     },
   };
@@ -54,6 +38,7 @@ describe("MeanReversionStrategy", () => {
       exitDeviationPct: 1,
       tokenPair: "STX/sUSDT",
       positionSizeUsd: 50,
+      enableTrendFilter: false, // Disable trend filter to isolate mean reversion signals in test
     },
   };
 
@@ -61,7 +46,6 @@ describe("MeanReversionStrategy", () => {
     vi.resetAllMocks();
     mockGetHistory.mockResolvedValue([2.0]);
     mockComputeMovingAverage.mockResolvedValue(2.2); // price 2.0 is ~9.1% below MA 2.2
-    mockFindFirst.mockResolvedValue(null);
   });
 
   it("should trigger BUY signal when deviation is below negative entry threshold and no position exists", async () => {
@@ -72,6 +56,7 @@ describe("MeanReversionStrategy", () => {
       tokenOut: "sUSDT",
       amountIn: 50,
       direction: "BUY",
+      slippageBps: 100,
       reason: "Mean reversion buy: sUSDT -9.1% below MA",
     });
   });
@@ -79,18 +64,22 @@ describe("MeanReversionStrategy", () => {
   it("should trigger SELL signal when deviation is above positive exit threshold and position exists", async () => {
     mockGetHistory.mockResolvedValue([2.5]);
     mockComputeMovingAverage.mockResolvedValue(2.2); // price 2.5 is ~13.6% above MA 2.2 (> 1% exit threshold)
-    mockFindFirst.mockResolvedValue({
-      id: 99,
-      amountIn: 40,
-    });
 
-    const actions = await strategy.execute(mockCtx, {});
+    const ctxWithBalance = {
+      ...mockCtx,
+      balances: [
+        { symbol: "sUSDT", balance: 40, usdValue: 80 },
+      ],
+    };
+
+    const actions = await strategy.execute(ctxWithBalance, {});
     expect(actions).toHaveLength(1);
     expect(actions[0]).toEqual({
       tokenIn: "sUSDT",
       tokenOut: "STX",
       amountIn: 40,
       direction: "SELL",
+      slippageBps: 100,
       reason: "Mean reversion sell: sUSDT 13.6% above MA",
     });
   });

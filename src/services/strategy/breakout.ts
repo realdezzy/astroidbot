@@ -5,14 +5,14 @@ import type { Strategy, StrategyContext, StrategyState } from "../../types/strat
 
 export class BreakoutStrategy implements Strategy {
   async execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, config, settings } = ctx;
-    const lookback = (config.lookbackPeriods as number) ?? 20;
+    const { config, settings, balances } = ctx;
+    const lookback = (config.lookbackPeriods as number) ?? 50; // Increased default to 50
     const breakoutPct = (config.breakoutPct as number) ?? 3;
     const tokenPair = ((config.tokenPair as string) ?? "STX/sUSDT").split("/");
     const tokenIn = tokenPair[0] ?? "STX";
     const tokenOut = tokenPair[1] ?? "sUSDT";
     const positionSize = (config.positionSizeUsd as number) ?? 10;
-    void settings;
+    const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
 
     const ph = PriceHistoryService.getInstance();
     const prices = await ph.getHistory(tokenOut, 1);
@@ -26,38 +26,38 @@ export class BreakoutStrategy implements Strategy {
     const isAboveHigh = currentPrice > high * (1 + breakoutPct / 100);
     const isBelowLow = currentPrice < low * (1 - breakoutPct / 100);
 
-    // Fix: only trigger on the crossover cycle (was below high last cycle, now above).
-    // This prevents repeated entries while price stays above the high.
     const wasAboveHigh = state.wasAboveHigh ?? false;
     const wasAboveLow = state.wasAboveLow ?? false;
 
     state.wasAboveHigh = isAboveHigh;
     state.wasAboveLow = isBelowLow;
 
-    const db = DatabaseService.getInstance();
+    const bal = balances.find(b => b.symbol.toUpperCase() === tokenOut.toUpperCase());
+    const hasPosition = bal !== undefined && bal.balance > 0.0001;
+
     const actions: RebalanceAction[] = [];
 
     if (isAboveHigh && !wasAboveHigh) {
-      const existing = await db.prisma.trade.findFirst({
-        where: { userId, walletId, tokenOut, status: "CONFIRMED", direction: "BUY" },
-      });
-      if (!existing) {
+      if (!hasPosition) {
         actions.push({
-          tokenIn, tokenOut, amountIn: positionSize, direction: "BUY",
+          tokenIn,
+          tokenOut,
+          amountIn: positionSize,
+          direction: "BUY",
+          slippageBps,
           reason: `Breakout: ${tokenOut} crossed above ${lookback}-period high`,
         });
       }
     }
 
     if (isBelowLow && !wasAboveLow) {
-      const existing = await db.prisma.trade.findFirst({
-        where: { userId, walletId, tokenOut, status: "CONFIRMED", direction: "BUY" },
-      });
-      if (existing) {
+      if (hasPosition) {
         actions.push({
-          tokenIn: tokenOut, tokenOut: tokenIn,
-          amountIn: Math.min(positionSize, existing.amountIn),
+          tokenIn: tokenOut,
+          tokenOut: tokenIn,
+          amountIn: bal!.balance, // Exit the full position on breakdown
           direction: "SELL",
+          slippageBps,
           reason: `Breakdown: ${tokenOut} crossed below ${lookback}-period low`,
         });
       }

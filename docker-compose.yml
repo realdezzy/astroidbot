@@ -3,11 +3,11 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     environment:
-      POSTGRES_USER: astroidbot
-      POSTGRES_PASSWORD: astroidbot
-      POSTGRES_DB: astroidbot
+      POSTGRES_USER: ${POSTGRES_USER:-astroidbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD before starting compose}
+      POSTGRES_DB: ${POSTGRES_DB:-astroidbot}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

@@ -17,6 +17,7 @@ export interface RebalanceAction {
   amountIn: number;
   direction: "BUY" | "SELL";
   reason: string;
+  slippageBps?: number;
 }
 
 export interface GridSpreadConfig {

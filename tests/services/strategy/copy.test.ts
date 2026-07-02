@@ -62,6 +62,7 @@ describe("CopyStrategy", () => {
       maxPerTrade: 20,
       maxCopiesPerCycle: 2,
       copyRatio: 0.5,
+      maxAgeHours: 1,
     },
   };
 
@@ -75,12 +76,16 @@ describe("CopyStrategy", () => {
       tx_id: "txid123",
       tx_type: "contract_call",
       tx_status: "success",
+      contract_call: {
+        contract_id: "SP3K8A0K2S588K147CADDX9759389G5P4NQF258HM.swap-helper-v1",
+        function_name: "swap-helper",
+      },
       block_time: Math.floor(Date.now() / 1000) - 100, // 100 seconds ago
       stx_transfers: [
-        { amount: "10000000", recipient: "someone-else" }, // 10 STX
+        { amount: "10000000", sender: "SPTargetAddressHere", recipient: "someone-else" }, // 10 STX
       ],
       ft_transfers: [
-        { amount: "50000000", asset_identifier: "SP2D5B2763078GD93F62CABC0000000000000000.alex::alex", recipient: "SPTargetAddressHere" },
+        { amount: "50000000", asset_identifier: "SP2D5B2763078GD93F62CABC0000000000000000.alex::alex", sender: "someone-else", recipient: "SPTargetAddressHere" },
       ],
     };
 
@@ -97,18 +102,26 @@ describe("CopyStrategy", () => {
       tokenOut: "ALEX",
       amountIn: 5, // 10 STX * copyRatio (0.5) = 5
       direction: "BUY",
+      slippageBps: 100,
       reason: "Copy: SPTarget... tx txid123",
     });
   });
 
-  it("should ignore transactions older than 1 hour", async () => {
+  it("should ignore transactions older than maxAgeHours", async () => {
     const mockTx = {
       tx_id: "txid_old",
       tx_type: "contract_call",
       tx_status: "success",
+      contract_call: {
+        contract_id: "SP3K8A0K2S588K147CADDX9759389G5P4NQF258HM.swap-helper-v1",
+        function_name: "swap-helper",
+      },
       block_time: Math.floor(Date.now() / 1000) - 7200, // 2 hours ago
       stx_transfers: [
-        { amount: "10000000", recipient: "someone-else" },
+        { amount: "10000000", sender: "SPTargetAddressHere", recipient: "someone-else" },
+      ],
+      ft_transfers: [
+        { amount: "50000000", asset_identifier: "SP2D5B2763078GD93F62CABC0000000000000000.alex::alex", sender: "someone-else", recipient: "SPTargetAddressHere" },
       ],
     };
 

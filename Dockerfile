@@ -1,15 +1,15 @@
-FROM node:23-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 
 WORKDIR /app/web
 
-COPY web/package.json ./
-RUN npm install --legacy-peer-deps
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --legacy-peer-deps
 
 COPY shared/ /app/shared/
 COPY web/ ./
 RUN npm run build
 
-FROM node:23-alpine AS test
+FROM node:22-alpine AS test
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ COPY tsconfig.json vitest.config.ts ./
 
 RUN npm run build && npm test
 
-FROM node:23-alpine AS backend
+FROM node:22-alpine AS backend
 
 ENV NODE_ENV=production
 
@@ -36,8 +36,8 @@ RUN addgroup -g 1001 botgroup && adduser -u 1001 -G botgroup -s /bin/sh -D botus
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --legacy-peer-deps --omit=dev && npm cache clean --force
+COPY package.json package-lock.json ./
+RUN npm ci --legacy-peer-deps --omit=dev && npm cache clean --force
 
 COPY prisma/ ./prisma/
 RUN npx prisma generate

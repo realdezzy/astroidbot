@@ -126,4 +126,25 @@ describe("AIOrchestrator Service Unit Tests", () => {
     }));
     expect(mockSet).not.toHaveBeenCalled();
   });
+
+  it("should audit proposed signal and return confidence multiplier", async () => {
+    const orchestrator = AIOrchestrator.getInstance();
+    (orchestrator as any).openaiClient.chat.completions.create = vi.fn().mockResolvedValue({
+      choices: [{ message: { content: '{"confidenceMultiplier": 0.75, "rationale": "High RSI warrants caution"}' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+
+    const result = await orchestrator.auditSignal(10, "STX", "BUY", 0.9, {
+      currentPrice: 2.0,
+      rsi14: 65,
+      macdHistogram: 0.02,
+      historicalVolatility: 0.35,
+      return24h: 0.05,
+    });
+
+    expect(result).toEqual({
+      confidenceMultiplier: 0.75,
+      rationale: "High RSI warrants caution",
+    });
+  });
 });

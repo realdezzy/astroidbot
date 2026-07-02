@@ -13,7 +13,8 @@ export class SniperStrategy implements Strategy {
     const perTokenCap = (config.perTokenCapUsd as number) ?? maxBuyAmount;
     const maxImpact = (config.maxPriceImpactPct as number) ?? 5;
     const cooldown = (config.cooldownMinutes as number) ?? 0;
-    void slippageBps;
+    const maxTotalExposureUsd = (config.maxTotalExposureUsd as number) ?? 0;
+    const maxBuyPriceUsd = (config.maxBuyPriceUsd as number) ?? 0;
 
     if (watchTokens.length === 0) return [];
 
@@ -26,6 +27,14 @@ export class SniperStrategy implements Strategy {
       const token = freshTokens.find(t => t.symbol.toUpperCase() === watchSymbol);
       if (!token) continue;
 
+      const buyAmount = Math.min(perTokenCap, maxBuyAmount);
+
+      // Gate: price ceiling check using a live quote before committing
+      if (maxBuyPriceUsd > 0) {
+        const currentPrice = await registry.getTokenPrice(token.symbol).catch(() => 0);
+        if (currentPrice > 0 && currentPrice > maxBuyPriceUsd) continue;
+      }
+
       const existingTrade = await db.prisma.trade.findFirst({
         where: { userId, walletId, tokenOut: token.symbol, status: "CONFIRMED" },
       });
@@ -35,15 +44,26 @@ export class SniperStrategy implements Strategy {
         if (elapsed < cooldown) continue;
       }
 
-      const quote = await registry.getBestQuote("STX", token.symbol, 0.001).catch(() => null);
+      // Gate: total exposure cap across all accumulated trades for this token
+      if (maxTotalExposureUsd > 0) {
+        const allTrades = await db.prisma.trade.findMany({
+          where: { userId, walletId, tokenOut: token.symbol, direction: "BUY", status: "CONFIRMED" },
+        });
+        const totalSpent = allTrades.reduce((s, t) => s + t.amountIn, 0);
+        if (totalSpent >= maxTotalExposureUsd) continue;
+      }
+
+      // Critical fix: quote the actual buy amount, not a test probe, so impact check is real.
+      const quote = await registry.getBestQuote("STX", token.symbol, buyAmount).catch(() => null);
       if (!quote || quote.quote.amountOut <= 0) continue;
       if (quote.quote.priceImpact > maxImpact) continue;
 
       actions.push({
         tokenIn: "STX", tokenOut: token.symbol,
-        amountIn: Math.min(perTokenCap, maxBuyAmount),
+        amountIn: buyAmount,
         direction: "BUY",
-        reason: `Sniper: auto-buy ${token.symbol}`,
+        slippageBps,
+        reason: `Sniper: auto-buy ${token.symbol} (impact: ${quote.quote.priceImpact.toFixed(2)}%)`,
       });
     }
 

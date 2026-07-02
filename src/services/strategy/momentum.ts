@@ -5,13 +5,14 @@ import type { Strategy, StrategyContext, StrategyState } from "../../types/strat
 export class MomentumStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
     const { config, settings, tokens, balances } = ctx;
-    const lookback = (config.lookbackPeriods as number) ?? 20;
+    const lookback = (config.lookbackPeriods as number) ?? 50; // Increased default to 50
     const threshold = (config.momentumThresholdPct as number) ?? 2;
     const positionSize = (config.positionSizeUsd as number) ?? 10;
     const tokenUniverse = ((config.tokenUniverse as string) ?? "")
       .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
     const exitThreshold = (config.exitThresholdPct as number) ?? -1;
-    void settings;
+    const maxPositions = (config.maxPositions as number) ?? 3;
+    const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
 
     const ph = PriceHistoryService.getInstance();
     const available = tokenUniverse.length > 0
@@ -19,28 +20,57 @@ export class MomentumStrategy implements Strategy {
       : tokens.slice(0, 10);
 
     const actions: RebalanceAction[] = [];
+    const signals: Array<{ symbol: string; momentum: number; balance: number; hasPosition: boolean }> = [];
 
+    // First, compute momentum score and check existing positions for all available tokens
     for (const token of available) {
       const momentum = await ph.computeMomentum(token.symbol, lookback);
-
-      // Fix: detect open position via actual wallet balance, not a stale DB trade record.
-      // A user who manually sold the token will have a near-zero balance.
       const bal = balances.find(b => b.symbol.toUpperCase() === token.symbol.toUpperCase());
       const hasPosition = bal !== undefined && bal.balance > 0.0001;
+      signals.push({
+        symbol: token.symbol,
+        momentum,
+        balance: bal?.balance ?? 0,
+        hasPosition,
+      });
+    }
 
-      if (momentum > threshold && !hasPosition) {
+    // Identify exits first to free up slots
+    const activeBeforeBuys = signals.filter(s => s.hasPosition);
+    let currentPositionCount = activeBeforeBuys.length;
+
+    for (const sig of activeBeforeBuys) {
+      if (sig.momentum < exitThreshold) {
         actions.push({
-          tokenIn: "STX", tokenOut: token.symbol, amountIn: positionSize, direction: "BUY",
-          reason: `Momentum: ${token.symbol} +${momentum.toFixed(1)}%`,
-        });
-      } else if (momentum < exitThreshold && hasPosition) {
-        actions.push({
-          tokenIn: token.symbol, tokenOut: "STX",
-          amountIn: Math.min(positionSize, bal!.balance),
+          tokenIn: sig.symbol,
+          tokenOut: "STX",
+          amountIn: sig.balance,
           direction: "SELL",
-          reason: `Momentum exit: ${token.symbol} ${momentum.toFixed(1)}%`,
+          slippageBps,
+          reason: `Momentum exit: ${sig.symbol} ${sig.momentum.toFixed(1)}%`,
         });
+        currentPositionCount--;
       }
+    }
+
+    // Sort potential buy candidates by momentum descending
+    const buyCandidates = signals
+      .filter(s => !s.hasPosition && s.momentum > threshold)
+      .sort((a, b) => b.momentum - a.momentum);
+
+    for (const candidate of buyCandidates) {
+      if (currentPositionCount >= maxPositions) {
+        break; // Reached portfolio slot limit
+      }
+      actions.push({
+        tokenIn: "STX",
+        tokenOut: candidate.symbol,
+        amountIn: positionSize,
+        direction: "BUY",
+        slippageBps,
+        reason: `Momentum: ${candidate.symbol} +${candidate.momentum.toFixed(1)}%`,
+      });
+      currentPositionCount++;
     }
 
     return actions;

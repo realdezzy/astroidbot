@@ -124,7 +124,7 @@ export class TransactionService {
             nonce,
             senderKey: privateKey,
             network: this.network,
-            postConditionMode: PostConditionMode.Allow,
+            postConditionMode: PostConditionMode.Deny,
             postConditions,
             sponsored: true,
           });
@@ -172,7 +172,7 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          postConditionMode: PostConditionMode.Allow,
+          postConditionMode: PostConditionMode.Deny,
           postConditions: placeholderPostConditions,
         });
 
@@ -198,7 +198,7 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          postConditionMode: PostConditionMode.Allow,
+          postConditionMode: PostConditionMode.Deny,
           postConditions,
         });
 
@@ -306,6 +306,14 @@ export class TransactionService {
         if (!contractAddress || !contractName) {
           throw new Error("Invalid token contract ID");
         }
+        const placeholderPostConditions = [
+          createFungiblePostCondition(
+            senderAddress,
+            FungibleConditionCode.LessEqual,
+            rawAmount,
+            token
+          ),
+        ];
 
         const senderPrincipal = senderAddress.includes(".")
           ? Cl.contractPrincipal(senderAddress.split(".")[0]!, senderAddress.split(".")[1]!)
@@ -331,7 +339,8 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          postConditionMode: PostConditionMode.Allow,
+          postConditionMode: PostConditionMode.Deny,
+          postConditions: placeholderPostConditions,
         });
       }
 
@@ -357,6 +366,14 @@ export class TransactionService {
         if (!contractAddress || !contractName) {
           throw new Error("Invalid token contract ID");
         }
+        const postConditions = [
+          createFungiblePostCondition(
+            senderAddress,
+            FungibleConditionCode.LessEqual,
+            rawAmount,
+            token
+          ),
+        ];
         const senderPrincipal = senderAddress.includes(".")
           ? Cl.contractPrincipal(senderAddress.split(".")[0]!, senderAddress.split(".")[1]!)
           : Cl.standardPrincipal(senderAddress);
@@ -381,7 +398,8 @@ export class TransactionService {
           nonce,
           senderKey: privateKey,
           network: this.network,
-          postConditionMode: PostConditionMode.Allow,
+          postConditionMode: PostConditionMode.Deny,
+          postConditions,
         });
       }
 
@@ -714,10 +732,18 @@ export class TransactionService {
   ): any[] {
     let postConditions: any[] = [];
 
-    if (overridePostConditions && overridePostConditions.length > 0) {
-      postConditions = [...overridePostConditions];
-    } else {
+    try {
       postConditions = this.buildPostConditions(action, senderAddress, contractAddress, txFee);
+    } catch (error) {
+      if (overridePostConditions && overridePostConditions.length > 0) {
+        logger.warn("Falling back to provider post-conditions after local post-condition build failed", {
+          error: error instanceof Error ? error.message : String(error),
+          tokenIn: action.tokenIn,
+        });
+        postConditions = [...overridePostConditions];
+      } else {
+        throw error;
+      }
     }
 
     const tokenInUpper = action.tokenIn.toUpperCase();

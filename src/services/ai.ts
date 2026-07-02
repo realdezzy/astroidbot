@@ -26,6 +26,7 @@ import {
   PortfolioSchema,
   GridSchema,
   ParseCommandSchema,
+  AuditSignalSchema,
 } from "../validation/ai/schemas.js";
 import { needsPortfolioContext } from "./ai/intent.js";
 
@@ -410,6 +411,50 @@ ${walletDetails.join("\n")}
         levels: 5,
         spreadBps: 30,
       };
+    }
+  }
+
+  async auditSignal(
+    userId: number,
+    token: string,
+    direction: "BUY" | "SELL" | "HOLD",
+    confidence: number,
+    features: {
+      currentPrice: number;
+      rsi14: number;
+      macdHistogram: number;
+      historicalVolatility: number;
+      return24h: number;
+    }
+  ): Promise<{ confidenceMultiplier: number; rationale: string }> {
+    const prompt = `
+You are an expert quantitative analyst auditing a trading signal.
+Audit the following technical setup:
+Token: ${token}
+Proposed Signal: ${direction} (Confidence: ${confidence})
+Current Market Features:
+- Price: $${features.currentPrice}
+- RSI (14): ${features.rsi14.toFixed(1)}
+- MACD Histogram: ${features.macdHistogram.toFixed(4)}
+- Historical Volatility: ${(features.historicalVolatility * 100).toFixed(1)}%
+- 24h Return: ${(features.return24h * 100).toFixed(1)}%
+
+Determine a confidence multiplier (0.0 to 1.0) and a concise rationale.
+If the proposed trade direction is BUY but indicators are bearish (e.g. RSI > 70 or negative MACD + returns), the multiplier should be low (e.g. 0.0 - 0.3).
+If indicators align strongly with the proposed direction, the multiplier should be high (e.g. 0.8 - 1.0).
+`;
+
+    try {
+      return await this.request({
+        task: "audit_signal",
+        prompt,
+        schema: AuditSignalSchema,
+        userId,
+        cacheTTL: 300,
+      });
+    } catch (e) {
+      logger.warn("AI signal audit failed — defaulting to full confidence (1.0)", { error: e });
+      return { confidenceMultiplier: 1.0, rationale: "AI audit failed — fail-safe default used." };
     }
   }
 

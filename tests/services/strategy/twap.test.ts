@@ -3,7 +3,6 @@ import { TwapStrategy } from "../../../src/services/strategy/twap.js";
 import { DatabaseService } from "../../../src/services/db.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
-const mockFindFirst = vi.fn();
 const mockFindMany = vi.fn();
 vi.mock("../../../src/services/db.js", () => {
   return {
@@ -11,7 +10,6 @@ vi.mock("../../../src/services/db.js", () => {
       getInstance: () => ({
         prisma: {
           trade: {
-            findFirst: mockFindFirst,
             findMany: mockFindMany,
           },
         },
@@ -47,7 +45,6 @@ describe("TwapStrategy", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    mockFindFirst.mockResolvedValue(null);
     mockFindMany.mockResolvedValue([]);
   });
 
@@ -59,27 +56,40 @@ describe("TwapStrategy", () => {
       tokenOut: "sUSDT",
       amountIn: 10,
       direction: "BUY",
+      slippageBps: 100,
       reason: "TWAP slice: STX→sUSDT 10.0000",
     });
   });
 
   it("should not trigger if elapsed time is less than intervalMs", async () => {
     // 60 minutes window / 10 slices = 6 minutes slice interval = 360000 ms
-    mockFindFirst.mockResolvedValue({
-      createdAt: new Date(Date.now() - 2 * 60 * 1000), // 2 min ago
-    });
+    mockFindMany.mockResolvedValue([
+      {
+        amountIn: 10,
+        amountOut: 20,
+        createdAt: new Date(Date.now() - 2 * 60 * 1000), // 2 min ago
+        confirmedAt: new Date(Date.now() - 2 * 60 * 1000),
+      },
+    ]);
 
     const actions = await strategy.execute(mockCtx, {});
     expect(actions).toHaveLength(0);
   });
 
   it("should not trigger if all slices are completed", async () => {
-    mockFindFirst.mockResolvedValue({
-      createdAt: new Date(Date.now() - 10 * 60 * 1000),
-    });
     mockFindMany.mockResolvedValue([
-      { amountIn: 50 },
-      { amountIn: 50 },
+      {
+        amountIn: 50,
+        amountOut: 100,
+        createdAt: new Date(Date.now() - 10 * 60 * 1000),
+        confirmedAt: new Date(Date.now() - 10 * 60 * 1000),
+      },
+      {
+        amountIn: 50,
+        amountOut: 100,
+        createdAt: new Date(Date.now() - 10 * 60 * 1000),
+        confirmedAt: new Date(Date.now() - 10 * 60 * 1000),
+      },
     ]);
 
     const actions = await strategy.execute(mockCtx, {});
@@ -87,12 +97,19 @@ describe("TwapStrategy", () => {
   });
 
   it("should trigger a smaller remaining slice if partially filled", async () => {
-    mockFindFirst.mockResolvedValue({
-      createdAt: new Date(Date.now() - 10 * 60 * 1000),
-    });
     mockFindMany.mockResolvedValue([
-      { amountIn: 50 },
-      { amountIn: 45 },
+      {
+        amountIn: 50,
+        amountOut: 100,
+        createdAt: new Date(Date.now() - 10 * 60 * 1000),
+        confirmedAt: new Date(Date.now() - 10 * 60 * 1000),
+      },
+      {
+        amountIn: 45,
+        amountOut: 90,
+        createdAt: new Date(Date.now() - 10 * 60 * 1000),
+        confirmedAt: new Date(Date.now() - 10 * 60 * 1000),
+      },
     ]); // 95 completed, 5 remaining (which is < slice size 10)
 
     const actions = await strategy.execute(mockCtx, {});

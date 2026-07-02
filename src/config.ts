@@ -13,7 +13,7 @@ const envSchema = z.object({
   AI_PROVIDER: z.enum(["openai", "google", "deepseek"]).default("openai"),
   AI_MODEL: z.string().default("gpt-4o"),
   DEEPSEEK_API_KEY: z.string().optional(),
-  STACKS_NETWORK: z.enum(["mainnet", "testnet", "mocknet"]).default("mainnet"),
+  STACKS_NETWORK: z.enum(["mainnet", "testnet", "mocknet"]).default("testnet"),
   STACKS_API_URL: z.string().url().default("https://api.hiro.so"),
   HIRO_API_KEY: z.string().optional(),
   POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),

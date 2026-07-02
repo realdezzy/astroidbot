@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { DCAStrategy } from "../../../src/services/strategy/dca.js";
 import { DatabaseService } from "../../../src/services/db.js";
-import { AlexDEXService } from "../../../src/services/dex/alex.js";
+import { DEXRegistry } from "../../../src/services/dex/dexRegistry.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockFindMany = vi.fn();
@@ -22,9 +22,9 @@ vi.mock("../../../src/services/db.js", () => {
 });
 
 const mockGetTokenPrice = vi.fn();
-vi.mock("../../../src/services/dex/alex.js", () => {
+vi.mock("../../../src/services/dex/dexRegistry.js", () => {
   return {
-    AlexDEXService: {
+    DEXRegistry: {
       getInstance: () => ({
         getTokenPrice: mockGetTokenPrice,
       }),
@@ -72,6 +72,7 @@ describe("DCAStrategy", () => {
       tokenOut: "sUSDT",
       amountIn: 10,
       direction: "BUY",
+      slippageBps: 100,
       reason: "DCA: STX→sUSDT 10 every 60min",
     });
   });
@@ -80,6 +81,7 @@ describe("DCAStrategy", () => {
     // mock a recent trade within 10 minutes (intervalMinutes is 60)
     mockFindFirst.mockResolvedValue({
       createdAt: new Date(Date.now() - 10 * 60 * 1000),
+      confirmedAt: new Date(Date.now() - 10 * 60 * 1000),
     });
 
     const actions = await strategy.execute(mockCtx, {});
@@ -89,6 +91,7 @@ describe("DCAStrategy", () => {
   it("should trigger buy when interval elapsed is exceeded", async () => {
     mockFindFirst.mockResolvedValue({
       createdAt: new Date(Date.now() - 70 * 60 * 1000),
+      confirmedAt: new Date(Date.now() - 70 * 60 * 1000),
     });
 
     const actions = await strategy.execute(mockCtx, {});

@@ -54,3 +54,8 @@ export const AgentDecisionSchema = z.discriminatedUnion("action", [
     }),
   }),
 ]);
+
+export const AuditSignalSchema = z.object({
+  confidenceMultiplier: z.number().min(0).max(1),
+  rationale: z.string(),
+});

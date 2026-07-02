@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { StopLossTpStrategy } from "../../../src/services/strategy/stopLossTp.js";
 import { DatabaseService } from "../../../src/services/db.js";
 import { PriceHistoryService } from "../../../src/services/priceHistory.js";
+import { DEXRegistry } from "../../../src/services/dex/dexRegistry.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockFindMany = vi.fn();
@@ -25,6 +26,17 @@ vi.mock("../../../src/services/priceHistory.js", () => {
     PriceHistoryService: {
       getInstance: () => ({
         computeHigh: mockComputeHigh,
+      }),
+    },
+  };
+});
+
+const mockGetTokenPrice = vi.fn();
+vi.mock("../../../src/services/dex/dexRegistry.js", () => {
+  return {
+    DEXRegistry: {
+      getInstance: () => ({
+        getTokenPrice: mockGetTokenPrice,
       }),
     },
   };
@@ -60,6 +72,7 @@ describe("StopLossTpStrategy", () => {
     vi.resetAllMocks();
     mockFindMany.mockResolvedValue([]);
     mockComputeHigh.mockResolvedValue(0);
+    mockGetTokenPrice.mockResolvedValue(2.0);
   });
 
   it("should do nothing if token has no balance", async () => {
@@ -72,7 +85,7 @@ describe("StopLossTpStrategy", () => {
   });
 
   it("should trigger take profit if price rises above target", async () => {
-    // Buy cost: 150 STX for 100 ALEX -> average cost = 1.50. Current price = 2.0 (+33%)
+    // Buy cost: 150 STX for 100 ALEX -> average cost = 1.50. Current price = 2.0 (+33.3%)
     mockFindMany.mockResolvedValue([
       { amountIn: 150, amountOut: 100 },
     ]);
@@ -84,12 +97,13 @@ describe("StopLossTpStrategy", () => {
       tokenOut: "STX",
       amountIn: 100,
       direction: "SELL",
+      slippageBps: 100,
       reason: "Take profit: ALEX 33.3% (WAC entry)",
     });
   });
 
   it("should trigger stop loss if price falls below threshold", async () => {
-    // Buy cost: 250 STX for 100 ALEX -> average cost = 2.50. Current price = 2.0 (-20%)
+    // Buy cost: 250 STX for 100 ALEX -> average cost = 2.50. Current price = 2.0 (-20.0%)
     mockFindMany.mockResolvedValue([
       { amountIn: 250, amountOut: 100 },
     ]);
@@ -101,6 +115,7 @@ describe("StopLossTpStrategy", () => {
       tokenOut: "STX",
       amountIn: 100,
       direction: "SELL",
+      slippageBps: 100,
       reason: "Stop loss: ALEX -20.0% (WAC entry)",
     });
   });
@@ -129,6 +144,7 @@ describe("StopLossTpStrategy", () => {
       tokenOut: "STX",
       amountIn: 100,
       direction: "SELL",
+      slippageBps: 100,
       reason: "Trailing stop: ALEX -9.1% from high",
     });
   });
