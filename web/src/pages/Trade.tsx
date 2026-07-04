@@ -75,7 +75,7 @@ export function Trade() {
 
   const tokens = tokensData?.tokens ?? [];
 
-  const { data: quote, isFetching: quoteLoading } = useQuery<QuoteResult>({
+  const { data: quote, isFetching: quoteLoading, error: quoteError } = useQuery<QuoteResult, Error>({
     queryKey: ["quote", tokenIn, tokenOut, amount],
     queryFn: () =>
       apiFetch(
@@ -87,28 +87,68 @@ export function Trade() {
       !!amount &&
       parseFloat(amount) > 0 &&
       tokenIn !== tokenOut,
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: true,
   });
 
+  const { data: selectedWalletsBalances = {} } = useQuery<Record<number, Record<string, number>>>({
+    queryKey: ["selected-wallets-balances", selectedWalletIds],
+    queryFn: async () => {
+      const results = await Promise.all(
+        selectedWalletIds.map(async (id) => {
+          try {
+            const res = await apiFetch<Array<{ token: string; symbol: string; balance: number; usdValue: number }>>(
+              `/me/wallets/${id}/balances`
+            );
+            return { walletId: id, balances: res };
+          } catch {
+            return { walletId: id, balances: [] };
+          }
+        })
+      );
+      const map: Record<number, Record<string, number>> = {};
+      results.forEach((r) => {
+        map[r.walletId] = {};
+        r.balances.forEach((b) => {
+          map[r.walletId]![b.symbol.toUpperCase()] = b.balance;
+        });
+      });
+      return map;
+    },
+    enabled: selectedWalletIds.length > 0,
+    refetchInterval: 30000,
+  });
+
   useEffect(() => {
     setShowConfirm(false);
-    setMsg(null);
     setSelectedDex(null);
   }, [tokenIn, tokenOut, amount, direction]);
 
   const toggleWallet = (id: number) => {
+    setMsg(null);
     setSelectedWalletIds((prev) =>
       prev.includes(id) ? prev.filter((w) => w !== id) : [...prev, id]
     );
   };
 
-  const totalSelectedBalance =
+  const totalSelectedStxBalance =
     wallets
       ?.filter((w) => selectedWalletIds.includes(w.id))
       .reduce((sum, w) => sum + w.balance, 0) ?? 0;
+
+  const tokenInObj = tokens.find(t => t.contractId === tokenIn || t.symbol === tokenIn);
+  const tokenInSymbol = tokenInObj ? tokenInObj.symbol : tokenIn;
+
+  const combinedBalance = tokenIn === "STX"
+    ? totalSelectedStxBalance
+    : selectedWalletIds.reduce((sum, id) => {
+        const wBalances = selectedWalletsBalances[id];
+        if (!wBalances) return sum;
+        const symbol = tokenInSymbol.toUpperCase();
+        return sum + (wBalances[symbol] ?? 0);
+      }, 0);
 
   const executeMutation = useMutation({
     mutationFn: async (data: {
@@ -146,19 +186,22 @@ export function Trade() {
       setShowConfirm(false);
       queryClient.invalidateQueries({ queryKey: ["trades"] });
       queryClient.invalidateQueries({ queryKey: ["wallets"] });
+      queryClient.invalidateQueries({ queryKey: ["selected-wallets-balances"] });
     },
     onError: (err: Error) => setMsg({ type: "error", text: err.message }),
   });
 
   const handleSwap = () => {
+    setMsg(null);
     setTokenIn(tokenOut);
     setTokenOut(tokenIn);
     setDirection(direction === "BUY" ? "SELL" : "BUY");
   };
 
   const handleMax = () => {
-    if (totalSelectedBalance > 0) {
-      setAmount(totalSelectedBalance.toFixed(6));
+    if (combinedBalance > 0) {
+      setMsg(null);
+      setAmount(combinedBalance.toFixed(6));
     }
   };
 
@@ -185,8 +228,15 @@ export function Trade() {
     activeQuote && parseFloat(amount) > 0 && activeQuote.amountOut > 0
       ? parseFloat(amount) / activeQuote.amountOut
       : null;
+  const parsedAmount = parseFloat(amount) || 0;
+  const isInsufficientBalance = selectedWalletIds.length > 0 && parsedAmount > combinedBalance;
+
   const canExecute =
-    selectedWalletIds.length > 0 && parseFloat(amount) > 0 && tokenIn !== tokenOut;
+    selectedWalletIds.length > 0 &&
+    parsedAmount > 0 &&
+    !isInsufficientBalance &&
+    tokenIn !== tokenOut &&
+    !!activeQuote;
 
   return (
     <div>
@@ -241,14 +291,17 @@ export function Trade() {
                 <MultiWalletSelect
                   wallets={wallets}
                   selectedIds={selectedWalletIds}
-                  onChange={setSelectedWalletIds}
+                  onChange={(ids) => {
+                    setSelectedWalletIds(ids);
+                    setMsg(null);
+                  }}
                 />
               )}
               {selectedWalletIds.length > 0 && (
                 <p className="text-xs text-muted-text/80 pt-0.5">
                   {selectedWalletIds.length} wallet
                   {selectedWalletIds.length > 1 ? "s" : ""} selected &bull; Combined
-                  balance: {totalSelectedBalance.toFixed(4)} STX
+                  balance: {combinedBalance.toFixed(4)} {tokenInSymbol}
                 </p>
               )}
               {selectedWalletIds.length > 1 && (
@@ -270,7 +323,7 @@ export function Trade() {
                 <div className="flex items-center gap-2">
                   {selectedWalletIds.length > 0 && (
                     <span className="text-xs text-muted-text/85">
-                      Balance: {totalSelectedBalance.toFixed(4)}
+                      Balance: {combinedBalance.toFixed(4)}
                     </span>
                   )}
                   <button
@@ -285,7 +338,10 @@ export function Trade() {
               <div className="flex items-center gap-3">
                 <input
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    setMsg(null);
+                  }}
                   type="number"
                   step="any"
                   placeholder="0.00"
@@ -294,7 +350,10 @@ export function Trade() {
                 <TokenSelect
                   tokens={tokens}
                   value={tokenIn}
-                  onChange={setTokenIn}
+                  onChange={(v) => {
+                    setTokenIn(v);
+                    setMsg(null);
+                  }}
                   className="w-[130px] flex-shrink-0"
                 />
               </div>
@@ -330,7 +389,10 @@ export function Trade() {
                 <TokenSelect
                   tokens={tokens}
                   value={tokenOut}
-                  onChange={setTokenOut}
+                  onChange={(v) => {
+                    setTokenOut(v);
+                    setMsg(null);
+                  }}
                   className="w-[130px] flex-shrink-0"
                 />
               </div>
@@ -423,6 +485,12 @@ export function Trade() {
             )}
 
             {/* Messages */}
+            {quoteError && (
+              <div className="mx-4 p-3 rounded-2xl text-sm bg-red-500/10 border border-red-500/20 text-red-400">
+                Failed to fetch quote: {quoteError.message}
+              </div>
+            )}
+
             {msg && (
               <div
                 className={classNames(
@@ -451,6 +519,8 @@ export function Trade() {
                     ? "Enter an amount"
                     : tokenIn === tokenOut
                     ? "Select different tokens"
+                    : isInsufficientBalance
+                    ? `Insufficient ${tokenInSymbol} balance`
                     : `${direction} ${tokenOut} via ${
                         selectedWalletIds.length
                       } wallet${selectedWalletIds.length > 1 ? "s" : ""}`}

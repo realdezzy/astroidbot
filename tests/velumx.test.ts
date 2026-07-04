@@ -19,12 +19,19 @@ const mockSponsor = vi.fn();
 
 // Mock @velumx/sdk
 vi.mock("@velumx/sdk", () => {
+  class RelayerError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = "RelayerError";
+    }
+  }
   return {
     VelumXClient: vi.fn().mockImplementation(() => {
       return {
         sponsor: mockSponsor,
       };
     }),
+    RelayerError,
   };
 });
 

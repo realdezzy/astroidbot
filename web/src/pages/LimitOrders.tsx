@@ -35,6 +35,7 @@ export function LimitOrders() {
   const queryClient = useQueryClient();
   const { isActive, toggle, timeLeft, interval } = useAutoRefresh("limitOrders");
   const [showForm, setShowForm] = useState(false);
+  const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [form, setForm] = useState({
     walletIds: [] as number[],
@@ -58,6 +59,51 @@ export function LimitOrders() {
 
   const tokens = tokensData?.tokens ?? [];
 
+  const { data: selectedWalletsBalances = {} } = useQuery<Record<number, Record<string, number>>>({
+    queryKey: ["selected-wallets-balances", form.walletIds],
+    queryFn: async () => {
+      const results = await Promise.all(
+        form.walletIds.map(async (id) => {
+          try {
+            const res = await apiFetch<Array<{ token: string; symbol: string; balance: number; usdValue: number }>>(
+              `/me/wallets/${id}/balances`
+            );
+            return { walletId: id, balances: res };
+          } catch {
+            return { walletId: id, balances: [] };
+          }
+        })
+      );
+      const map: Record<number, Record<string, number>> = {};
+      results.forEach((r) => {
+        map[r.walletId] = {};
+        r.balances.forEach((b) => {
+          map[r.walletId]![b.symbol.toUpperCase()] = b.balance;
+        });
+      });
+      return map;
+    },
+    enabled: form.walletIds.length > 0,
+    refetchInterval: 10000,
+  });
+
+  const totalSelectedStxBalance =
+    wallets
+      ?.filter((w) => form.walletIds.includes(w.id))
+      .reduce((sum, w) => sum + w.balance, 0) ?? 0;
+
+  const tokenInObj = tokens.find(t => t.contractId === form.tokenIn || t.symbol === form.tokenIn);
+  const tokenInSymbol = tokenInObj ? tokenInObj.symbol : form.tokenIn;
+
+  const combinedBalance = form.tokenIn === "STX"
+    ? totalSelectedStxBalance
+    : form.walletIds.reduce((sum, id) => {
+        const wBalances = selectedWalletsBalances[id];
+        if (!wBalances) return sum;
+        const symbol = tokenInSymbol.toUpperCase();
+        return sum + (wBalances[symbol] ?? 0);
+      }, 0);
+
   const { data: ordersData, isLoading } = useQuery<{ orders: LimitOrder[] }>({
     queryKey: ["limit-orders"],
     queryFn: () => apiFetch("/me/limit-orders"),
@@ -80,7 +126,20 @@ export function LimitOrders() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["limit-orders"] });
-      setShowForm(false);
+      queryClient.invalidateQueries({ queryKey: ["selected-wallets-balances"] });
+      setMsg({ type: "success", text: "Limit order created successfully!" });
+      setForm({
+        walletIds: [],
+        tokenIn: "STX",
+        tokenOut: "USDCx",
+        direction: "BUY",
+        targetPrice: 0,
+        amountIn: 0,
+        forceAfterMinutes: "",
+      });
+    },
+    onError: (err: Error) => {
+      setMsg({ type: "error", text: err.message });
     },
   });
 
@@ -92,8 +151,11 @@ export function LimitOrders() {
     },
   });
 
+  const isInsufficientBalance = form.walletIds.length > 0 && form.amountIn > combinedBalance;
+  const canCreate = form.walletIds.length > 0 && form.targetPrice > 0 && form.amountIn > 0 && !isInsufficientBalance;
+
   const handleCreate = () => {
-    if (form.walletIds.length === 0 || !form.targetPrice || !form.amountIn) return;
+    if (!canCreate) return;
 
     createMutation.mutate({
       walletIds: form.walletIds,
@@ -126,7 +188,10 @@ export function LimitOrders() {
             timeLeft={timeLeft}
           />
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => {
+              setShowForm(!showForm);
+              setMsg(null);
+            }}
             className={classNames(
               "flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors",
               showForm
@@ -145,28 +210,68 @@ export function LimitOrders() {
           <h3 className="text-sm font-semibold text-muted-text uppercase tracking-wider mb-4">
             Create Limit Order
           </h3>
+
+          {msg && (
+            <div
+              className={classNames(
+                "mb-4 p-3 rounded-lg text-sm",
+                msg.type === "success"
+                  ? "bg-green-500/10 border border-green-500/20 text-green-400"
+                  : "bg-red-500/10 border border-red-500/20 text-red-400"
+              )}
+            >
+              {msg.text}
+            </div>
+          )}
+
+          {form.walletIds.length > 0 && (
+            <p className="text-xs text-muted-text/80 mb-4">
+              Combined balance: {combinedBalance.toFixed(4)} {tokenInSymbol}
+            </p>
+          )}
+
           <div className="grid grid-cols-4 gap-4">
             <div>
               <label className="block text-xs text-muted-text mb-1">Wallets</label>
               <MultiWalletSelect
                 wallets={wallets ?? []}
                 selectedIds={form.walletIds}
-                onChange={(ids) => setForm((f) => ({ ...f, walletIds: ids }))}
+                onChange={(ids) => {
+                  setMsg(null);
+                  setForm((f) => ({ ...f, walletIds: ids }));
+                }}
               />
             </div>
             <div>
               <label className="block text-xs text-muted-text mb-1">Token In</label>
-              <TokenSelect tokens={tokens} value={form.tokenIn} onChange={(v) => setForm((f) => ({ ...f, tokenIn: v }))} />
+              <TokenSelect
+                tokens={tokens}
+                value={form.tokenIn}
+                onChange={(v) => {
+                  setMsg(null);
+                  setForm((f) => ({ ...f, tokenIn: v }));
+                }}
+              />
             </div>
             <div>
               <label className="block text-xs text-muted-text mb-1">Token Out</label>
-              <TokenSelect tokens={tokens} value={form.tokenOut} onChange={(v) => setForm((f) => ({ ...f, tokenOut: v }))} />
+              <TokenSelect
+                tokens={tokens}
+                value={form.tokenOut}
+                onChange={(v) => {
+                  setMsg(null);
+                  setForm((f) => ({ ...f, tokenOut: v }));
+                }}
+              />
             </div>
             <div>
               <label className="block text-xs text-muted-text mb-1">Direction</label>
               <div className="flex gap-1">
                 <button
-                  onClick={() => setForm((f) => ({ ...f, direction: "BUY" }))}
+                  onClick={() => {
+                    setMsg(null);
+                    setForm((f) => ({ ...f, direction: "BUY" }));
+                  }}
                   className={classNames(
                     "flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
                     form.direction === "BUY"
@@ -177,7 +282,10 @@ export function LimitOrders() {
                   BUY
                 </button>
                 <button
-                  onClick={() => setForm((f) => ({ ...f, direction: "SELL" }))}
+                  onClick={() => {
+                    setMsg(null);
+                    setForm((f) => ({ ...f, direction: "SELL" }));
+                  }}
                   className={classNames(
                     "flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
                     form.direction === "SELL"
@@ -195,9 +303,10 @@ export function LimitOrders() {
                 type="number"
                 step="0.01"
                 value={form.targetPrice || ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, targetPrice: parseFloat(e.target.value) || 0 }))
-                }
+                onChange={(e) => {
+                  setMsg(null);
+                  setForm((f) => ({ ...f, targetPrice: parseFloat(e.target.value) || 0 }));
+                }}
                 className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text focus:border-brand-500 focus:outline-none"
               />
             </div>
@@ -207,9 +316,10 @@ export function LimitOrders() {
                 type="number"
                 step="0.01"
                 value={form.amountIn || ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, amountIn: parseFloat(e.target.value) || 0 }))
-                }
+                onChange={(e) => {
+                  setMsg(null);
+                  setForm((f) => ({ ...f, amountIn: parseFloat(e.target.value) || 0 }));
+                }}
                 className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text focus:border-brand-500 focus:outline-none"
               />
             </div>
@@ -220,9 +330,10 @@ export function LimitOrders() {
               <input
                 type="number"
                 value={form.forceAfterMinutes}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, forceAfterMinutes: e.target.value }))
-                }
+                onChange={(e) => {
+                  setMsg(null);
+                  setForm((f) => ({ ...f, forceAfterMinutes: e.target.value }));
+                }}
                 className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text focus:border-brand-500 focus:outline-none"
                 placeholder="Execute after X minutes"
               />
@@ -230,10 +341,14 @@ export function LimitOrders() {
             <div className="flex items-end">
               <button
                 onClick={handleCreate}
-                disabled={createMutation.isPending}
+                disabled={!canCreate || createMutation.isPending}
                 className="w-full px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
               >
-                {createMutation.isPending ? "Creating..." : "Create Order"}
+                {createMutation.isPending
+                  ? "Creating..."
+                  : isInsufficientBalance
+                  ? "Insufficient Balance"
+                  : "Create Order"}
               </button>
             </div>
           </div>

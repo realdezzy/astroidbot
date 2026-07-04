@@ -56,6 +56,11 @@ export class CircuitBreaker {
       this.onSuccess();
       return result;
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      if (errMsg.includes("Can't find route") || errMsg.includes("No route found")) {
+        // Business logic error - do not register a breaker failure
+        throw error;
+      }
       this.onFailure(error as Error);
       throw error;
     }
