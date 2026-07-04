@@ -53,19 +53,45 @@ export class PortfolioManager {
       }
     }
 
-    try {
-      const headers: Record<string, string> = {};
-      if ((config as any).HIRO_API_KEY) {
-        headers["x-api-key"] = (config as any).HIRO_API_KEY;
+    const urls = [
+      config.STACKS_API_URL,
+      ...config.STACKS_FALLBACK_API_URLS
+        .split(",")
+        .map((u) => u.trim())
+        .filter(Boolean),
+    ];
+
+    let data: StacksBalance | null = null;
+    let fetchError: any = null;
+
+    for (const url of urls) {
+      try {
+        const headers: Record<string, string> = {};
+        if (config.HIRO_API_KEY && url.includes("hiro.so")) {
+          headers["x-api-key"] = config.HIRO_API_KEY;
+        }
+
+        const response = await axios.get<StacksBalance>(
+          `${url}/extended/v1/address/${address}/balances`,
+          { headers, timeout: 5000 }
+        );
+        data = response.data;
+        break;
+      } catch (err) {
+        fetchError = err;
+        logger.warn("Failed to fetch balances from URL, trying fallback", {
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
+    }
 
-      const response = await axios.get<StacksBalance>(
-        `${config.STACKS_API_URL}/extended/v1/address/${address}/balances`,
-        { headers }
-      );
+    if (!data) {
+      logger.error("All RPC nodes failed for balance fetch", { address, error: fetchError });
+      throw fetchError || new Error("All RPC nodes failed for balance fetch");
+    }
 
-      const data = response.data;
-
+    try {
       const registry = DEXRegistry.getInstance();
       const stxPrice = await registry.getTokenPrice("STX");
 
@@ -119,7 +145,7 @@ export class PortfolioManager {
         });
       }
     } catch (error) {
-      logger.error("Failed to fetch balances", { address, error });
+      logger.error("Failed to process fetched balances", { address, error });
       throw error;
     }
 

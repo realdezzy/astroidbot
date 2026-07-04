@@ -46,6 +46,12 @@ export class AlexDEXService implements DEXProvider {
     return AlexDEXService.instance;
   }
 
+  private async ensureTokensLoaded(): Promise<void> {
+    if (this.swappableTokens.length === 0) {
+      await this.getSwappableTokens();
+    }
+  }
+
   async getSwappableTokens(refresh = false): Promise<SwappableToken[]> {
     const now = Date.now();
     if (!refresh && this.swappableTokens.length > 0 && now < this.tokensCacheExpiry) {
@@ -123,6 +129,7 @@ export class AlexDEXService implements DEXProvider {
 
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {
     try {
+      await this.ensureTokensLoaded();
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
       const route = await this.breaker.execute(() => this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency));
@@ -146,6 +153,7 @@ export class AlexDEXService implements DEXProvider {
     amountIn: number
   ): Promise<{ amountOut: number; priceImpact: number }> {
     try {
+      await this.ensureTokensLoaded();
       const decimalsIn = this.getTokenDecimals(tokenIn);
       const decimalsOut = this.getTokenDecimals(tokenOut);
       const amountInBigInt = BigInt(Math.floor(amountIn * (10 ** decimalsIn)));
@@ -193,6 +201,7 @@ export class AlexDEXService implements DEXProvider {
 
   async getTokenPrice(tokenSymbol: string): Promise<number> {
     try {
+      await this.ensureTokensLoaded();
       const cacheKey = `price:${tokenSymbol.toUpperCase()}`;
       try {
         const cached = await RedisService.getInstance().get(cacheKey);
@@ -214,6 +223,7 @@ export class AlexDEXService implements DEXProvider {
 
   async getFeeRate(_tokenIn: string, _tokenOut: string): Promise<number> {
     try {
+      await this.ensureTokensLoaded();
       const tokenInId = this.resolveTokenId(_tokenIn);
       const tokenOutId = this.resolveTokenId(_tokenOut);
       const fee = await this.breaker.execute(() => this.sdk.getFeeRate(tokenInId as Currency, tokenOutId as Currency));
@@ -228,6 +238,7 @@ export class AlexDEXService implements DEXProvider {
     tokenOut: string,
     amountIn: number
   ): Promise<DEXQuote> {
+    await this.ensureTokensLoaded();
     const res = await this.getSwapAmount(tokenIn, tokenOut, amountIn);
     const feeRate = await this.getFeeRate(tokenIn, tokenOut);
     return {
@@ -246,6 +257,7 @@ export class AlexDEXService implements DEXProvider {
     senderAddress: string
   ): Promise<TransactionPayload | null> {
     try {
+      await this.ensureTokensLoaded();
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
       const route = await this.breaker.execute(() => this.sdk.getRoute(tokenInId as Currency, tokenOutId as Currency));
@@ -290,6 +302,7 @@ export class AlexDEXService implements DEXProvider {
     fromAmount: number,
     minDy: number
   ): Promise<unknown> {
+    await this.ensureTokensLoaded();
     const tokenInId = this.resolveTokenId(tokenIn);
     const tokenOutId = this.resolveTokenId(tokenOut);
     const decimalsIn = this.getTokenDecimals(tokenIn);

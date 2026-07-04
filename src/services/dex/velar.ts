@@ -47,6 +47,12 @@ export class VelarDEXService implements DEXProvider {
     this.initialized = true;
   }
 
+  private async ensureTokensLoaded(): Promise<void> {
+    if (this.swappableTokens.length === 0) {
+      await this.getSwappableTokens();
+    }
+  }
+
   private resolveTokenId(symbolOrContractId: string): string | null {
     const token = this.swappableTokens.find(
       (t) =>
@@ -98,9 +104,14 @@ export class VelarDEXService implements DEXProvider {
     return this.swappableTokens;
   }
 
+  getCachedTokens(): SwappableToken[] {
+    return this.swappableTokens;
+  }
+
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {
     try {
       await this.ensureInitialized();
+      await this.ensureTokensLoaded();
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
       if (!tokenInId || !tokenOutId) return false;
@@ -119,6 +130,7 @@ export class VelarDEXService implements DEXProvider {
   async getTokenPrice(tokenSymbol: string): Promise<number> {
     try {
       await this.ensureInitialized();
+      await this.ensureTokensLoaded();
       const token = this.swappableTokens.find(
         (t) =>
           t.symbol.toLowerCase() === tokenSymbol.toLowerCase() ||
@@ -152,6 +164,7 @@ export class VelarDEXService implements DEXProvider {
   ): Promise<DEXQuote> {
     try {
       await this.ensureInitialized();
+      await this.ensureTokensLoaded();
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
 
@@ -215,6 +228,7 @@ export class VelarDEXService implements DEXProvider {
   ): Promise<TransactionPayload | null> {
     try {
       await this.ensureInitialized();
+      await this.ensureTokensLoaded();
       const tokenInId = this.resolveTokenId(tokenIn);
       const tokenOutId = this.resolveTokenId(tokenOut);
 
