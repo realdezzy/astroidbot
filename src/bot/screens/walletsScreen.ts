@@ -20,7 +20,7 @@ export async function walletsScreen(ctx: BotContext): Promise<void> {
     lines.push("No wallets yet. Create one below.");
   } else {
     wallets.forEach((w, i) => {
-      lines.push(`${i + 1}. *${escapeMd(w.name)}*  (#${w.id})`);
+      lines.push(`${i + 1}. *${escapeMd(w.name)}*  (#${w.id})${w.isDefault ? " ⭐ (Default)" : ""}`);
       lines.push(`   \`${shortenAddress(w.address)}\``);
       lines.push(`   Balance: ${w.balance.toFixed(2)} STX`);
       lines.push("");
@@ -40,9 +40,10 @@ export async function walletsScreen(ctx: BotContext): Promise<void> {
   keyboard
     .text("➕ New", "action:create_wallet")
     .text("📥 Import", "action:import_wallet").row()
-    .text("🗑 Delete", "action:delete_wallet")
-    .text("🔄 Refresh", "action:refresh_wallets").row()
-    .text("← Back", "screen:back")
+    .text("⭐ Default", "action:set_default_wallet_list")
+    .text("🗑 Delete", "action:delete_wallet").row()
+    .text("🔄 Refresh", "action:refresh_wallets")
+    .text("← Back", "screen:back").row()
     .text("🏠 Home", "home");
 
   try {

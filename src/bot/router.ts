@@ -1003,6 +1003,39 @@ export function registerRouter(bot: Bot<BotContext>): void {
       await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
       return;
     }
+    if (action === "set_default_wallet_list") {
+      const tid = BigInt(ctx.from?.id ?? 0);
+      const db = DatabaseService.getInstance();
+      const user = await db.findUserByTelegramId(tid);
+      if (!user) return;
+      const wallets = await db.findWalletsByUserId(user.id);
+      if (wallets.length === 0) return ctx.reply("No wallets.");
+      const keyboard = new InlineKeyboard();
+      wallets.forEach(w => {
+        if (!w.isDefault) {
+          keyboard.text(`⭐ ${w.name}`, `action:set_default_wallet:${w.id}`).row();
+        }
+      });
+      keyboard.text("← Back", "screen:wallets");
+      await ctx.reply("⭐ *Select a wallet to set as Default:*", { parse_mode: "Markdown", reply_markup: keyboard });
+      return;
+    }
+    if (action.startsWith("set_default_wallet:")) {
+      const wid = parseInt(action.slice(19), 10);
+      if (isNaN(wid)) return;
+      const tid = BigInt(ctx.from?.id ?? 0);
+      const db = DatabaseService.getInstance();
+      const user = await db.findUserByTelegramId(tid);
+      if (!user) return;
+      const wallet = await db.findWalletById(wid);
+      if (!wallet || wallet.userId !== user.id) {
+        await ctx.answerCallbackQuery({ text: "Wallet not found.", show_alert: true });
+        return;
+      }
+      await db.setDefaultWallet(user.id, wid);
+      await ctx.reply(`⭐ *${escapeMd(wallet.name)}* is now your default wallet!`, { parse_mode: "Markdown" });
+      return walletsScreen(ctx);
+    }
 
     // ── Trade flow ──
     if (action === "trade_pick_pair") {
@@ -1028,7 +1061,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
       if (!user) return;
       const wallets = await db.findWalletsByUserId(user.id);
       if (wallets.length === 0) return ctx.reply("No wallet found.");
-      const wallet = wallets[0]!;
+      const wallet = wallets.find(w => w.isDefault) ?? wallets[0]!;
 
       const pair = (ctx.session.tradePair as string) ?? "";
       const [tknIn, tknOut] = pair.split("/");
@@ -1088,6 +1121,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
       if (!user) return;
       const wallets = await db.findWalletsByUserId(user.id);
       if (wallets.length === 0) return ctx.reply("No wallet found.");
+      const wallet = wallets.find(w => w.isDefault) ?? wallets[0]!;
 
       const pair = (ctx.session.limitPair as string) ?? "";
       const [tknIn, tknOut] = pair.split("/");
@@ -1106,7 +1140,7 @@ export function registerRouter(bot: Bot<BotContext>): void {
 
       await LimitOrderService.getInstance().create({
         userId: user.id,
-        walletId: wallets[0]!.id,
+        walletId: wallet.id,
         tokenIn,
         tokenOut,
         amountIn: amount,
@@ -1240,7 +1274,7 @@ async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
     const t = (parsed.trade as Record<string, unknown> | undefined) ?? (parsed.tokenIn ? parsed : undefined);
     if (!t) return;
     const wallets = await DatabaseService.getInstance().findWalletsByUserId(user.id);
-    const wallet = wallets[0];
+    const wallet = wallets.find(w => w.isDefault) ?? wallets[0];
     if (!wallet) {
       const reply = "No wallet found.";
       ctx.session.chatHistory.push({ role: "assistant", content: reply });

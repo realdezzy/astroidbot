@@ -95,8 +95,9 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
   }
 
   if (stage === "confirm") {
-    const walletId = ctx.session.tradeWalletId ?? wallets[0]!.id;
-    const wallet = wallets.find((w) => w.id === walletId) ?? wallets[0]!;
+    const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0]!;
+    const walletId = ctx.session.tradeWalletId ?? defaultWallet.id;
+    const wallet = wallets.find((w) => w.id === walletId) ?? defaultWallet;
     const tokenIn = ctx.session.tradeTokenIn ?? "STX";
     const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
     const rawAmount = ctx.session.tradeAmount;

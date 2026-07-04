@@ -71,6 +71,7 @@ export class UserController {
               name: w.name,
               balance: stxBal,
               balanceUsd: totalWalletUsd,
+              isDefault: w.isDefault,
               createdAt: w.createdAt,
             };
           } catch (err) {
@@ -81,6 +82,7 @@ export class UserController {
               name: w.name,
               balance: w.balance,
               balanceUsd: w.balance * stxPrice,
+              isDefault: w.isDefault,
               createdAt: w.createdAt,
             };
           }
@@ -265,6 +267,7 @@ export class UserController {
         name: wallet.name,
         balance: wallet.balance,
         balanceUsd: 0,
+        isDefault: wallet.isDefault,
         createdAt: wallet.createdAt,
       });
     } catch (error) {
@@ -318,6 +321,7 @@ export class UserController {
         name: wallet.name,
         balance: stxBal,
         balanceUsd: stxBal * stxPrice,
+        isDefault: wallet.isDefault,
         createdAt: wallet.createdAt,
       });
     } catch (error) {
@@ -345,9 +349,44 @@ export class UserController {
       await db.prisma.wallet.delete({ where: { id: walletId } });
       logger.info("Wallet deleted", { userId: req.userId, walletId });
 
+      if (wallet.isDefault) {
+        const remaining = await db.prisma.wallet.findMany({
+          where: { userId: req.userId! },
+          orderBy: { createdAt: "asc" },
+        });
+        if (remaining.length > 0) {
+          await db.prisma.wallet.update({
+            where: { id: remaining[0].id },
+            data: { isDefault: true },
+          });
+          logger.info("Promoted wallet to default after deletion", { userId: req.userId, walletId: remaining[0].id });
+        }
+      }
+
       res.json({ ok: true });
     } catch (error) {
       logger.error("Failed to delete wallet", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async setDefaultWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const walletId = parseInt(String(req.params.id ?? "0"), 10);
+      if (!walletId) return next(new ValidationError("Invalid wallet id"));
+
+      const db = DatabaseService.getInstance();
+      const wallet = await db.findWalletById(walletId);
+
+      if (!wallet) return next(new NotFoundError("Wallet"));
+      if (wallet.userId !== req.userId!) return next(new ForbiddenError());
+
+      await db.setDefaultWallet(req.userId!, walletId);
+      logger.info("Wallet set as default", { userId: req.userId, walletId });
+
+      res.json({ ok: true });
+    } catch (error) {
+      logger.error("Failed to set default wallet", { error });
       next(new InternalError());
     }
   }
@@ -464,11 +503,11 @@ export class UserController {
       const db = DatabaseService.getInstance();
       let selectedWalletId = walletId;
       if (!selectedWalletId || selectedWalletId === 0) {
-        const wallets = await db.findWalletsByUserId(req.userId!);
-        if (wallets.length === 0) {
+        const defaultWallet = await db.findDefaultWalletByUserId(req.userId!);
+        if (!defaultWallet) {
           return next(new ValidationError("No wallet found for this user"));
         }
-        selectedWalletId = wallets[0]!.id;
+        selectedWalletId = defaultWallet.id;
       }
 
       const wallet = await db.findWalletById(selectedWalletId);

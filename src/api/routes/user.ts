@@ -27,7 +27,7 @@ const walletTransferSchema = z.object({
 });
 
 const executeTradeSchema = z.object({
-  walletId: z.number().int(),
+  walletId: z.number().int().optional(),
   tokenIn: z.string().min(1),
   tokenOut: z.string().min(1),
   amountIn: z.number().positive(),
@@ -46,6 +46,7 @@ router.get("/me/recommendations", authenticate, UserController.getRecommendation
 router.post("/me/wallets/generate", authenticate, validateBody(generateWalletSchema), UserController.generateWallet);
 router.post("/me/wallets/import", authenticate, validateBody(importWalletSchema), UserController.importWallet);
 router.delete("/me/wallets/:id", authenticate, UserController.deleteWallet);
+router.put("/me/wallets/:id/default", authenticate, UserController.setDefaultWallet);
 router.post("/me/wallets/:id/reveal", authenticate, validateBody(revealKeySchema), UserController.revealPrivateKey);
 router.get("/me/wallets/:id/balances", authenticate, UserController.getWalletBalances);
 router.post("/me/wallets/:id/transfer", authenticate, validateBody(walletTransferSchema), UserController.transferWallet);

@@ -162,7 +162,7 @@ export class AgentService {
 
   private async runAiOverlay(
     agent: { id: number; userId: number; name: string; context: string; model: string; config: unknown; state: unknown },
-    wallets: Array<{ id: number; address: string; balance: number }>,
+    wallets: Array<{ id: number; address: string; balance: number; isDefault?: boolean }>,
     state: Record<string, unknown>,
     config: Record<string, unknown>,
     autonomous: boolean,
@@ -193,7 +193,8 @@ export class AgentService {
 
     if (autonomous && decision.action === "trade" && decision.trade) {
       const t = decision.trade;
-      const wallet = wallets.find((w) => w.id === (t.walletId ?? wallets[0]?.id));
+      const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0];
+      const wallet = wallets.find((w) => w.id === (t.walletId ?? defaultWallet?.id));
       if (wallet) {
           const settings = await db.findTradeSettings(agent.userId, "personal");
           const maxPct = (config.maxPositionPct as number) ?? (settings?.maxPositionPct ?? 25);

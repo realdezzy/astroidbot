@@ -13,6 +13,7 @@ const mockDbInstance = {
   findWalletsByUserId: vi.fn(),
   updateWalletBalance: vi.fn(),
   findWalletById: vi.fn(),
+  setDefaultWallet: vi.fn(),
   prisma: {
     wallet: {
       delete: vi.fn(),
@@ -155,7 +156,7 @@ describe("Wallets Routes Integration Tests", () => {
   });
 
   it("DELETE /api/me/wallets/:id should delete the wallet if owned by user", async () => {
-    mockDbInstance.findWalletById.mockResolvedValue({ id: 1, userId: 10 });
+    mockDbInstance.findWalletById.mockResolvedValue({ id: 1, userId: 10, isDefault: false });
     mockDbInstance.findWalletsByUserId.mockResolvedValue([
       { id: 1, userId: 10 },
       { id: 2, userId: 10 },
@@ -179,5 +180,18 @@ describe("Wallets Routes Integration Tests", () => {
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(404);
+  });
+
+  it("PUT /api/me/wallets/:id/default should set the wallet as default", async () => {
+    mockDbInstance.findWalletById.mockResolvedValue({ id: 1, userId: 10 });
+    mockDbInstance.setDefaultWallet.mockResolvedValue(true);
+
+    const res = await request(server)
+      .put("/api/me/wallets/1/default")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockDbInstance.setDefaultWallet).toHaveBeenCalledWith(10, 1);
   });
 });

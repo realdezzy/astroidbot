@@ -98,8 +98,41 @@ export class DatabaseService {
     name: string;
     encryptedKey: string;
   }) {
-    return this.prisma.wallet.create({ data });
+    const existingCount = await this.prisma.wallet.count({
+      where: { userId: data.userId },
+    });
+    return this.prisma.wallet.create({
+      data: {
+        ...data,
+        isDefault: existingCount === 0,
+      },
+    });
   }
+
+  async findDefaultWalletByUserId(userId: number) {
+    const defaultWallet = await this.prisma.wallet.findFirst({
+      where: { userId, isDefault: true },
+    });
+    if (defaultWallet) return defaultWallet;
+    return this.prisma.wallet.findFirst({
+      where: { userId },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
+  async setDefaultWallet(userId: number, walletId: number) {
+    await this.prisma.$transaction([
+      this.prisma.wallet.updateMany({
+        where: { userId, NOT: { id: walletId } },
+        data: { isDefault: false },
+      }),
+      this.prisma.wallet.update({
+        where: { id: walletId },
+        data: { isDefault: true },
+      }),
+    ]);
+  }
+
 
   async updateWalletBalance(walletId: number, balance: number) {
     return this.prisma.wallet.update({

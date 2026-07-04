@@ -29,6 +29,7 @@ interface WalletRecord {
   address: string;
   name: string;
   balance: number;
+  isDefault?: boolean;
   createdAt: string;
 }
 
@@ -339,6 +340,13 @@ export function Wallets() {
     onError: (err: Error) => setDeleteError(err.message),
   });
 
+  const setDefaultMut = useMutation({
+    mutationFn: (id: number) => apiFetch(`/me/wallets/${id}/default`, { method: "PUT" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["wallets"] });
+    },
+  });
+
   const selectedWallet = wallets.find((w) => w.id === selectedWalletId);
 
   return (
@@ -409,13 +417,32 @@ export function Wallets() {
                       <Wallet className="w-5 h-5 text-brand-400" />
                     </div>
                     <div>
-                      <p className="font-semibold text-title-text">{w.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-title-text">{w.name}</p>
+                        {w.isDefault && (
+                          <span className="px-1.5 py-0.5 bg-brand-500/20 text-brand-400 text-[10px] font-bold rounded-md uppercase tracking-wider">
+                            Default
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-text mt-0.5">
                         Created {new Date(w.createdAt).toLocaleDateString()}
                       </p>
                     </div>
                   </div>
                   <div className="flex gap-1.5">
+                    {!w.isDefault && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDefaultMut.mutate(w.id);
+                        }}
+                        title="Set as default wallet"
+                        className="p-1.5 text-muted-text hover:text-brand-400 hover:bg-brand-500/10 rounded-lg transition-colors"
+                      >
+                        <CheckCheck className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
