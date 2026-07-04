@@ -478,16 +478,16 @@ export class UserController {
 
       const registry = DEXRegistry.getInstance();
       const tokens = await registry.getSwappableTokens();
-      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!);
+      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       const tokenBalanceObj = balances.find(b => b.symbol.toUpperCase() === tokenIn.toUpperCase() || b.token === tokenIn);
       const tokenBalance = tokenBalanceObj ? tokenBalanceObj.balance : 0;
 
       const activeOrders = await db.prisma.limitOrder.findMany({
-        where: { walletId, status: "ACTIVE" }
+        where: { walletId: selectedWalletId, status: "ACTIVE" }
       });
       const pendingTrades = await db.prisma.trade.findMany({
-        where: { walletId, status: { in: ["PENDING", "BROADCAST"] } }
+        where: { walletId: selectedWalletId, status: { in: ["PENDING", "BROADCAST"] } }
       });
 
       const withheldOrders = activeOrders
