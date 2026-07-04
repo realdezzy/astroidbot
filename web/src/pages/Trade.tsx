@@ -75,6 +75,9 @@ export function Trade() {
 
   const tokens = tokensData?.tokens ?? [];
 
+  const tokenInObj = tokens.find(t => t.contractId === tokenIn || t.symbol === tokenIn);
+  const tokenInSymbol = tokenInObj ? tokenInObj.symbol : tokenIn;
+
   const { data: quote, isFetching: quoteLoading, error: quoteError } = useQuery<QuoteResult, Error>({
     queryKey: ["quote", tokenIn, tokenOut, amount],
     queryFn: () =>
@@ -87,24 +90,25 @@ export function Trade() {
       !!amount &&
       parseFloat(amount) > 0 &&
       tokenIn !== tokenOut,
-    refetchInterval: 30_000,
+    refetchInterval: 120_000,
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: true,
   });
 
-  const { data: selectedWalletsBalances = {} } = useQuery<Record<number, Record<string, number>>>({
-    queryKey: ["selected-wallets-balances", selectedWalletIds],
+  const { data: walletsBalances = {} } = useQuery<Record<number, Record<string, number>>>({
+    queryKey: ["wallets-balances", wallets?.map((w) => w.id), tokenInSymbol],
     queryFn: async () => {
+      if (!wallets) return {};
       const results = await Promise.all(
-        selectedWalletIds.map(async (id) => {
+        wallets.map(async (w) => {
           try {
             const res = await apiFetch<Array<{ token: string; symbol: string; balance: number; usdValue: number }>>(
-              `/me/wallets/${id}/balances`
+              `/me/wallets/${w.id}/balances`
             );
-            return { walletId: id, balances: res };
+            return { walletId: w.id, balances: res };
           } catch {
-            return { walletId: id, balances: [] };
+            return { walletId: w.id, balances: [] };
           }
         })
       );
@@ -117,7 +121,7 @@ export function Trade() {
       });
       return map;
     },
-    enabled: selectedWalletIds.length > 0,
+    enabled: !!wallets && wallets.length > 0,
     refetchInterval: 30000,
   });
 
@@ -138,17 +142,14 @@ export function Trade() {
       ?.filter((w) => selectedWalletIds.includes(w.id))
       .reduce((sum, w) => sum + w.balance, 0) ?? 0;
 
-  const tokenInObj = tokens.find(t => t.contractId === tokenIn || t.symbol === tokenIn);
-  const tokenInSymbol = tokenInObj ? tokenInObj.symbol : tokenIn;
-
   const combinedBalance = tokenIn === "STX"
     ? totalSelectedStxBalance
     : selectedWalletIds.reduce((sum, id) => {
-        const wBalances = selectedWalletsBalances[id];
-        if (!wBalances) return sum;
-        const symbol = tokenInSymbol.toUpperCase();
-        return sum + (wBalances[symbol] ?? 0);
-      }, 0);
+      const wBalances = walletsBalances[id];
+      if (!wBalances) return sum;
+      const symbol = tokenInSymbol.toUpperCase();
+      return sum + (wBalances[symbol] ?? 0);
+    }, 0);
 
   const executeMutation = useMutation({
     mutationFn: async (data: {
@@ -186,7 +187,7 @@ export function Trade() {
       setShowConfirm(false);
       queryClient.invalidateQueries({ queryKey: ["trades"] });
       queryClient.invalidateQueries({ queryKey: ["wallets"] });
-      queryClient.invalidateQueries({ queryKey: ["selected-wallets-balances"] });
+      queryClient.invalidateQueries({ queryKey: ["wallets-balances"] });
     },
     onError: (err: Error) => setMsg({ type: "error", text: err.message }),
   });
@@ -295,6 +296,8 @@ export function Trade() {
                     setSelectedWalletIds(ids);
                     setMsg(null);
                   }}
+                  balances={walletsBalances}
+                  tokenSymbol={tokenInSymbol}
                 />
               )}
               {selectedWalletIds.length > 0 && (
@@ -516,14 +519,13 @@ export function Trade() {
                   {selectedWalletIds.length === 0
                     ? "Select a wallet"
                     : !amount
-                    ? "Enter an amount"
-                    : tokenIn === tokenOut
-                    ? "Select different tokens"
-                    : isInsufficientBalance
-                    ? `Insufficient ${tokenInSymbol} balance`
-                    : `${direction} ${tokenOut} via ${
-                        selectedWalletIds.length
-                      } wallet${selectedWalletIds.length > 1 ? "s" : ""}`}
+                      ? "Enter an amount"
+                      : tokenIn === tokenOut
+                        ? "Select different tokens"
+                        : isInsufficientBalance
+                          ? `Insufficient ${tokenInSymbol} balance`
+                          : `${direction} ${tokenOut} via ${selectedWalletIds.length
+                          } wallet${selectedWalletIds.length > 1 ? "s" : ""}`}
                 </button>
               ) : (
                 <div className="space-y-3">

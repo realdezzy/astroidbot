@@ -407,7 +407,7 @@ export class UserController {
 
       const registry = DEXRegistry.getInstance();
       const tokens = await registry.getSwappableTokens();
-      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!);
+      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       res.json(balances);
     } catch (error: any) {
@@ -619,9 +619,15 @@ export class UserController {
     try {
       const db = DatabaseService.getInstance();
       const userId = req.userId!;
+      const walletIdQuery = req.query.walletId;
+
+      const where: any = { userId, status: "CONFIRMED" };
+      if (walletIdQuery) {
+        where.walletId = parseInt(walletIdQuery as string, 10);
+      }
 
       const trades = await db.prisma.trade.findMany({
-        where: { userId, status: "CONFIRMED" },
+        where,
         orderBy: { createdAt: "asc" },
       });
 

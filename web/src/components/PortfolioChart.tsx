@@ -73,8 +73,8 @@ export function PortfolioChart({ data, totalValue }: PortfolioChartProps) {
       </ResponsiveContainer>
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div className="text-center">
-          <p className="text-2xl font-bold text-white">
-            ${totalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+          <p className="text-2xl font-bold text-title-text">
+            ${totalValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <p className="text-xs text-gray-400">Portfolio Value</p>
         </div>

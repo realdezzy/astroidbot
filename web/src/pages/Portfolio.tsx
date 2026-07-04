@@ -34,8 +34,11 @@ export function Portfolio() {
   });
 
   const { data: analytics } = useQuery<AnalyticsData>({
-    queryKey: ["analytics"],
-    queryFn: () => apiFetch("/me/analytics"),
+    queryKey: ["analytics", activeTab],
+    queryFn: () => {
+      const url = activeTab === "all" ? "/me/analytics" : `/me/analytics?walletId=${activeTab}`;
+      return apiFetch(url);
+    },
     refetchInterval: interval,
   });
 

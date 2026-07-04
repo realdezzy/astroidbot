@@ -37,7 +37,8 @@ export class PortfolioManager {
   async fetchBalances(
     address: string,
     swappableTokens: SwappableToken[],
-    userId?: number
+    userId?: number,
+    ignoreDust: boolean = false
   ): Promise<TokenBalance[]> {
     const balances: TokenBalance[] = [];
     const config = ConfigManager.getInstance().config;
@@ -114,16 +115,18 @@ export class PortfolioManager {
       for (const [contractId, tokenData] of Object.entries(
         data.fungible_tokens ?? {}
       )) {
-        const token = tokenMap.get(contractId);
+        const baseContractId = contractId.split("::")[0] || contractId;
+        const token = tokenMap.get(baseContractId) || tokenMap.get(contractId);
         if (!token) continue;
 
-        if (allowedTokens.length > 0 && !allowedTokens.includes(contractId)) {
+        const checkId = token.contractId;
+        if (allowedTokens.length > 0 && !allowedTokens.includes(checkId)) {
           continue;
         }
-        if (blockedTokens.length > 0 && blockedTokens.includes(contractId)) {
+        if (blockedTokens.length > 0 && blockedTokens.includes(checkId)) {
           continue;
         }
-        if (userBlockedSet.has(contractId)) {
+        if (userBlockedSet.has(checkId)) {
           continue;
         }
 
@@ -135,7 +138,7 @@ export class PortfolioManager {
         const tokenPrice = await registry.getTokenPrice(token.symbol);
         const usdValue = balance * (tokenPrice || 1.0);
 
-        if (usdValue < this.dustThresholdUsd) continue;
+        if (!ignoreDust && usdValue < this.dustThresholdUsd) continue;
 
         balances.push({
           token: token.contractId,

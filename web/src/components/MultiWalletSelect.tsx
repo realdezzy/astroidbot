@@ -14,9 +14,11 @@ interface MultiWalletSelectProps {
   selectedIds: number[];
   onChange: (ids: number[]) => void;
   className?: string;
+  balances?: Record<number, Record<string, number>>;
+  tokenSymbol?: string;
 }
 
-export function MultiWalletSelect({ wallets, selectedIds, onChange, className }: MultiWalletSelectProps) {
+export function MultiWalletSelect({ wallets, selectedIds, onChange, className, balances, tokenSymbol }: MultiWalletSelectProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -82,7 +84,12 @@ export function MultiWalletSelect({ wallets, selectedIds, onChange, className }:
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="font-medium text-title-text">{w.name}</span>
-                    <span className="text-muted-text ml-2 text-xs">{w.balance.toFixed(2)} STX</span>
+                    <span className="text-muted-text ml-2 text-xs">
+                      {balances && tokenSymbol && tokenSymbol !== "STX"
+                        ? `${(balances[w.id]?.[tokenSymbol.toUpperCase()] ?? 0).toFixed(4)} ${tokenSymbol}`
+                        : `${w.balance.toFixed(4)} STX`
+                      }
+                    </span>
                   </div>
                 </button>
               );
