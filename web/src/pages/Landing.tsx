@@ -130,7 +130,7 @@ export function Landing() {
             <a href="#contact" className="hover:text-title-text transition-colors">Contact</a>
           </nav>
 
-          <div className="flex-1 flex items-center justify-end gap-4">
+          <div className="flex-grow flex items-center justify-end gap-2 sm:gap-4">
             <button
               onClick={toggleTheme}
               className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors cursor-pointer"
@@ -140,22 +140,22 @@ export function Landing() {
             {user ? (
               <Link
                 to="/dashboard"
-                className="flex items-center gap-2 px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-all duration-200 shadow-lg shadow-brand-500/20"
+                className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 shadow-lg shadow-brand-500/20"
               >
-                Go to Dashboard
-                <ArrowRight className="w-4 h-4" />
+                Dashboard
+                <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             ) : (
               <>
                 <Link
                   to="/login"
-                  className="text-sm font-medium text-muted-text hover:text-title-text transition-colors px-2 py-1"
+                  className="text-xs sm:text-sm font-medium text-muted-text hover:text-title-text transition-colors px-2 py-1 hidden xs:inline-block"
                 >
                   Sign In
                 </Link>
                 <Link
                   to="/register"
-                  className="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-all duration-200 shadow-lg shadow-brand-500/20"
+                  className="px-3 py-1.5 sm:px-4 sm:py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 shadow-lg shadow-brand-500/20"
                 >
                   Get Started
                 </Link>
@@ -204,11 +204,11 @@ export function Landing() {
               <span className="w-3 h-3 rounded-full bg-green-500/80" />
               <span className="text-xs text-muted-text ml-2 font-mono">Astroidbot-dashboard</span>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <span className="text-xs font-mono px-2 py-0.5 rounded bg-brand-500/20 text-brand-400 border border-brand-500/20">
                 STX: $1.85
               </span>
-              <span className="text-xs text-muted-text font-mono">Connected: SP1P...4R8S</span>
+              <span className="text-xs text-muted-text font-mono hidden sm:inline">Connected: SP1P...4R8S</span>
             </div>
           </div>
 
@@ -236,7 +236,7 @@ export function Landing() {
 
             {/* Main Content Area Simulation */}
             <div className="col-span-1 md:col-span-3 space-y-4">
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-main-bg/80 border border-card-border rounded-xl p-3">
                   <div className="text-[10px] text-muted-text uppercase font-semibold">Portfolio Value</div>
                   <div className="text-lg font-bold text-title-text mt-0.5">$18,452.20</div>
@@ -366,12 +366,12 @@ export function Landing() {
               {/* Bot strategy selector */}
               <div>
                 <label className="block text-sm text-muted-text font-medium mb-3">Trading Strategy</label>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {(["conservative", "moderate", "aggressive"] as const).map((strat) => (
                     <button
                       key={strat}
                       onClick={() => setStrategy(strat)}
-                      className={`py-2 px-4 rounded-xl text-xs font-bold border capitalize transition-all duration-200 cursor-pointer ${strategy === strat
+                      className={`py-2.5 px-4 rounded-xl text-xs font-bold border capitalize transition-all duration-200 cursor-pointer ${strategy === strat
                         ? "bg-brand-500/20 border-brand-500 text-brand-400"
                         : "bg-card-bg border-card-border text-muted-text hover:text-title-text hover:border-brand-500/30"
                         }`}
@@ -568,7 +568,7 @@ export function Landing() {
             </div>
           </div>
 
-          <div className="flex items-center gap-8 text-xs text-muted-text">
+          <div className="flex flex-wrap justify-center items-center gap-4 sm:gap-8 text-xs text-muted-text">
             <a href="#features" className="hover:text-title-text transition-colors">Features</a>
             <a href="#calculator" className="hover:text-title-text transition-colors">Calculator</a>
             <Link to="/docs" className="hover:text-title-text transition-colors">Docs</Link>
