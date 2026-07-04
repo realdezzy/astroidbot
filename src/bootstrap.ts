@@ -1,4 +1,6 @@
 import type { Server } from "node:http";
+import https from "node:https";
+import axios from "axios";
 import { ConfigManager } from "./config.js";
 import { logger } from "./utils/logger.js";
 import { DatabaseService } from "./services/db.js";
@@ -13,6 +15,14 @@ import { BotStatus } from "./types.js";
 
 export async function bootstrap(): Promise<Server> {
   logger.info("AstroidBot initializing...");
+
+  // Configure global Axios defaults to prevent Cloudflare/CDN TLS handshake blocking (alert 40)
+  axios.defaults.httpsAgent = new https.Agent({
+    ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384",
+    honorCipherOrder: true,
+    minVersion: "TLSv1.2",
+  });
+  axios.defaults.headers.common["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
   // Catch unhandled promise rejections (e.g. from SDK lazy-init)
   process.on("unhandledRejection", (reason) => {
