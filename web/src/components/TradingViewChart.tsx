@@ -17,7 +17,7 @@ import {
 type ChartType = "area" | "histogram" | "line";
 
 interface ChartData {
-  time: string;
+  time: string | number;
   value: number;
 }
 

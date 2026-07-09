@@ -10,6 +10,7 @@ import { KMSService } from "../../services/kms.js";
 import { logger } from "../../utils/logger.js";
 import { encrypt } from "../../utils/crypto.js";
 import { generateWalletKeypair, deriveAddressFromPrivateKey } from "../../services/wallet.js";
+import { CandleService, CandleData } from "../../services/quant/candleService.js";
 import {
   NotFoundError,
   InternalError,
@@ -71,6 +72,7 @@ export class UserController {
               name: w.name,
               balance: stxBal,
               balanceUsd: totalWalletUsd,
+              balances,
               isDefault: w.isDefault,
               createdAt: w.createdAt,
             };
@@ -82,6 +84,14 @@ export class UserController {
               name: w.name,
               balance: w.balance,
               balanceUsd: w.balance * stxPrice,
+              balances: [
+                {
+                  token: "STX",
+                  symbol: "STX",
+                  balance: w.balance,
+                  usdValue: w.balance * stxPrice,
+                },
+              ],
               isDefault: w.isDefault,
               createdAt: w.createdAt,
             };
@@ -356,10 +366,10 @@ export class UserController {
         });
         if (remaining.length > 0) {
           await db.prisma.wallet.update({
-            where: { id: remaining[0].id },
+            where: { id: remaining[0]!.id },
             data: { isDefault: true },
           });
-          logger.info("Promoted wallet to default after deletion", { userId: req.userId, walletId: remaining[0].id });
+          logger.info("Promoted wallet to default after deletion", { userId: req.userId, walletId: remaining[0]!.id });
         }
       }
 
@@ -660,7 +670,52 @@ export class UserController {
       const userId = req.userId!;
       const walletIdQuery = req.query.walletId;
 
-      const where: any = { userId, status: "CONFIRMED" };
+      const now = new Date();
+      let timeframe = (req.query.timeframe as string || "7d").toLowerCase();
+      if (!["1d", "7d", "30d", "all"].includes(timeframe)) {
+        timeframe = "7d";
+      }
+
+      let candleTf = "1d";
+      let intervalMs = 24 * 60 * 60 * 1000;
+      let limit = 7;
+
+      if (timeframe === "1d") {
+        candleTf = "1h";
+        intervalMs = 60 * 60 * 1000;
+        limit = 24;
+      } else if (timeframe === "7d") {
+        candleTf = "1d";
+        intervalMs = 24 * 60 * 60 * 1000;
+        limit = 7;
+      } else if (timeframe === "30d") {
+        candleTf = "1d";
+        intervalMs = 24 * 60 * 60 * 1000;
+        limit = 30;
+      } else if (timeframe === "all") {
+        candleTf = "1d";
+        intervalMs = 24 * 60 * 60 * 1000;
+        const oldestTrade = await db.prisma.trade.findFirst({
+          where: { userId, status: "CONFIRMED" },
+          orderBy: { createdAt: "asc" },
+        });
+        if (oldestTrade) {
+          const daysSinceFirstTrade = Math.ceil((now.getTime() - oldestTrade.createdAt.getTime()) / intervalMs);
+          limit = Math.min(365, Math.max(1, daysSinceFirstTrade));
+        } else {
+          limit = 30;
+        }
+      }
+
+      const candleService = CandleService.getInstance();
+      const periods: Date[] = [];
+      const nowMs = now.getTime();
+      for (let i = limit - 1; i >= 0; i--) {
+        periods.push(candleService.getPeriodStart(nowMs - i * intervalMs, candleTf));
+      }
+      const startDate = periods[0]!;
+
+      const where: any = { userId, status: "CONFIRMED", createdAt: { gte: startDate } };
       if (walletIdQuery) {
         where.walletId = parseInt(walletIdQuery as string, 10);
       }
@@ -670,66 +725,208 @@ export class UserController {
         orderBy: { createdAt: "asc" },
       });
 
-      const dailyStats: Record<string, { pnl: number; volume: number; buyCount: number; sellCount: number }> = {};
+      const wallets = await db.findWalletsByUserId(userId);
+      const selectedWallets = walletIdQuery
+        ? wallets.filter(w => w.id === parseInt(walletIdQuery as string, 10))
+        : wallets;
 
-      const now = new Date();
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(now.getDate() - i);
-        const dateStr = d.toISOString().split("T")[0] as string;
-        dailyStats[dateStr] = { pnl: 0, volume: 0, buyCount: 0, sellCount: 0 };
+      const registry = DEXRegistry.getInstance();
+      const tokens = await registry.getSwappableTokens();
+      const pm = PortfolioManager.getInstance();
+      const stxPrice = await registry.getTokenPrice("STX") || 2.0;
+
+      const currentAggregatedBalances = new Map<string, { token: string, symbol: string, balance: number }>();
+      
+      const tokenResolver = new Map<string, string>();
+      for (const t of tokens) {
+        tokenResolver.set(t.contractId.toUpperCase(), t.symbol.toUpperCase());
+        tokenResolver.set(t.symbol.toUpperCase(), t.symbol.toUpperCase());
+      }
+      tokenResolver.set("STX", "STX");
+
+      const getSymbol = (tokenStr: string): string => {
+        const normalized = tokenStr.toUpperCase();
+        const baseContractId = normalized.split("::")[0] || normalized;
+        return tokenResolver.get(normalized) || tokenResolver.get(baseContractId) || normalized;
+      };
+
+      for (const w of selectedWallets) {
+        try {
+          const wBalances = await pm.fetchBalances(w.address, tokens, userId, true);
+          for (const b of wBalances) {
+            const sym = getSymbol(b.symbol);
+            const existing = currentAggregatedBalances.get(sym);
+            if (existing) {
+              existing.balance += b.balance;
+            } else {
+              currentAggregatedBalances.set(sym, {
+                token: b.token,
+                symbol: b.symbol,
+                balance: b.balance
+              });
+            }
+          }
+        } catch (err) {
+          const existing = currentAggregatedBalances.get("STX");
+          if (existing) {
+            existing.balance += w.balance;
+          } else {
+            currentAggregatedBalances.set("STX", {
+              token: "STX",
+              symbol: "STX",
+              balance: w.balance
+            });
+          }
+        }
       }
 
-      const stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX") || 2.0;
+      const tokensToFetch = new Set<string>();
+      for (const [_, b] of currentAggregatedBalances) {
+        tokensToFetch.add(getSymbol(b.symbol));
+      }
+      for (const t of trades) {
+        tokensToFetch.add(getSymbol(t.tokenIn));
+        tokensToFetch.add(getSymbol(t.tokenOut));
+      }
 
-      trades.forEach((t) => {
-        const dateStr = new Date(t.createdAt).toISOString().split("T")[0] as string;
+      const candleMap = new Map<string, CandleData[]>();
+      await Promise.all(
+        Array.from(tokensToFetch).map(async (tokenSymbol) => {
+          try {
+            const candles = await candleService.getCandles(tokenSymbol, candleTf, limit * 2);
+            candleMap.set(tokenSymbol, candles);
+          } catch (err) {
+            logger.warn(`Failed to fetch candles for token ${tokenSymbol}`, { err });
+          }
+        })
+      );
 
-        const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn);
-        const amountOutUsd = t.amountOutUsd ?? (t.tokenOut === "STX" ? t.amountOut * stxPrice : t.amountOut);
+      const getPriceAtTimestamp = async (tokenSymbol: string, timestamp: Date): Promise<number> => {
+        const candles = candleMap.get(tokenSymbol) || [];
+        if (candles.length > 0) {
+          const exact = candles.find(c => c.timestamp.getTime() === timestamp.getTime());
+          if (exact) return exact.close;
 
-        const tradePnl = t.direction === "BUY" ? -amountInUsd : amountOutUsd;
-        const tradeVolume = amountInUsd;
-
-        if (!dailyStats[dateStr]) {
-          dailyStats[dateStr] = { pnl: 0, volume: 0, buyCount: 0, sellCount: 0 };
+          const before = candles.filter(c => c.timestamp.getTime() <= timestamp.getTime());
+          if (before.length > 0) {
+            return before.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0]!.close;
+          }
+          return candles[0]!.close;
         }
 
-        const stat = dailyStats[dateStr]!;
-        stat.volume += tradeVolume;
-        if (t.direction === "BUY") {
-          stat.buyCount += 1;
+        const currentPrice = await registry.getTokenPrice(tokenSymbol).catch(() => 0);
+        return currentPrice || (tokenSymbol === "STX" ? 2.0 : 1.0);
+      };
+
+      const runningBalances = new Map<string, number>();
+      for (const [sym, b] of currentAggregatedBalances.entries()) {
+        runningBalances.set(sym, b.balance);
+      }
+
+      const sortedTradesForReversing = [...trades].sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+      );
+
+      const periodBalances = new Array<Map<string, number>>(limit);
+      let tradeIdx = 0;
+
+      for (let j = limit - 1; j >= 0; j--) {
+        const tj = periods[j]!;
+        while (
+          tradeIdx < sortedTradesForReversing.length &&
+          sortedTradesForReversing[tradeIdx]!.createdAt.getTime() > tj.getTime()
+        ) {
+          const trade = sortedTradesForReversing[tradeIdx]!;
+          const symIn = getSymbol(trade.tokenIn);
+          const symOut = getSymbol(trade.tokenOut);
+
+          const balIn = runningBalances.get(symIn) ?? 0;
+          const balOut = runningBalances.get(symOut) ?? 0;
+
+          runningBalances.set(symIn, balIn + trade.amountIn);
+          runningBalances.set(symOut, Math.max(0, balOut - trade.amountOut));
+
+          tradeIdx++;
+        }
+        periodBalances[j] = new Map(runningBalances);
+      }
+
+      const periodTrades = new Array<any[]>(limit);
+      for (let j = 0; j < limit; j++) {
+        periodTrades[j] = [];
+      }
+
+      for (const trade of trades) {
+        const tTime = trade.createdAt.getTime();
+        for (let j = 0; j < limit; j++) {
+          const start = periods[j]!.getTime();
+          const end = j === limit - 1 ? Infinity : periods[j + 1]!.getTime();
+          if (tTime >= start && tTime < end) {
+            periodTrades[j]!.push(trade);
+            break;
+          }
+        }
+      }
+
+      const chartData: any[] = [];
+      for (let j = 0; j < limit; j++) {
+        const tj = periods[j]!;
+        const balancesAtPeriod = periodBalances[j]!;
+        const tradesAtPeriod = periodTrades[j]!;
+
+        let portfolioValue = 0;
+        for (const [sym, bal] of balancesAtPeriod.entries()) {
+          if (bal <= 0) continue;
+          const price = await getPriceAtTimestamp(sym, tj);
+          portfolioValue += bal * price;
+        }
+
+        let periodVolume = 0;
+        let periodBuys = 0;
+        let periodSells = 0;
+
+        for (const t of tradesAtPeriod) {
+          const priceIn = await registry.getTokenPrice(t.tokenIn).catch(() => 1.0);
+          const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn * priceIn);
+          periodVolume += amountInUsd;
+          if (t.direction === "BUY") {
+            periodBuys += 1;
+          } else {
+            periodSells += 1;
+          }
+        }
+
+        let dateStr: string;
+        if (timeframe === "1d") {
+          const hours = String(tj.getHours()).padStart(2, "0");
+          const mins = String(tj.getMinutes()).padStart(2, "0");
+          dateStr = `${hours}:${mins}`;
         } else {
-          stat.sellCount += 1;
+          dateStr = tj.toISOString().split("T")[0] as string;
         }
-        stat.pnl += tradePnl;
-      });
 
-      let runningPnl = 0;
-      const sortedDates = Object.keys(dailyStats).sort();
-      const data = sortedDates.map((date) => {
-        const day = dailyStats[date]!;
-        runningPnl += day.pnl;
-        return {
-          date,
-          pnl: runningPnl,
-          volume: day.volume,
-          buys: day.buyCount,
-          sells: day.sellCount,
-        };
+        chartData.push({
+          date: dateStr,
+          timestamp: tj.getTime(),
+          portfolioValue,
+          pnl: 0,
+          volume: periodVolume,
+          buys: periodBuys,
+          sells: periodSells,
+        });
+      }
+
+      const V0 = chartData.length > 0 ? chartData[0].portfolioValue : 0;
+      chartData.forEach(pt => {
+        pt.pnl = pt.portfolioValue - V0;
       });
 
       const totalVolume = trades.reduce((sum, t) => {
-        const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn);
+        const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn * (stxPrice || 1.0));
         return sum + amountInUsd;
       }, 0);
 
-      const totalProfit = trades.reduce((sum, t) => {
-        const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn);
-        const amountOutUsd = t.amountOutUsd ?? (t.tokenOut === "STX" ? t.amountOut * stxPrice : t.amountOut);
-        if (t.direction === "BUY") return sum - amountInUsd;
-        return sum + amountOutUsd;
-      }, 0);
+      const totalProfit = chartData.length > 0 ? chartData[chartData.length - 1].portfolioValue - V0 : 0;
 
       res.json({
         summary: {
@@ -737,7 +934,7 @@ export class UserController {
           totalVolume,
           totalProfit,
         },
-        chartData: data,
+        chartData,
       });
     } catch (error) {
       logger.error("Failed to generate analytics", { error });

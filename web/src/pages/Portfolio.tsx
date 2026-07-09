@@ -14,17 +14,24 @@ interface WalletType {
   name: string;
   balance: number;
   balanceUsd: number;
+  balances?: Array<{
+    token: string;
+    symbol: string;
+    balance: number;
+    usdValue: number;
+  }>;
 }
 
 interface AnalyticsData {
   summary: { totalTrades: number; totalVolume: number; totalProfit: number };
-  chartData: Array<{ date: string; pnl: number; volume: number; buys: number; sells: number }>;
+  chartData: Array<{ date: string; timestamp: number; pnl: number; volume: number; buys: number; sells: number }>;
 }
 
 const COLORS = ["#6366f1", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#2dd4bf"];
 
 export function Portfolio() {
   const [activeTab, setActiveTab] = useState<number | "all">("all");
+  const [timeframe, setTimeframe] = useState<"1d" | "7d" | "30d" | "all">("7d");
   const { isActive, toggle, timeLeft, interval } = useAutoRefresh("portfolio");
 
   const { data: wallets } = useQuery<WalletType[]>({
@@ -34,9 +41,11 @@ export function Portfolio() {
   });
 
   const { data: analytics } = useQuery<AnalyticsData>({
-    queryKey: ["analytics", activeTab],
+    queryKey: ["analytics", activeTab, timeframe],
     queryFn: () => {
-      const url = activeTab === "all" ? "/me/analytics" : `/me/analytics?walletId=${activeTab}`;
+      let url = activeTab === "all" ? "/me/analytics" : `/me/analytics?walletId=${activeTab}`;
+      const separator = url.includes("?") ? "&" : "?";
+      url = `${url}${separator}timeframe=${timeframe}`;
       return apiFetch(url);
     },
     refetchInterval: interval,
@@ -48,14 +57,49 @@ export function Portfolio() {
 
   const totalBalance = filteredWallets.reduce((sum, w) => sum + (w.balanceUsd ?? 0), 0);
 
-  const chartData = filteredWallets.map((w, i) => ({
-    name: w.name,
-    value: w.balanceUsd ?? 0,
-    color: COLORS[i % 6],
+  // Combine balances of the same token across all selected wallets
+  const assetBalances: Record<string, { symbol: string; balance: number; usdValue: number; token: string }> = {};
+
+  filteredWallets.forEach((w) => {
+    const wBalances = w.balances || [
+      { token: "STX", symbol: "STX", balance: w.balance, usdValue: w.balanceUsd }
+    ];
+    wBalances.forEach((b) => {
+      const sym = b.symbol.toUpperCase();
+      if (assetBalances[sym]) {
+        assetBalances[sym].balance += b.balance;
+        assetBalances[sym].usdValue += b.usdValue ?? 0;
+      } else {
+        assetBalances[sym] = {
+          token: b.token,
+          symbol: b.symbol,
+          balance: b.balance,
+          usdValue: b.usdValue ?? 0,
+        };
+      }
+    });
+  });
+
+  const assetsList = Object.values(assetBalances)
+    .filter((a) => a.balance > 0)
+    .sort((a, b) => b.usdValue - a.usdValue);
+
+  const totalAssetValue = assetsList.reduce((sum, a) => sum + a.usdValue, 0);
+
+  const chartData = assetsList.map((a, i) => ({
+    name: a.symbol,
+    value: a.usdValue,
+    color: COLORS[i % COLORS.length],
   }));
 
-  const pnlData = analytics?.chartData?.map((d) => ({ time: d.date, value: d.pnl })) ?? [];
-  const volumeData = analytics?.chartData?.map((d) => ({ time: d.date, value: d.volume })) ?? [];
+  const pnlData = analytics?.chartData?.map((d) => ({
+    time: timeframe === "1d" ? Math.floor(d.timestamp / 1000) : d.date,
+    value: d.pnl
+  })) ?? [];
+  const volumeData = analytics?.chartData?.map((d) => ({
+    time: timeframe === "1d" ? Math.floor(d.timestamp / 1000) : d.date,
+    value: d.volume
+  })) ?? [];
 
   return (
     <div>
@@ -99,7 +143,7 @@ export function Portfolio() {
           <span>·</span>
           <span>{analytics?.summary.totalTrades ?? 0} trades</span>
           <span>·</span>
-          <span>Vol: {formatNumber(analytics?.summary.totalVolume ?? 0, 0)} STX</span>
+          <span>Vol: {formatUSD(analytics?.summary.totalVolume ?? 0)}</span>
         </div>
       </div>
 
@@ -110,29 +154,104 @@ export function Portfolio() {
             <PieChart className="w-4 h-4 text-brand-400" />
             <h3 className="text-sm font-bold text-title-text uppercase tracking-wider">Allocation</h3>
           </div>
-          <PortfolioChart data={chartData} totalValue={totalBalance} />
-          <div className="mt-4 space-y-2">
-            {filteredWallets.map((w, i) => (
-              <div key={w.id} className="flex items-center justify-between text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[i % 6] }} />
-                  <span className="text-muted-text font-medium">{w.name}</span>
+          <PortfolioChart data={chartData} totalValue={totalAssetValue} />
+          <div className="mt-4 space-y-2 max-h-60 overflow-y-auto pr-1">
+            {assetsList.map((a, i) => {
+              const allocationPct = totalAssetValue > 0 ? (a.usdValue / totalAssetValue) * 100 : 0;
+              return (
+                <div key={a.token} className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                    <span className="text-muted-text font-medium">{a.symbol}</span>
+                  </div>
+                  <span className="text-title-text font-bold">
+                    {formatUSD(a.usdValue)} ({allocationPct.toFixed(1)}%)
+                  </span>
                 </div>
-                <span className="text-title-text font-bold">{formatUSD(w.balanceUsd ?? 0)} ({w.balance.toFixed(2)} STX)</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
         <div className="glass-card p-6">
-          <TradingViewChart type="area" data={pnlData} height={300} color="#4f46e5" title="Cumulative PnL" />
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-title-text uppercase tracking-wider">Cumulative PnL</h3>
+            <div className="flex items-center gap-1 bg-bg-hover p-1 rounded-xl border border-divider-color">
+              {(["1d", "7d", "30d", "all"] as const).map((tf) => (
+                <button
+                  key={tf}
+                  onClick={() => setTimeframe(tf)}
+                  className={classNames(
+                    "px-3 py-1 text-xs font-semibold rounded-lg transition-all uppercase",
+                    timeframe === tf
+                      ? "bg-brand-500 text-white shadow-sm"
+                      : "text-muted-text hover:text-title-text"
+                  )}
+                >
+                  {tf}
+                </button>
+              ))}
+            </div>
+          </div>
+          <TradingViewChart type="area" data={pnlData} height={300} color="#4f46e5" />
         </div>
       </div>
 
       {/* Volume Chart */}
       <div className="glass-card p-6 mb-6">
-        <TradingViewChart type="histogram" data={volumeData} height={200} color="#34d399" title="Daily Trade Volume" />
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold text-title-text uppercase tracking-wider">Trade Volume</h3>
+          <span className="text-xs text-muted-text font-semibold uppercase">{timeframe} Timeframe</span>
+        </div>
+        <TradingViewChart type="histogram" data={volumeData} height={200} color="#34d399" />
       </div>
+
+      {/* Asset Breakdown Table */}
+      {assetsList.length > 0 && (
+        <div className="glass-card p-6 mb-6">
+          <h3 className="text-sm font-bold text-title-text uppercase tracking-wider mb-4">Asset Breakdown</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-divider-color text-sm text-left">
+              <thead>
+                <tr className="text-muted-text font-semibold">
+                  <th className="pb-3 pr-4">Asset</th>
+                  <th className="pb-3 px-4">Price</th>
+                  <th className="pb-3 px-4">Balance</th>
+                  <th className="pb-3 px-4">USD Value</th>
+                  <th className="pb-3 pl-4 text-right">Allocation</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-divider-color">
+                {assetsList.map((a) => {
+                  const allocationPct = totalAssetValue > 0 ? (a.usdValue / totalAssetValue) * 100 : 0;
+                  const tokenPrice = a.balance > 0 ? a.usdValue / a.balance : 0;
+                  return (
+                    <tr key={a.token} className="text-title-text hover:bg-bg-hover transition-colors">
+                      <td className="py-4 pr-4 font-medium flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-brand-500/10 text-brand-400 flex items-center justify-center font-bold text-xs uppercase">
+                          {a.symbol.slice(0, 3)}
+                        </div>
+                        <div>
+                          <div className="font-semibold">{a.symbol}</div>
+                          <div className="text-xs text-muted-text max-w-[150px] truncate font-mono" title={a.token}>
+                            {a.token.includes("::") ? `${a.token.slice(0, 6)}...${a.token.split("::")[1]}` : a.token}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 font-mono">{formatUSD(tokenPrice)}</td>
+                      <td className="py-4 px-4 font-mono">{formatNumber(a.balance, 4)}</td>
+                      <td className="py-4 px-4 font-semibold font-mono">{formatUSD(a.usdValue)}</td>
+                      <td className="py-4 pl-4 text-right font-semibold text-brand-400 font-mono">
+                        {allocationPct.toFixed(2)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Wallet Breakdown Cards */}
       {filteredWallets.length > 0 && (
