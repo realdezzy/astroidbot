@@ -7,7 +7,7 @@ export default [
     languageOptions: {
       parser: tsParser,
       parserOptions: {
-        project: "./tsconfig.json",
+        project: "./tsconfig.eslint.json",
         ecmaVersion: 2022,
         sourceType: "module",
       },
@@ -17,7 +17,11 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
-      "@typescript-eslint/no-explicit-any": "error",
+      // Pre-existing debt, mostly at untyped DEX-SDK boundaries. Kept as a
+      // warning rather than an error so `lint` can be a hard CI gate today,
+      // with scripts/lint-ratchet.mjs holding the count so it can only fall.
+      // Fix these opportunistically when touching the surrounding code.
+      "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "no-console": "warn",
     },

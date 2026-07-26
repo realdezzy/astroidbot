@@ -1,0 +1,8 @@
+{
+  "maxWarnings": 91,
+  "byRule": {
+    "@typescript-eslint/no-explicit-any": 67,
+    "no-console": 24
+  },
+  "updatedAt": "2026-07-26T21:20:54.008Z"
+}
