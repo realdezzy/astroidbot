@@ -88,8 +88,15 @@ export class DatabaseService {
     return this.prisma.wallet.findMany({ where: { userId } });
   }
 
-  async findWalletByAddress(address: string) {
-    return this.prisma.wallet.findUnique({ where: { address } });
+  // The unique constraint is [chainFamily, address] (see prisma/schema.prisma):
+  // the same address string can legitimately exist on two chain families, so
+  // callers doing a duplicate check must scope by family. Omitting chainFamily
+  // searches across all families, which is what address-only lookups (e.g.
+  // resolving an arbitrary address a user pasted) still want.
+  async findWalletByAddress(address: string, chainFamily?: string) {
+    return this.prisma.wallet.findFirst({
+      where: chainFamily ? { address, chainFamily } : { address },
+    });
   }
 
   async createWallet(data: {
@@ -97,10 +104,14 @@ export class DatabaseService {
     address: string;
     name: string;
     encryptedKey: string;
+    chainFamily?: string;
+    chain?: string;
   }) {
     const existingCount = await this.prisma.wallet.count({
       where: { userId: data.userId },
     });
+    // chainFamily/chain left undefined fall through to the schema defaults
+    // ("stacks"/"stacks:mainnet"), so pre-multi-chain callers are unaffected.
     return this.prisma.wallet.create({
       data: {
         ...data,
@@ -282,6 +293,7 @@ export class DatabaseService {
   async findPendingTrades() {
     return this.prisma.trade.findMany({
       where: { status: { in: ["PENDING", "BROADCAST"] } },
+      include: { wallet: { select: { chainFamily: true } } },
     });
   }
 

@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
@@ -8,8 +7,9 @@ import { PortfolioManager } from "./portfolio.js";
 import { NotificationService } from "./notificationService.js";
 import { RiskManager } from "./riskManager.js";
 import { buildAgentPrompt } from "./ai/prompts/agent.js";
+import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
 import { AgentDecisionSchema } from "../validation/ai/schemas.js";
-import type { RebalanceAction } from "../types.js";
+import type { RebalanceAction, SwappableToken } from "../types.js";
 
 interface AgentRunResult {
   actions: number;
@@ -86,18 +86,30 @@ export class AgentService {
       }
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
+      const adapters = ChainAdapterRegistry.getInstance();
       const pm = PortfolioManager.getInstance();
+
+      // A user's wallets can span chain families, and each family has its own
+      // token universe and native asset — resolve both per family rather than
+      // pricing every wallet's balance as STX.
+      const tokensByFamily = new Map<string, SwappableToken[]>();
+      await Promise.all(
+        [...new Set(wallets.map((w) => w.chainFamily ?? "stacks"))].map(async (family) => {
+          tokensByFamily.set(family, await registry.getSwappableTokens(false, family));
+        })
+      );
 
       const updatedWallets = await Promise.all(
         wallets.map(async (w) => {
+          const family = w.chainFamily ?? "stacks";
           try {
-            const balances = await pm.fetchBalances(w.address, tokens, agent.userId);
-            const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
-            if (stxBal !== w.balance) {
-              await db.updateWalletBalance(w.id, stxBal);
+            const nativeSymbol = adapters.has(family) ? adapters.get(family).nativeSymbol : "STX";
+            const balances = await pm.fetchBalances(w.address, tokensByFamily.get(family) ?? [], agent.userId);
+            const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
+            if (nativeBal !== w.balance) {
+              await db.updateWalletBalance(w.id, nativeBal);
             }
-            return { ...w, balance: stxBal };
+            return { ...w, balance: nativeBal };
           } catch {
             return w;
           }
@@ -162,7 +174,7 @@ export class AgentService {
 
   private async runAiOverlay(
     agent: { id: number; userId: number; name: string; context: string; model: string; config: unknown; state: unknown },
-    wallets: Array<{ id: number; address: string; balance: number; isDefault?: boolean }>,
+    wallets: Array<{ id: number; address: string; balance: number; isDefault?: boolean; chainFamily?: string }>,
     state: Record<string, unknown>,
     config: Record<string, unknown>,
     autonomous: boolean,
@@ -203,14 +215,16 @@ export class AgentService {
           const cappedAmount = Math.min(t.amountIn, maxAmount, Number.isFinite(perRunCap) && perRunCap > 0 ? perRunCap : maxAmount);
 
         const action: RebalanceAction = {
-          tokenIn: t.tokenIn ?? "STX",
+          // Required by AgentDecisionSchema — no "STX" fallback, which would
+          // silently pick a Stacks token for a trade on another chain.
+          tokenIn: t.tokenIn,
           tokenOut: t.tokenOut,
           amountIn: cappedAmount,
           direction: t.direction,
           reason: `Agent "${agent.name}" (AI): ${t.reason ?? "autonomous"}`,
         };
 
-        const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+        const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, wallet.chainFamily ?? "stacks");
         const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId);
 
           const riskSettings = {
@@ -243,7 +257,8 @@ export class AgentService {
               wallet.id,
             agent.userId,
             wallet.address,
-            riskSettings.slippageBps
+            riskSettings.slippageBps,
+            wallet.chainFamily ?? "stacks"
           );
           if (res.executed > 0) {
             executed = true;

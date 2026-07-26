@@ -1,5 +1,4 @@
 import { Queue, Worker, type Job, type JobsOptions } from "bullmq";
-import { RedisService } from "./redis.js";
 import { logger } from "../utils/logger.js";
 import { ConfigManager } from "../config.js";
 

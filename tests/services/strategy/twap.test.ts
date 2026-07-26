@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TwapStrategy } from "../../../src/services/strategy/twap.js";
-import { DatabaseService } from "../../../src/services/db.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockFindMany = vi.fn();

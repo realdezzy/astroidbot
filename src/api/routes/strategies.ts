@@ -2,7 +2,6 @@ import { Router } from "express";
 import { authenticate } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { z } from "zod";
-import { InternalError, NotFoundError, ValidationError } from "../errors.js";
 import { STRATEGY_TYPES } from "../../../shared/strategies.js";
 import { StrategyController } from "../controllers/strategyController.js";
 

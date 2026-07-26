@@ -33,7 +33,9 @@ model Wallet {
   id           Int      @id @default(autoincrement())
   userId       Int
   user         User     @relation(fields: [userId], references: [id])
-  address      String   @unique
+  address      String
+  chainFamily  String   @default("stacks")
+  chain        String   @default("stacks:mainnet")
   name         String
   encryptedKey String
   balance      Float    @default(0)
@@ -43,6 +45,8 @@ model Wallet {
 
   trades        Trade[]
   perpPositions PerpPosition[]
+
+  @@unique([chainFamily, address])
 }
 
 

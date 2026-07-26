@@ -77,7 +77,6 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
   const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));
 
   const payToken = dir === "BUY" ? tokenIn : tokenOut;
-  const receiveToken = dir === "BUY" ? tokenOut : tokenIn;
 
   // Stage 1: Pick token
   if (!stage || stage === "pick_pair") {

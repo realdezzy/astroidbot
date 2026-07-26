@@ -4,7 +4,6 @@ import type { IncomingMessage } from "node:http";
 import jwt from "jsonwebtoken";
 import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
-import { UnauthorizedError } from "./errors.js";
 import type { JwtPayload } from "./middleware/auth.js";
 
 interface AuthenticatedClient {

@@ -2,10 +2,8 @@ import {
   makeContractCall,
   makeSTXTokenTransfer,
   broadcastTransaction,
-  AnchorMode,
   PostConditionMode,
   FungibleConditionCode,
-  PostConditionType,
   Cl,
   Pc,
   type ClarityValue,
@@ -69,9 +67,9 @@ export class TransactionService {
     const db = DatabaseService.getInstance();
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
-    const lockAcquired = await redis.acquireLock(lockKey, 30_000);
+    const lockToken = await redis.acquireLock(lockKey, 30_000);
 
-    if (!lockAcquired) {
+    if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
 
@@ -250,7 +248,7 @@ export class TransactionService {
       logger.error("Transaction failed", { error: message, action });
       return { error: message };
     } finally {
-      await redis.releaseLock(lockKey);
+      await redis.releaseLock(lockKey, lockToken);
     }
   }
 
@@ -265,9 +263,9 @@ export class TransactionService {
     const db = DatabaseService.getInstance();
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
-    const lockAcquired = await redis.acquireLock(lockKey, 30_000);
+    const lockToken = await redis.acquireLock(lockKey, 30_000);
 
-    if (!lockAcquired) {
+    if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
 
@@ -449,7 +447,7 @@ export class TransactionService {
       logger.error("Transfer failed", { error: message, token, amount, toAddress });
       return { error: message };
     } finally {
-      await redis.releaseLock(lockKey);
+      await redis.releaseLock(lockKey, lockToken);
     }
   }
 

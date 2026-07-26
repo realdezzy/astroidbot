@@ -1,5 +1,4 @@
 import { RedisService } from "./redis.js";
-import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
 
 interface PricePoint {

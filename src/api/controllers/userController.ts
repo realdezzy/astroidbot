@@ -1,15 +1,16 @@
 import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcrypt";
-import { z } from "zod";
 import { DatabaseService } from "../../services/db.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import type { DEXQuote } from "../../types/dexProvider.js";
+import type { SwappableToken } from "../../types.js";
 import { PortfolioManager } from "../../services/portfolio.js";
-import { TransactionService } from "../../services/transaction.js";
 import { KMSService } from "../../services/kms.js";
+import { RiskManager } from "../../services/riskManager.js";
+import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
+import { executeSwapPayload } from "../../services/chains/executeSwap.js";
 import { logger } from "../../utils/logger.js";
 import { encrypt } from "../../utils/crypto.js";
-import { generateWalletKeypair, deriveAddressFromPrivateKey } from "../../services/wallet.js";
 import { CandleService, CandleData } from "../../services/quant/candleService.js";
 import {
   NotFoundError,
@@ -54,23 +55,44 @@ export class UserController {
       const wallets = await db.findWalletsByUserId(req.userId!);
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
       const pm = PortfolioManager.getInstance();
+      const adapters = ChainAdapterRegistry.getInstance();
 
-      const stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX") || 2.0;
+      // Token list and native-asset price are per chain family, so resolve them
+      // once per distinct family present rather than once globally as "STX".
+      const families = [...new Set(wallets.map((w) => w.chainFamily ?? "stacks"))];
+      const perFamily = new Map<string, { tokens: SwappableToken[]; nativeSymbol: string; nativePrice: number }>();
+      await Promise.all(
+        families.map(async (family) => {
+          const nativeSymbol = adapters.has(family) ? adapters.get(family).nativeSymbol : "STX";
+          const [tokens, price] = await Promise.all([
+            registry.getSwappableTokens(false, family),
+            registry.getTokenPrice(nativeSymbol, family).catch(() => 0),
+          ]);
+          perFamily.set(family, {
+            tokens,
+            nativeSymbol,
+            nativePrice: price || (family === "stacks" ? 2.0 : 0),
+          });
+        })
+      );
 
       const updatedWallets = await Promise.all(
         wallets.map(async (w) => {
+          const family = w.chainFamily ?? "stacks";
+          const { tokens, nativeSymbol, nativePrice } = perFamily.get(family)!;
           try {
             const balances = await pm.fetchBalances(w.address, tokens, req.userId!);
-            const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
+            const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
             const totalWalletUsd = balances.reduce((sum, b) => sum + (b.usdValue ?? 0), 0);
-            await db.updateWalletBalance(w.id, stxBal);
+            await db.updateWalletBalance(w.id, nativeBal);
             return {
               id: w.id,
               address: w.address,
               name: w.name,
-              balance: stxBal,
+              chainFamily: family,
+              chain: w.chain,
+              balance: nativeBal,
               balanceUsd: totalWalletUsd,
               balances,
               isDefault: w.isDefault,
@@ -82,14 +104,16 @@ export class UserController {
               id: w.id,
               address: w.address,
               name: w.name,
+              chainFamily: family,
+              chain: w.chain,
               balance: w.balance,
-              balanceUsd: w.balance * stxPrice,
+              balanceUsd: w.balance * nativePrice,
               balances: [
                 {
-                  token: "STX",
-                  symbol: "STX",
+                  token: nativeSymbol,
+                  symbol: nativeSymbol,
                   balance: w.balance,
-                  usdValue: w.balance * stxPrice,
+                  usdValue: w.balance * nativePrice,
                 },
               ],
               isDefault: w.isDefault,
@@ -251,15 +275,22 @@ export class UserController {
     }
   }
 
-  static async generateWallet(req: Request, res: Response, next: NextFunction): Promise<void> {
+  static async generateWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { name } = req.body as { name?: string };
+      const { name, chainFamily } = req.body as { name?: string; chainFamily?: string };
       const db = DatabaseService.getInstance();
+
+      const family = chainFamily ?? "stacks";
+      const adapters = ChainAdapterRegistry.getInstance();
+      if (!adapters.has(family)) {
+        return next(new ValidationError(`Chain "${family}" is not enabled on this deployment`));
+      }
+      const adapter = adapters.get(family);
 
       const existing = await db.findWalletsByUserId(req.userId!);
       const walletName = name?.trim() || `Wallet ${existing.length + 1}`;
 
-      const { privateKeyHex, address } = generateWalletKeypair();
+      const { privateKeyHex, address } = await adapter.generateWalletKeypair();
       const encryptedKey = encrypt(privateKeyHex);
 
       const wallet = await db.createWallet({
@@ -267,14 +298,18 @@ export class UserController {
         address,
         name: walletName,
         encryptedKey,
+        chainFamily: family,
+        chain: adapter.chainId(),
       });
 
-      logger.info("Wallet generated", { userId: req.userId, address });
+      logger.info("Wallet generated", { userId: req.userId, address, chainFamily: family });
 
       res.status(201).json({
         id: wallet.id,
         address: wallet.address,
         name: wallet.name,
+        chainFamily: wallet.chainFamily,
+        chain: wallet.chain,
         balance: wallet.balance,
         balanceUsd: 0,
         isDefault: wallet.isDefault,
@@ -288,17 +323,26 @@ export class UserController {
 
   static async importWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { privateKey, name } = req.body as { privateKey: string; name?: string };
+      const { privateKey, name, chainFamily } = req.body as { privateKey: string; name?: string; chainFamily?: string };
       const db = DatabaseService.getInstance();
+
+      const family = chainFamily ?? "stacks";
+      const adapters = ChainAdapterRegistry.getInstance();
+      if (!adapters.has(family)) {
+        return next(new ValidationError(`Chain "${family}" is not enabled on this deployment`));
+      }
+      const adapter = adapters.get(family);
 
       let address: string;
       try {
-        address = deriveAddressFromPrivateKey(privateKey.trim());
+        address = await adapter.deriveAddressFromPrivateKey(privateKey.trim());
       } catch {
-        return next(new ValidationError("Invalid Stacks private key"));
+        return next(new ValidationError(`Invalid ${family} private key`));
       }
 
-      const existing = await db.findWalletByAddress(address);
+      // Scoped by family: the same key material imported on two chains is two
+      // distinct wallets, and only a collision within one chain is a duplicate.
+      const existing = await db.findWalletByAddress(address, family);
       if (existing) {
         return next(new ConflictError("A wallet with this address already exists"));
       }
@@ -312,25 +356,29 @@ export class UserController {
         address,
         name: walletName,
         encryptedKey,
+        chainFamily: family,
+        chain: adapter.chainId(),
       });
 
-      logger.info("Wallet imported", { userId: req.userId, address });
+      logger.info("Wallet imported", { userId: req.userId, address, chainFamily: family });
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
+      const tokens = await registry.getSwappableTokens(false, family);
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!);
-      const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
+      const nativeBal = balances.find((b) => b.symbol === adapter.nativeSymbol)?.balance ?? 0;
 
-      const stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX") || 2.0;
+      const nativePrice = await registry.getTokenPrice(adapter.nativeSymbol, family) || (family === "stacks" ? 2.0 : 0);
 
-      await db.updateWalletBalance(wallet.id, stxBal);
+      await db.updateWalletBalance(wallet.id, nativeBal);
 
       res.status(201).json({
         id: wallet.id,
         address: wallet.address,
         name: wallet.name,
-        balance: stxBal,
-        balanceUsd: stxBal * stxPrice,
+        chainFamily: wallet.chainFamily,
+        chain: wallet.chain,
+        balance: nativeBal,
+        balanceUsd: nativeBal * nativePrice,
         isDefault: wallet.isDefault,
         createdAt: wallet.createdAt,
       });
@@ -455,7 +503,7 @@ export class UserController {
       if (wallet.userId !== req.userId) return next(new ForbiddenError());
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
+      const tokens = await registry.getSwappableTokens(false, wallet.chainFamily ?? "stacks");
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       res.json(balances);
@@ -478,20 +526,29 @@ export class UserController {
       if (!wallet) return next(new NotFoundError("Wallet"));
       if (wallet.userId !== req.userId) return next(new ForbiddenError());
 
-      const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
-      const tokenObj = tokens.find(t => t.contractId === token || t.symbol === token);
-      const decimals = tokenObj ? tokenObj.decimals : 6;
+      const family = wallet.chainFamily ?? "stacks";
+      const adapters = ChainAdapterRegistry.getInstance();
+      if (!adapters.has(family)) {
+        return next(new ValidationError(`Chain "${family}" is not enabled on this deployment`));
+      }
+      const adapter = adapters.get(family);
 
-      const txService = TransactionService.getInstance();
-      const result = await txService.transfer(
-        wallet.id,
-        wallet.address,
+      const registry = DEXRegistry.getInstance();
+      const tokens = await registry.getSwappableTokens(false, family);
+      const tokenObj = tokens.find(t => t.contractId === token || t.symbol === token);
+      // Unknown-token fallback is the chain's native decimals — 6 on Stacks
+      // (unchanged) and 18 on EVM, where assuming 6 would be off by 1e12.
+      const decimals = tokenObj ? tokenObj.decimals : adapter.nativeDecimals;
+      const isNative = token.toUpperCase() === adapter.nativeSymbol.toUpperCase();
+
+      const result = await adapter.transfer({
+        walletId: wallet.id,
+        senderAddress: wallet.address,
         toAddress,
         amount,
-        token === "STX" ? "STX" : (tokenObj ? tokenObj.contractId : token),
-        decimals
-      );
+        token: isNative ? adapter.nativeSymbol : (tokenObj ? tokenObj.contractId : token),
+        decimals,
+      });
 
       if ("txId" in result) {
         return res.json({ ok: true, txId: result.txId });
@@ -524,9 +581,10 @@ export class UserController {
       if (!wallet || wallet.userId !== req.userId!) {
         return next(new NotFoundError("Wallet"));
       }
+      const chainFamily = wallet.chainFamily ?? "stacks";
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
+      const tokens = await registry.getSwappableTokens(false, chainFamily);
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       const tokenBalanceObj = balances.find(b => b.symbol.toUpperCase() === tokenIn.toUpperCase() || b.token === tokenIn);
@@ -554,6 +612,22 @@ export class UserController {
         return res.status(400).json({ error: `Insufficient available balance for ${tokenIn}. Available: ${availableBalance}, Required: ${amountIn} (accounting for pending trades/orders)` });
       }
 
+      const settings = await db.findTradeSettings(req.userId!, "personal");
+      const riskAction = { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason: "Manual trade via web" };
+      const riskResult = await RiskManager.getInstance().evaluateTrade(
+        req.userId!,
+        riskAction,
+        balances,
+        {
+          slippageBps: settings?.slippageBps ?? 100,
+          maxPositionPct: settings?.maxPositionPct ?? 25.0,
+          dailyLossLimit: settings?.dailyLossLimit ?? 5.0,
+        }
+      );
+      if (!riskResult.approved) {
+        return res.status(400).json({ error: riskResult.reason ?? "Trade rejected by risk manager" });
+      }
+
       let selectedProviderName: string;
       let est: DEXQuote;
 
@@ -561,6 +635,9 @@ export class UserController {
         const provider = registry.getProvider(dex);
         if (!provider) {
           return res.status(400).json({ error: `Selected DEX provider '${dex}' is not registered` });
+        }
+        if ((provider.chainFamily ?? "stacks") !== chainFamily) {
+          return res.status(400).json({ error: `Selected DEX provider '${dex}' does not support this wallet's chain` });
         }
         const hasRoute = await provider.hasRoute(tokenIn, tokenOut);
         if (!hasRoute) {
@@ -572,7 +649,7 @@ export class UserController {
         }
         selectedProviderName = provider.name;
       } else {
-        const bestQuoteResult = await registry.getBestQuote(tokenIn, tokenOut, amountIn);
+        const bestQuoteResult = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainFamily);
         if (!bestQuoteResult) {
           return res.status(400).json({ error: "No swap route found for this pair on any DEX" });
         }
@@ -592,17 +669,16 @@ export class UserController {
         return res.status(400).json({ error: `Failed to build swap payload for ${selectedProviderName}` });
       }
 
-      const settings = await db.findTradeSettings(req.userId!, "personal");
       const useGasless = settings?.useGasless ?? false;
 
-      const txService = TransactionService.getInstance();
-      const action = { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason: "Manual trade via web" };
-      const result = await txService.execute(
-        action, payload.contractAddress, payload.contractName,
-        payload.functionName, payload.functionArgs,
-        wallet.id, wallet.address, est.amountOut,
-        useGasless, payload.postConditions
-      );
+      const result = await executeSwapPayload(payload, {
+        action: riskAction,
+        walletId: wallet.id,
+        senderAddress: wallet.address,
+        maxOutbound: est.amountOut,
+        useGasless,
+        chainFamily,
+      });
 
       if ("txId" in result) {
         const trade = await db.createTrade({
@@ -767,6 +843,13 @@ export class UserController {
             }
           }
         } catch (err) {
+          // Falling back to the wallet's cached native balance. Logged rather
+          // than swallowed — a silent fallback here looks identical to a
+          // healthy wallet with only STX.
+          logger.warn("Balance fetch failed, using cached wallet balance", {
+            walletId: w.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
           const existing = currentAggregatedBalances.get("STX");
           if (existing) {
             existing.balance += w.balance;
@@ -781,7 +864,7 @@ export class UserController {
       }
 
       const tokensToFetch = new Set<string>();
-      for (const [_, b] of currentAggregatedBalances) {
+      for (const b of currentAggregatedBalances.values()) {
         tokensToFetch.add(getSymbol(b.symbol));
       }
       for (const t of trades) {

@@ -16,7 +16,6 @@ import { controlScreen } from "./screens/controlScreen.js";
 import { tradeScreen } from "./screens/tradeScreen.js";
 import { tradesScreen } from "./screens/tradesScreen.js";
 import { agentsScreen, runAgent, toggleAgent, setAgentAiMode, deleteAgent, startStrategyWizard, promptStrategyWallets, promptStrategyField } from "./screens/agentsScreen.js";
-import { agentDetailsScreen, agentAiModeMenuScreen, agentStrategiesMenuScreen } from "./screens/agentDetailsScreen.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
 import { generateWalletKeypair, deriveAddressFromPrivateKey } from "../services/wallet.js";
 import { encrypt } from "../utils/crypto.js";

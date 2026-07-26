@@ -7,13 +7,20 @@ import { UserController } from "../controllers/userController.js";
 
 const router = Router();
 
+// chainFamily is validated against ChainAdapterRegistry in the controller
+// rather than a hardcoded enum here, so a deployment without PIMLICO_API_KEY
+// rejects "evm" with a clear message and adding a chain needs no schema edit.
+const chainFamilySchema = z.string().min(1).max(32).optional();
+
 const generateWalletSchema = z.object({
   name: z.string().min(1).max(64).optional(),
+  chainFamily: chainFamilySchema,
 });
 
 const importWalletSchema = z.object({
   privateKey: z.string().min(32).max(128),
   name: z.string().min(1).max(64).optional(),
+  chainFamily: chainFamilySchema,
 });
 
 const revealKeySchema = z.object({

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { BitflowDEXService } from "../src/services/dex/bitflow.js";
 
 describe("BitflowDEXService Token Resolution and Matching", () => {

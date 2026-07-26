@@ -3,7 +3,6 @@ import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
 import { PortfolioManager } from "../services/portfolio.js";
 import { PriceHistoryService } from "../services/priceHistory.js";
-import { RiskManager } from "../services/riskManager.js";
 import { NotificationService } from "../services/notificationService.js";
 import { STRATEGY_REGISTRY } from "../services/strategy/registry.js";
 import { MarketDataService } from "../services/quant/marketData.js";
@@ -53,7 +52,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
     if (activeAgent) aiMode = activeAgent.aiMode;
   }
 
-  const tokens = await registry.getSwappableTokens();
+  const tokens = await registry.getSwappableTokens(false, wallet.chainFamily ?? "stacks");
   const tokenSymbols = tokens.map(t => t.symbol);
   const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
   if (balances.length === 0) return;
@@ -180,7 +179,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   });
 
   const slippageBps = (config.maxSlippageBps as number) ?? settings.slippageBps;
-  const { executed, attempted } = await executeApprovedActions(sizedActions, walletId, userId, wallet.address, slippageBps);
+  const { executed, attempted } = await executeApprovedActions(sizedActions, walletId, userId, wallet.address, slippageBps, wallet.chainFamily ?? "stacks");
 
   if (attempted > 0 && executed === 0) {
     await handleStrategyFailure(strategyId, userId, "All trade executions failed in the cycle", db);

@@ -3,6 +3,7 @@ import { DatabaseService } from "../db.js";
 import { PortfolioManager } from "../portfolio.js";
 import { PriceHistoryService } from "../priceHistory.js";
 import { RiskManager } from "../riskManager.js";
+import { logger } from "../../utils/logger.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
@@ -78,6 +79,10 @@ export class PortfolioRebalanceStrategy implements Strategy {
         });
       } catch (err) {
         // If LLM fetch fails and we have no targets, fall back to current weights (safe) or reuse stale targets
+        logger.warn("Portfolio target generation failed, falling back", {
+          strategyId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         if (!targets) {
           targets = filtered.map(b => ({
             token: b.symbol,

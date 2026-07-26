@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { AIOrchestrator } from "../../src/services/ai.js";
 import { ConfigManager } from "../../src/config.js";
-import { RedisService } from "../../src/services/redis.js";
-import { DatabaseService } from "../../src/services/db.js";
 import OpenAI from "openai";
 
 vi.mock("openai", () => {

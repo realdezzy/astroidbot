@@ -2,11 +2,11 @@ import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { RiskManager } from "./riskManager.js";
-import { TransactionService } from "./transaction.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { QueueManager } from "./queue.js";
 import type { RebalanceAction } from "../types.js";
 import { safeValidateStrategyConfig } from "./strategy/configValidation.js";
+import { executeSwapPayload } from "./chains/executeSwap.js";
 
 // Exported for use by strategyWorker — handles DEX quoting, building, broadcasting,
 // and DB/WebSocket bookkeeping for a list of approved actions.
@@ -16,11 +16,11 @@ export async function executeApprovedActions(
   userId: number,
   senderAddress: string,
   slippageBps: number,
+  chainFamily = "stacks",
 ): Promise<{ executed: number; attempted: number }> {
   let executed = 0;
   let attempted = 0;
   const registry = DEXRegistry.getInstance();
-  const txService = TransactionService.getInstance();
   const db = DatabaseService.getInstance();
   const wss = WebSocketManager.getInstance();
 
@@ -29,7 +29,7 @@ export async function executeApprovedActions(
 
   for (const action of actions) {
     attempted++;
-    const bestQuoteResult = await registry.getBestQuote(action.tokenIn, action.tokenOut, action.amountIn);
+    const bestQuoteResult = await registry.getBestQuote(action.tokenIn, action.tokenOut, action.amountIn, chainFamily);
     if (!bestQuoteResult || bestQuoteResult.quote.amountOut <= 0) continue;
 
     const { providerName, quote: est } = bestQuoteResult;
@@ -53,12 +53,14 @@ export async function executeApprovedActions(
       feeAmount: est.feeAmount, feeBps: est.feeBps,
     });
 
-    const result = await txService.execute(
+    const result = await executeSwapPayload(payload, {
       action,
-      payload.contractAddress, payload.contractName,
-      payload.functionName, payload.functionArgs,
-      walletId, senderAddress, est.amountOut, useGasless, payload.postConditions,
-    );
+      walletId,
+      senderAddress,
+      maxOutbound: est.amountOut,
+      useGasless,
+      chainFamily,
+    });
 
     if ("txId" in result) {
       await db.updateTradeStatus(trade.id, "BROADCAST", result.txId);

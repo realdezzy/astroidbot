@@ -1,5 +1,4 @@
 import type { Features } from "./featureEngine.js";
-import { logger } from "../../utils/logger.js";
 
 export interface ExitPlanResult {
   shouldExit: boolean;

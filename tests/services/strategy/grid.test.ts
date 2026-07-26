@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GridStrategy } from "../../../src/services/strategy/grid.js";
-import { MarketMakerService } from "../../../src/services/marketMaker.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockTick = vi.fn();

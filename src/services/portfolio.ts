@@ -3,6 +3,9 @@ import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { DatabaseService } from "./db.js";
+import { createPublicClient, formatUnits, http } from "viem";
+import { base, baseSepolia } from "viem/chains";
+import { ERC20_ABI } from "./chains/evm/abis.js";
 import type {
   PortfolioTarget,
   RebalanceAction,
@@ -34,12 +37,129 @@ export class PortfolioManager {
     return PortfolioManager.instance;
   }
 
+  private async fetchEvmBalances(
+    address: string,
+    swappableTokens: SwappableToken[],
+    ignoreDust: boolean,
+    userId?: number
+  ): Promise<TokenBalance[]> {
+    const config = ConfigManager.getInstance().config;
+    const isMainnet = config.BASE_NETWORK === "mainnet";
+    const chain = isMainnet ? base : baseSepolia;
+    const rpcUrl = config.BASE_RPC_URL || chain.rpcUrls.default.http[0]!;
+
+    const client = createPublicClient({
+      chain,
+      transport: http(rpcUrl),
+    });
+
+    const registry = DEXRegistry.getInstance();
+
+    // Same allow/block filtering the Stacks path applies — a token a user has
+    // blocked shouldn't reappear in their portfolio just because it's on Base.
+    let userBlockedSet = new Set<string>();
+    if (userId) {
+      try {
+        const db = DatabaseService.getInstance();
+        const userBlocked = await db.getBlockedTokens(userId);
+        userBlockedSet = new Set(userBlocked.map((b) => b.contractId));
+      } catch {
+        // Blocked token lookup failed, proceed without per-user blocking
+      }
+    }
+    const allowedTokens = ConfigManager.getInstance().allowedTokens;
+    const blockedTokens = ConfigManager.getInstance().blockedTokens;
+
+    let ethBalance = 0;
+    let ethPrice = 0;
+    try {
+      const rawBalance = await client.getBalance({ address: address as `0x${string}` });
+      // formatUnits, not Number(raw)/1e18 — a wei value above 2^53 loses
+      // precision as a double before the division.
+      ethBalance = Number(formatUnits(rawBalance, 18));
+      // Scoped to "evm": unscoped, a Stacks provider listing a "WETH" symbol
+      // would answer first and price Base ETH off the wrong chain.
+      ethPrice = await registry.getTokenPrice("WETH", "evm");
+    } catch (err) {
+      logger.warn("Failed to fetch ETH balance", { address, error: err instanceof Error ? err.message : String(err) });
+    }
+
+    const balances: TokenBalance[] = [];
+    if (ethBalance > 0) {
+      // usdValue is 0 when no on-chain price was available. Left uninvented
+      // rather than defaulted to a guessed ETH price, because this figure
+      // feeds RiskManager position sizing.
+      const usdValue = ethBalance * ethPrice;
+      if (ignoreDust || usdValue >= this.dustThresholdUsd) {
+        balances.push({
+          token: "ETH",
+          symbol: "ETH",
+          balance: ethBalance,
+          usdValue,
+        });
+      }
+    }
+
+    const evmTokens = swappableTokens.filter(
+      (t) => (t.chainFamily ?? (t.contractId.startsWith("0x") ? "evm" : "stacks")) === "evm"
+    );
+
+    const tokenBalances = await Promise.all(
+      evmTokens.map(async (token) => {
+        if (allowedTokens.length > 0 && !allowedTokens.includes(token.contractId)) return null;
+        if (blockedTokens.length > 0 && blockedTokens.includes(token.contractId)) return null;
+        if (userBlockedSet.has(token.contractId)) return null;
+
+        try {
+          const rawBalance = await client.readContract({
+            address: token.contractId as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [address as `0x${string}`],
+          }) as bigint;
+
+          const balance = Number(formatUnits(rawBalance, token.decimals));
+          if (balance <= 0) return null;
+
+          const tokenPrice = await registry.getTokenPrice(token.symbol, "evm");
+          const usdValue = balance * (tokenPrice || 1.0);
+
+          if (!ignoreDust && usdValue < this.dustThresholdUsd) return null;
+
+          return {
+            token: token.contractId,
+            symbol: token.symbol,
+            balance,
+            usdValue,
+          };
+        } catch (err) {
+          logger.warn(`Failed to fetch ERC20 balance for ${token.symbol}`, {
+            address,
+            token: token.contractId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return null;
+        }
+      })
+    );
+
+    for (const tb of tokenBalances) {
+      if (tb) balances.push(tb);
+    }
+
+    return balances;
+  }
+
   async fetchBalances(
     address: string,
     swappableTokens: SwappableToken[],
     userId?: number,
     ignoreDust: boolean = false
   ): Promise<TokenBalance[]> {
+    if (address.startsWith("0x") && address.length === 42) {
+      return this.fetchEvmBalances(address, swappableTokens, ignoreDust, userId);
+    }
+
     const balances: TokenBalance[] = [];
     const config = ConfigManager.getInstance().config;
 

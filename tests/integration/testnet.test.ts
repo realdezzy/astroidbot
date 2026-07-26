@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { TransactionService } from "../../src/services/transaction.js";
 import { ConfigManager } from "../../src/config.js";
-import { DatabaseService } from "../../src/services/db.js";
-import { RedisService } from "../../src/services/redis.js";
-import { KMSService } from "../../src/services/kms.js";
 import { Cl } from "@stacks/transactions";
 
 // Retrieve testnet credentials from environment variables

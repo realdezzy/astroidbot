@@ -1,12 +1,12 @@
 import type { Job } from "bullmq";
-import { QueueManager, QUEUES } from "../services/queue.js";
+import { QueueManager } from "../services/queue.js";
 import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
-import { TransactionService } from "../services/transaction.js";
 import { RiskManager } from "../services/riskManager.js";
 import { TelegramService } from "../services/telegram.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { logger } from "../utils/logger.js";
+import { executeSwapPayload } from "../services/chains/executeSwap.js";
 
 
 interface TradeJob {
@@ -26,12 +26,14 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
 
   const db = DatabaseService.getInstance();
   const registry = DEXRegistry.getInstance();
-  const txService = TransactionService.getInstance();
   const wss = WebSocketManager.getInstance();
   const qm = QueueManager.getInstance();
 
-  // Find best route across all DEXs
-  const bestQuote = await registry.getBestQuote(tokenIn, tokenOut, amountIn);
+  const wallet = await db.findWalletById(walletId);
+  const chainFamily = wallet?.chainFamily ?? "stacks";
+
+  // Find best route across DEXs registered for this wallet's chain
+  const bestQuote = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainFamily);
   if (!bestQuote || bestQuote.quote.amountOut <= 0) {
     throw new Error(`No viable swap route: ${tokenIn} → ${tokenOut}`);
   }
@@ -65,12 +67,14 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
     feeAmount: est.feeAmount, feeBps: est.feeBps,
   });
 
-  const result = await txService.execute(
-    { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
-    payload.contractAddress, payload.contractName,
-    payload.functionName, payload.functionArgs,
-    walletId, senderAddress, est.amountOut, settings?.useGasless ?? false, payload.postConditions,
-  );
+  const result = await executeSwapPayload(payload, {
+    action: { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
+    walletId,
+    senderAddress,
+    maxOutbound: est.amountOut,
+    useGasless: settings?.useGasless ?? false,
+    chainFamily,
+  });
 
   if ("txId" in result) {
     await db.updateTradeStatus(trade.id, "BROADCAST", result.txId);

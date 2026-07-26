@@ -4,6 +4,9 @@ export interface SwappableToken {
   name: string;
   decimals: number;
   supportedBy?: string[];
+  // Stamped by DEXRegistry when merging provider token lists. Absent means
+  // "stacks" — tokens from providers written before multi-chain support.
+  chainFamily?: string;
 }
 
 export interface PortfolioTarget {
@@ -56,12 +59,47 @@ export interface SwapRoute {
   priceImpact: number;
 }
 
+// Stacks-shaped fields are optional (not just present-for-Stacks) so an EVM
+// DEXProvider can return an evm-kind payload without populating irrelevant
+// Clarity-call fields. Dispatch on `kind` happens in one place —
+// executeSwapPayload (src/services/chains/executeSwap.ts) — which every
+// trade-execution call site goes through.
 export interface TransactionPayload {
+  kind?: "stacks" | "evm";
+  // Stacks
+  contractAddress?: string;
+  contractName?: string;
+  functionName?: string;
+  functionArgs?: any[];
+  postConditions?: any[];
+  // EVM — always a list of calls (single-call is a one-element array) so a
+  // provider can express multi-step operations (e.g. ERC-20 approve + swap)
+  // as one batched UserOperation.
+  calls?: { to: string; data: string; value?: string }[];
+}
+
+// Narrows a payload to its Stacks shape at the point of Stacks execution. All
+// Stacks DEXProvider implementations populate these fields, so this throws only
+// if a payload of the wrong kind reaches the Stacks branch — executeSwapPayload
+// catches it and surfaces it as a trade error rather than an exception.
+export function assertStacksPayload(payload: TransactionPayload): asserts payload is TransactionPayload & {
   contractAddress: string;
   contractName: string;
   functionName: string;
   functionArgs: any[];
   postConditions: any[];
+} {
+  if (
+    !payload.contractAddress ||
+    !payload.contractName ||
+    !payload.functionName ||
+    !payload.functionArgs ||
+    !payload.postConditions
+  ) {
+    throw new Error(
+      "Expected a Stacks-shaped TransactionPayload (contractAddress/contractName/functionName/functionArgs/postConditions)"
+    );
+  }
 }
 
 export interface AISentimentResult {

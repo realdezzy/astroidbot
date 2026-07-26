@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import { z } from "zod";
 import { logger, Logger } from "./utils/logger.js";
-import { LogLevel } from "./types.js";
 
 dotenv.config();
 
@@ -48,6 +47,9 @@ const envSchema = z.object({
   KMS_PROVIDER: z.enum(["aws", "gcp", "local"]).default("local"),
   KMS_KEY_ID: z.string().optional(),
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
+  BASE_NETWORK: z.enum(["mainnet", "sepolia"]).default("sepolia"),
+  BASE_RPC_URL: z.string().url().optional(),
+  PIMLICO_API_KEY: z.string().optional(),
   VELAR_PERP_CONTRACT_ADDRESS: z.string().default("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE"),
   VELAR_PERP_CONTRACT_NAME: z.string().default("velar-artha-perp"),
 });

@@ -13,6 +13,13 @@ export async function rateLimiter(ctx: Context, next: NextFunction): Promise<voi
 
   const count = await redis.incr(key);
 
+  // Set the window on the first hit only. Without this the key never expires,
+  // so a user who once reached MAX_COMMANDS stays rate-limited forever —
+  // WINDOW_SECONDS being flagged as unused is what surfaced it.
+  if (count === 1) {
+    await redis.expire(key, WINDOW_SECONDS);
+  }
+
   if (count > MAX_COMMANDS) {
     if (count === MAX_COMMANDS + 1) {
       await ctx.reply("⏳ Slow down — too many requests. Please wait a moment.");

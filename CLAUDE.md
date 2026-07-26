@@ -1,0 +1,59 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+AstroidBot is an AI-driven trading bot originally built for the Stacks blockchain, now expanding to a multi-chain platform (see `Docs/` and the phased roadmap referenced in git history for the full plan). It's exposed through three interfaces that all share the same backend: a Telegram bot (grammY), a REST/WebSocket API (Express v5), and a React web dashboard. It trades across multiple DEXs — Stacks (ALEX, Bitflow, Velar) and, optionally, Base via Uniswap V3 — through a common `DEXProvider` abstraction, holds user wallets via a chain-dispatched `ChainAdapter` abstraction (Stacks keys, or Base ERC-4337 smart accounts), and runs both deterministic strategies (grid, DCA, sniper, copy-trade, portfolio rebalance) and optional LLM-driven trading ("agents" in Off/Advisor/Autonomous mode).
+
+## Commands
+
+Scripts are in `package.json` (backend) and `web/package.json` (frontend). The backend serves `web/dist` statically when it exists.
+
+Docker (full stack: Postgres + Redis + bot): `docker compose up --build -d`. The container entrypoint (`docker-entrypoint.sh`) runs `npx prisma migrate deploy` on boot, so `prisma/migrations/` is checked in and **is** the deploy path — a schema change needs a migration committed alongside it (`npm run db:migrate` locally), not just an edited `schema.prisma`. This replaced an earlier `prisma db push` entrypoint, which refused any change it deemed risky (it blocked the `Wallet` composite-unique change and crash-looped the container under `set -e`). A database provisioned by that old push path already has the schema and must be baselined once before the first `migrate deploy`, or it will fail trying to re-create existing objects:
+
+```bash
+npx prisma migrate resolve --applied 20250620000000_init
+npx prisma migrate resolve --applied 20260726120000_multichain_wallets_and_catchup
+```
+
+## Architecture
+
+### Startup sequence
+`src/index.ts` → `bootstrap()` (`src/bootstrap.ts`) → `createServer()` (`src/api/server.ts`). `bootstrap()` does more than wire services: it also globally patches `tls.DEFAULT_CIPHERS`, `axios.defaults`, and `globalThis.fetch` to mimic a browser TLS/User-Agent fingerprint for *all* outbound HTTP in the process (worked around Cloudflare blocking on upstream APIs). Any new outbound HTTP client added anywhere in the codebase inherits this. Bootstrap registers the three Stacks DEX providers into `DEXRegistry` (`AlexDEXService`, `BitflowDEXService`, `VelarDEXService`) and the `StacksAdapter` into `ChainAdapterRegistry` unconditionally; Base support (`BaseAdapter`, `UniswapV3BaseProvider`) is registered only if `PIMLICO_API_KEY` is set — deployments without it are Stacks-only, unaffected.
+
+After `bootstrap()`, `index.ts` registers BullMQ workers (`QueueManager.registerWorker`) for the four queues in `QUEUES` (`src/services/queue.ts`): `trade-execution`, `trade-confirmation`, `strategy-cycle`, `notification`. There is no cron/repeatable-job library in use — scheduling is a single `setInterval` in `index.ts` calling `runCycle()` (`src/engine/cycleOrchestrator.ts`) every `POLL_INTERVAL_SECONDS`. That one global tick fans out to `StrategyEngine.runCycle()`, which enqueues one `strategy-cycle` job per active `(strategy, wallet)` pair (deterministic `jobId` for dedup) — this is the pattern to follow for any new periodic/background feature rather than introducing a separate scheduler.
+
+### Trade execution path — chain-dispatched
+`DEXRegistry` (`src/services/dex/dexRegistry.ts`) aggregates quotes/swap-payload building across providers implementing the `DEXProvider` interface (`src/types/dexProvider.ts`); `getBestQuote`/`getAllQuotes` take an optional `chainFamily` to scope candidates to `getProvidersForChain()` so a Base wallet's quotes never mix with Stacks providers'. Every trade-execution call site (`UserController.executeTrade`, `strategyEngine.executeApprovedActions`, `tradeWorker.processTradeJob`, `limitOrder.ts`) resolves the wallet's `chainFamily` and calls `executeSwapPayload()` (`src/services/chains/executeSwap.ts`) rather than `TransactionService` directly — that's the single dispatch point: a `payload.kind === "evm"` routes to `ChainAdapterRegistry.get(chainFamily).executeEvmCall()`, anything else (`kind` undefined/`"stacks"`) asserts the Stacks shape (`assertStacksPayload()`) and calls `TransactionService.execute()` exactly as before. Confirmation polling has the same split via `confirmSwap()` in the same file, used by `confirmWorker.ts` and `cycleOrchestrator.ts`'s pending-trade retry loop — both now fetch the trade's wallet to get its `chainFamily` first. `TransactionService` (`src/services/transaction.ts`) itself is unchanged: decrypts the wallet's private key via `KMSService` just-in-time, holds a Redis lock per wallet (`RedisService.acquireLock`) for the duration of signing/broadcast, builds Stacks post-conditions in `PostConditionMode.Deny` for on-chain slippage protection.
+
+`RiskManager` (`src/services/riskManager.ts`) enforces `maxPositionPct`/`dailyLossLimit`/slippage settings, and is wired into every trade-execution entrypoint — agents, strategies, `tradeWorker.ts`, and `UserController.executeTrade`. If you add a new trade-execution entrypoint, call `RiskManager.evaluateTrade`/`evaluateActions` before executing — don't reintroduce the gap.
+
+Chain-sensitive lookups on `DEXRegistry` all take an optional trailing `chainFamily` (`getBestQuote`/`getAllQuotes`/`getSwappableTokens`/`getTokenPrice`/`getCachedTokens`), routed through `getProvidersForChain()`. Omitting it keeps the pre-multi-chain "every provider" behavior, so pass it anywhere the result belongs to one wallet — unscoped, a symbol listed on two chains (e.g. `USDC`) resolves to whichever provider was registered first. Merged token lists are keyed by `chainFamily:symbol` and carry a `chainFamily` field, so same-ticker tokens on different chains stay distinct entries.
+
+Prices denominated per chain come from the adapter, not from constants: `ChainAdapter` exposes `nativeSymbol`/`nativeDecimals` (STX/6, ETH/18), `stableSymbol` (`USDCx` on Stacks, `USDC` on Base) and `chainId()` (`stacks:mainnet`, `base:sepolia`). `limitOrder.ts`'s price-trigger check uses `stableSymbol` — it previously hardcoded `"USDCx"`, which no Base provider can route, so every Base limit order read a current price of 0 and could only fire via `forceAfter`.
+
+### Chain abstraction & wallets
+`Wallet` (Prisma) has `chainFamily`/`chain` columns (default `"stacks"`/`"stacks:mainnet"` — existing rows unaffected). `ChainAdapter` (`src/types/chainAdapter.ts`) is the chain-dispatch contract, registered per chain family into `ChainAdapterRegistry` (`src/services/chains/chainAdapterRegistry.ts`, mirrors `DEXRegistry`'s shape). Two implementations exist: `StacksAdapter` (`src/services/chains/stacksAdapter.ts`, a thin delegate to `wallet.ts`/`TransactionService` — no behavior change from pre-multi-chain code) and `BaseAdapter` (`src/services/chains/evm/baseAdapter.ts`, ERC-4337 smart-account custody via Pimlico — see below). `executeContractCall`/`executeEvmCall` on `ChainAdapter` are both optional because "execute a trade" has no single shape across chains (Stacks contract call vs. EVM UserOperation) — new chain families implement whichever applies and add their own method if neither fits (e.g. Hyperliquid's signed off-chain orders would need a third). `TransactionPayload` (`src/types.ts`) carries either shape: Stacks fields (now optional, narrowed back via `assertStacksPayload()`) or an EVM `calls: {to,data,value}[]` batch (`kind: "evm"`).
+
+Wallets are created through the adapter, not through `wallet.ts` directly: `UserController.generateWallet`/`importWallet` accept an optional `chainFamily` in the request body (default `"stacks"`), reject a family that isn't registered on this deployment, and persist `chainFamily` + `adapter.chainId()` via `db.createWallet`. `db.findWalletByAddress(address, chainFamily?)` should be passed the family for duplicate checks, since the unique key is `[chainFamily, address]`.
+
+`src/utils/crypto.ts` does AES-256-GCM with HKDF-derived keys from `AES_KEY`, chain-agnostic (encrypts any private key string) — reused unchanged for Base. `decrypt()` has a silent fallback to a legacy pre-HKDF derivation for old ciphertexts. `KMSService` (`src/services/kms.ts`) is the only caller of encrypt/decrypt for wallet keys. For Base wallets, the encrypted key is the Safe smart account's *owner* EOA key, not the traded-from address — `Wallet.address` is the Safe's counterfactual address (deterministic from the owner key + factory + Safe version, computed via `permissionless`'s `toSafeSmartAccount`, no on-chain tx needed until first use).
+
+### Base (EVM) support — opt-in, Pimlico-backed
+Only active if `PIMLICO_API_KEY` is set (`src/config.ts`); network selected via `BASE_NETWORK` (`mainnet`/`sepolia`, default `sepolia`). Uses `permissionless` + `viem` for ERC-4337: `BaseAdapter` builds a Safe smart account per wallet, submits transactions as UserOperations through Pimlico's bundler+paymaster (gas-sponsored), and supports batched calls in one UserOperation (`executeEvmCall({ calls: [...] })`) — needed because an ERC-20 swap is really "approve + swap." `UniswapV3BaseProvider` (`src/services/dex/providers/uniswapV3Base.ts`) is the first EVM `DEXProvider`: quotes via QuoterV2 (`quoteExactInputSingle`, tried across the three standard fee tiers), swap payloads via SwapRouter02 (`exactInputSingle`), with a curated static token list (WETH/USDC/DAI) rather than live discovery. Only ERC-20-to-ERC-20 swaps are supported — no native ETH wrap/unwrap handling yet, trade WETH directly instead.
+
+### Strategies & agents
+Strategy types live under `src/services/strategy/` (rebalance, grid/market-maker, DCA, sniper, copy-trade) and are attached to a `TradeAgent` (Prisma model) with an AI mode: **Off** (strategies only), **Advisor** (AI analyzes and logs `AIRecommendation` but doesn't trade), **Autonomous** (AI executes its own trades). See `Docs/agents.md` for the user-facing behavior spec. `AIOrchestrator` (`src/services/ai.ts`) is the natural-language entry point (used by `/api/ai/command`, `/api/ai/voice`, and Telegram free-text) and is provider-agnostic over OpenAI/Google Gemini/DeepSeek via `AI_PROVIDER`.
+
+### Notifications & real-time updates
+`NotificationService.send({ userId, title, message, type })` (`src/services/notificationService.ts`) is the single fan-out point: it persists to the `Notification` table, pushes over WebSocket (`WebSocketManager.broadcastToUser`), and sends a Telegram alert if the user has Telegram linked — one call covers all three surfaces. `WebSocketManager` (`src/api/websocket.ts`) authenticates connections via a JWT query param and exposes typed broadcast helpers (`broadcastTradeEvent`, `broadcastCycleComplete`, etc.) — add new typed helpers here rather than broadcasting raw payloads.
+
+### Config
+`ConfigManager` (`src/config.ts`) is a zod-validated singleton over `process.env`. Call `ConfigManager.load()` once at startup (already done in `bootstrap()`); everywhere else use `ConfigManager.getInstance()`. Adding a new env var means adding it to `envSchema` first — accessing it via `.config.FOO` won't typecheck otherwise.
+
+### Multi-interface auth
+Telegram login and email/password login both terminate in the same JWT (`src/api/middleware/auth.ts`, `authController.ts`) — `req.userId` is the common key every controller/service keys off of, regardless of which interface (Telegram, web, REST) originated the request. Refresh tokens are hashed at rest with rotation + reuse detection (reuse revokes all sessions for that user).
+
+### Path alias
+`@shared/*` (tsconfig `paths`) maps to `shared/` — types and validation logic meant to be usable from both `src/` and potentially the frontend live there.

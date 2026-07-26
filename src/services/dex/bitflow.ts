@@ -1,6 +1,4 @@
 import { BitflowSDK } from "@bitflowlabs/core-sdk";
-import type { Token as BitflowToken, SelectedSwapRoute, QuoteResult as BitflowQuoteResult } from "@bitflowlabs/core-sdk";
-import { ConfigManager } from "../../config.js";
 import { logger } from "../../utils/logger.js";
 import type { SwappableToken, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote, TradingPair } from "../../types/dexProvider.js";

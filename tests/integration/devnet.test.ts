@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { TransactionService } from "../../src/services/transaction.js";
 import { ConfigManager } from "../../src/config.js";
-import { DatabaseService } from "../../src/services/db.js";
-import { RedisService } from "../../src/services/redis.js";
-import { KMSService } from "../../src/services/kms.js";
 import { Cl } from "@stacks/transactions";
 
 // Mock Database, Redis, and KMS to run without needing real databases configured
@@ -100,7 +97,7 @@ describe("TransactionService Devnet Integration Test", () => {
         throw new Error("Devnet node returned non-OK status");
       }
       console.log("Local Devnet is online! Proceeding with transaction broadcast...");
-    } catch (err) {
+    } catch {
       console.warn("Devnet node is NOT running locally. Skipping live broadcast validation.");
       // Skip the test gracefully since devnet isn't running in CI/offline test environment
       return;

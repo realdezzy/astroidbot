@@ -31,14 +31,24 @@ export class DEXRegistry {
     return this.providers.find((p) => p.name.toUpperCase() === name.toUpperCase());
   }
 
+  // Scopes providers to one chain family so quoting, pricing and token listing
+  // never mix chains (a Base wallet must not be quoted by a Stacks DEX). Every
+  // aggregate method below takes an optional chainFamily that routes through
+  // here; omitting it keeps the pre-multi-chain "all providers" behavior.
+  getProvidersForChain(chainFamily: string): DEXProvider[] {
+    return this.providers.filter((p) => (p.chainFamily ?? "stacks") === chainFamily);
+  }
+
   async getBestQuote(
     tokenIn: string,
     tokenOut: string,
-    amountIn: number
+    amountIn: number,
+    chainFamily?: string
   ): Promise<{ providerName: string; quote: DEXQuote } | null> {
     let best: { providerName: string; quote: DEXQuote } | null = null;
+    const candidates = chainFamily ? this.getProvidersForChain(chainFamily) : this.providers;
 
-    for (const provider of this.providers) {
+    for (const provider of candidates) {
       try {
         const hasRoute = await provider.hasRoute(tokenIn, tokenOut);
         if (!hasRoute) continue;
@@ -77,12 +87,14 @@ export class DEXRegistry {
   async getAllQuotes(
     tokenIn: string,
     tokenOut: string,
-    amountIn: number
+    amountIn: number,
+    chainFamily?: string
   ): Promise<Array<{ providerName: string; quote: DEXQuote; isBest: boolean }>> {
     const quotes: Array<{ providerName: string; quote: DEXQuote; isBest: boolean }> = [];
-    const best = await this.getBestQuote(tokenIn, tokenOut, amountIn);
+    const best = await this.getBestQuote(tokenIn, tokenOut, amountIn, chainFamily);
+    const candidates = chainFamily ? this.getProvidersForChain(chainFamily) : this.providers;
 
-    for (const provider of this.providers) {
+    for (const provider of candidates) {
       try {
         const hasRoute = await provider.hasRoute(tokenIn, tokenOut);
         if (!hasRoute) continue;
@@ -104,13 +116,18 @@ export class DEXRegistry {
     return quotes.sort((a, b) => (a.isBest ? -1 : b.isBest ? 1 : b.quote.amountOut - a.quote.amountOut));
   }
 
-  async getSwappableTokens(): Promise<SwappableToken[]> {
+  async getSwappableTokens(refresh = false, chainFamily?: string): Promise<SwappableToken[]> {
     const tokensMap = new Map<string, SwappableToken>();
-    for (const provider of this.providers) {
+    const candidates = chainFamily ? this.getProvidersForChain(chainFamily) : this.providers;
+    for (const provider of candidates) {
+      const family = provider.chainFamily ?? "stacks";
       try {
-        const tokens = await provider.getSwappableTokens();
+        const tokens = await provider.getSwappableTokens(refresh);
         for (const t of tokens) {
-          const key = t.symbol.toUpperCase();
+          // Keyed by chain family as well as symbol: "USDC" on Base and "USDC"
+          // on Stacks are different assets with different contractIds, and
+          // merging them would hand callers the wrong chain's contract.
+          const key = `${family}:${t.symbol.toUpperCase()}`;
           const existing = tokensMap.get(key);
           if (existing) {
             existing.supportedBy = existing.supportedBy || [];
@@ -127,6 +144,7 @@ export class DEXRegistry {
           } else {
             tokensMap.set(key, {
               ...t,
+              chainFamily: family,
               supportedBy: [provider.name],
             });
           }
@@ -138,8 +156,13 @@ export class DEXRegistry {
     return Array.from(tokensMap.values());
   }
 
-  async getTokenPrice(symbol: string): Promise<number> {
-    for (const provider of this.providers) {
+  // Returns the first provider with a nonzero price. Pass chainFamily whenever
+  // the price is for a specific wallet's holdings — unscoped, a symbol listed
+  // on more than one chain resolves to whichever provider was registered first,
+  // which is not necessarily the chain the caller is asking about.
+  async getTokenPrice(symbol: string, chainFamily?: string): Promise<number> {
+    const candidates = chainFamily ? this.getProvidersForChain(chainFamily) : this.providers;
+    for (const provider of candidates) {
       try {
         const price = await provider.getTokenPrice(symbol);
         if (price > 0) return price;
@@ -152,12 +175,14 @@ export class DEXRegistry {
    * Returns the union of synchronously cached tokens across all providers.
    * Use for UI token pickers that need instant response without a network call.
    */
-  getCachedTokens(): SwappableToken[] {
+  getCachedTokens(chainFamily?: string): SwappableToken[] {
     const seen = new Map<string, SwappableToken>();
-    for (const provider of this.providers) {
+    const candidates = chainFamily ? this.getProvidersForChain(chainFamily) : this.providers;
+    for (const provider of candidates) {
+      const family = provider.chainFamily ?? "stacks";
       if (provider.getCachedTokens) {
         for (const t of provider.getCachedTokens()) {
-          const key = t.symbol.toUpperCase();
+          const key = `${family}:${t.symbol.toUpperCase()}`;
           const existing = seen.get(key);
           if (existing) {
             existing.supportedBy = existing.supportedBy || [];
@@ -174,6 +199,7 @@ export class DEXRegistry {
           } else {
             seen.set(key, {
               ...t,
+              chainFamily: family,
               supportedBy: [provider.name],
             });
           }

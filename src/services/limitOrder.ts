@@ -2,10 +2,11 @@ import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { PortfolioManager } from "./portfolio.js";
-import { TransactionService } from "./transaction.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { NotificationService } from "./notificationService.js";
 import type { SwappableToken } from "../types.js";
+import { executeSwapPayload } from "./chains/executeSwap.js";
+import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
 
 export class LimitOrderService {
   private static instance: LimitOrderService;
@@ -34,10 +35,10 @@ export class LimitOrderService {
     const db = DatabaseService.getInstance();
     const registry = DEXRegistry.getInstance();
 
-    const tokens = await registry.getSwappableTokens();
     const wallet = await db.findWalletById(data.walletId);
     if (!wallet) throw new Error(`Wallet ${data.walletId} not found`);
 
+    const tokens = await registry.getSwappableTokens(false, wallet.chainFamily ?? "stacks");
     const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, data.userId);
     const tokenBalanceObj = balances.find(b =>
       b.symbol.toUpperCase() === data.tokenIn.toUpperCase() || b.token === data.tokenIn
@@ -133,12 +134,11 @@ export class LimitOrderService {
   }
 
   async checkAndExecute(
-    activeWallets: Array<{ id: number; userId: number; address: string }>,
-    tokens: SwappableToken[]
+    activeWallets: Array<{ id: number; userId: number; address: string; chainFamily?: string }>,
+    _tokens: SwappableToken[]
   ): Promise<{ executed: number }> {
     const db = DatabaseService.getInstance();
     const registry = DEXRegistry.getInstance();
-    const txService = TransactionService.getInstance();
     const wss = WebSocketManager.getInstance();
 
     const activeOrders = await db.prisma.limitOrder.findMany({
@@ -152,12 +152,29 @@ export class LimitOrderService {
       const wallet = activeWallets.find((w) => w.id === order.walletId);
       if (!wallet) continue;
 
-      try {
-        const targetToken = order.direction === "BUY" ? order.tokenOut : order.tokenIn;
+      const chainFamily = wallet.chainFamily ?? "stacks";
 
-        // Use DEXRegistry to get current price via a 1-unit quote
-        const priceQuote = await registry.getBestQuote(order.tokenIn, "USDCx", 1).catch(() => null);
-        const currentPrice = priceQuote?.quote.amountOut ?? 0;
+      try {
+        // targetPrice is denominated in the wallet's chain's USD stablecoin —
+        // "USDCx" on Stacks, "USDC" on Base. Previously hardcoded to the Stacks
+        // symbol, which no Base provider can route, so every Base order read a
+        // current price of 0 and could only ever fire via forceAfter.
+        const adapters = ChainAdapterRegistry.getInstance();
+        const stableSymbol = adapters.has(chainFamily)
+          ? adapters.get(chainFamily).stableSymbol
+          : "USDCx";
+
+        // Current price via a 1-unit quote. A stablecoin prices at 1 against
+        // itself; quoting it against itself has no route.
+        let currentPrice: number;
+        if (order.tokenIn.toUpperCase() === stableSymbol.toUpperCase()) {
+          currentPrice = 1;
+        } else {
+          const priceQuote = await registry
+            .getBestQuote(order.tokenIn, stableSymbol, 1, chainFamily)
+            .catch(() => null);
+          currentPrice = priceQuote?.quote.amountOut ?? 0;
+        }
 
         let shouldExecute = false;
         let reason = "";
@@ -184,7 +201,7 @@ export class LimitOrderService {
         if (!shouldExecute) continue;
 
         try {
-          const bestQuoteResult = await registry.getBestQuote(order.tokenIn, order.tokenOut, order.amountIn);
+          const bestQuoteResult = await registry.getBestQuote(order.tokenIn, order.tokenOut, order.amountIn, chainFamily);
           if (!bestQuoteResult) {
             throw new Error("No route found for limit order");
           }
@@ -207,24 +224,20 @@ export class LimitOrderService {
           const settings = await db.findTradeSettings(order.userId, "personal");
           const useGasless = settings?.useGasless ?? false;
 
-          const result = await txService.execute(
-            {
+          const result = await executeSwapPayload(payload, {
+            action: {
               tokenIn: order.tokenIn,
               tokenOut: order.tokenOut,
               amountIn: order.amountIn,
               direction: order.direction as "BUY" | "SELL",
               reason,
             },
-            payload.contractAddress,
-            payload.contractName,
-            payload.functionName,
-            payload.functionArgs,
-            wallet.id,
-            wallet.address,
-            est.amountOut,
+            walletId: wallet.id,
+            senderAddress: wallet.address,
+            maxOutbound: est.amountOut,
             useGasless,
-            payload.postConditions
-          );
+            chainFamily,
+          });
 
           if ("txId" in result) {
             const trade = await db.createTrade({

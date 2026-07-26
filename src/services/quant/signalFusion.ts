@@ -1,6 +1,5 @@
 import type { Features } from "./featureEngine.js";
 import type { SignalForecast } from "../../types/market.js";
-import { logger } from "../../utils/logger.js";
 
 export class SignalFusionService {
   private static instance: SignalFusionService;
