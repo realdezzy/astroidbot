@@ -28,6 +28,11 @@ const mockPmInstance = {
 };
 
 const stacksAdapter = {
+  descriptor: {
+    chainId: "stacks:mainnet", family: "stacks", displayName: "Stacks",
+    nativeSymbol: "STX", nativeDecimals: 6, stableSymbol: "USDCx",
+    isTestnet: false, tradable: true,
+  },
   chainFamily: "stacks",
   nativeSymbol: "STX",
   nativeDecimals: 6,
@@ -38,6 +43,11 @@ const stacksAdapter = {
 };
 
 const evmAdapter = {
+  descriptor: {
+    chainId: "base:sepolia", family: "evm", displayName: "Base Sepolia",
+    nativeSymbol: "ETH", nativeDecimals: 18, stableSymbol: "USDC",
+    isTestnet: true, tradable: true,
+  },
   chainFamily: "evm",
   nativeSymbol: "ETH",
   nativeDecimals: 18,
@@ -64,12 +74,13 @@ vi.mock("../../../src/services/portfolio.js", () => ({
 vi.mock("../../../src/services/chains/chainAdapterRegistry.js", () => ({
   ChainAdapterRegistry: {
     getInstance: () => ({
-      has: (family: string) => registeredAdapters.has(family),
-      get: (family: string) => {
-        const a = registeredAdapters.get(family);
-        if (!a) throw new Error(`No chain adapter registered for chainFamily "${family}"`);
+      has: (chainId: string) => registeredAdapters.has(chainId),
+      get: (chainId: string) => {
+        const a = registeredAdapters.get(chainId);
+        if (!a) throw new Error(`No chain adapter registered for "${chainId}"`);
         return a;
       },
+      list: () => [...registeredAdapters.values()].map((a) => (a as { descriptor: unknown }).descriptor),
     }),
   },
 }));
@@ -123,7 +134,7 @@ describe("Wallet provisioning across chain families", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     registeredAdapters.clear();
-    registeredAdapters.set("stacks", stacksAdapter);
+    registeredAdapters.set("stacks:mainnet", stacksAdapter);
     mockDbInstance.findWalletsByUserId.mockResolvedValue([]);
     mockDbInstance.findWalletByAddress.mockResolvedValue(null);
     mockRegistryInstance.getSwappableTokens.mockResolvedValue([]);
@@ -131,7 +142,7 @@ describe("Wallet provisioning across chain families", () => {
     mockPmInstance.fetchBalances.mockResolvedValue([]);
   });
 
-  it("defaults to a stacks wallet when no chainFamily is given", async () => {
+  it("defaults to a stacks wallet when no chain is given", async () => {
     stacksAdapter.generateWalletKeypair.mockResolvedValue({
       privateKeyHex: "a".repeat(64),
       address: "SP123",
@@ -153,7 +164,7 @@ describe("Wallet provisioning across chain families", () => {
   });
 
   it("generates an EVM wallet through the evm adapter when Base is enabled", async () => {
-    registeredAdapters.set("evm", evmAdapter);
+    registeredAdapters.set("base:sepolia", evmAdapter);
     evmAdapter.generateWalletKeypair.mockResolvedValue({
       privateKeyHex: "0x" + "b".repeat(64),
       address: "0x1111111111111111111111111111111111111111",
@@ -165,7 +176,7 @@ describe("Wallet provisioning across chain families", () => {
     const res = await request(server)
       .post("/api/me/wallets/generate")
       .set("Authorization", `Bearer ${token}`)
-      .send({ chainFamily: "evm" });
+      .send({ chainId: "base:sepolia" });
 
     expect(res.status).toBe(201);
     expect(evmAdapter.generateWalletKeypair).toHaveBeenCalled();
@@ -181,18 +192,18 @@ describe("Wallet provisioning across chain families", () => {
   });
 
   it("rejects a chain the deployment has not enabled instead of silently using stacks", async () => {
-    // No PIMLICO_API_KEY means bootstrap never registers the evm adapter.
+    // base:sepolia is absent from ENABLED_CHAINS, so no adapter is registered.
     const res = await request(server)
       .post("/api/me/wallets/generate")
       .set("Authorization", `Bearer ${token}`)
-      .send({ chainFamily: "evm" });
+      .send({ chainId: "base:sepolia" });
 
     expect(res.status).toBe(422);
     expect(mockDbInstance.createWallet).not.toHaveBeenCalled();
   });
 
   it("scopes the import duplicate check to the wallet's own chain family", async () => {
-    registeredAdapters.set("evm", evmAdapter);
+    registeredAdapters.set("base:sepolia", evmAdapter);
     evmAdapter.deriveAddressFromPrivateKey.mockResolvedValue(
       "0x2222222222222222222222222222222222222222"
     );
@@ -203,7 +214,7 @@ describe("Wallet provisioning across chain families", () => {
     const res = await request(server)
       .post("/api/me/wallets/import")
       .set("Authorization", `Bearer ${token}`)
-      .send({ privateKey: "0x" + "c".repeat(64), chainFamily: "evm" });
+      .send({ privateKey: "0x" + "c".repeat(64), chainId: "base:sepolia" });
 
     expect(res.status).toBe(201);
     expect(mockDbInstance.findWalletByAddress).toHaveBeenCalledWith(
@@ -213,16 +224,16 @@ describe("Wallet provisioning across chain families", () => {
   });
 
   it("reports an invalid key against the chain that rejected it", async () => {
-    registeredAdapters.set("evm", evmAdapter);
+    registeredAdapters.set("base:sepolia", evmAdapter);
     evmAdapter.deriveAddressFromPrivateKey.mockRejectedValue(new Error("invalid private key"));
 
     const res = await request(server)
       .post("/api/me/wallets/import")
       .set("Authorization", `Bearer ${token}`)
-      .send({ privateKey: "0x" + "d".repeat(64), chainFamily: "evm" });
+      .send({ privateKey: "0x" + "d".repeat(64), chainId: "base:sepolia" });
 
     expect(res.status).toBe(422);
-    expect(JSON.stringify(res.body)).toContain("evm");
+    expect(JSON.stringify(res.body)).toContain("Base Sepolia");
     expect(mockDbInstance.createWallet).not.toHaveBeenCalled();
   });
 });

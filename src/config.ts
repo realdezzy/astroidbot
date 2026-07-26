@@ -50,6 +50,16 @@ const envSchema = z.object({
   BASE_NETWORK: z.enum(["mainnet", "sepolia"]).default("sepolia"),
   BASE_RPC_URL: z.string().url().optional(),
   PIMLICO_API_KEY: z.string().optional(),
+  // Comma-separated ChainIds this deployment transacts on, e.g.
+  // "stacks:mainnet,base:mainnet,solana:mainnet". The default keeps existing
+  // deployments byte-for-byte identical: Stacks only. A chain named here that
+  // isn't in the descriptor catalogue (or lacks its required credentials) is a
+  // startup failure, never a silent skip.
+  ENABLED_CHAINS: z.string().default("stacks:mainnet"),
+  // JSON array of EvmChainSpec for networks not in the built-in catalogue —
+  // the supported path for chains like ARC or Robinhood Chain whose router
+  // deployments we can't pin from here. See descriptors/defineEvmChain.ts.
+  CUSTOM_EVM_CHAINS: z.string().default(""),
   VELAR_PERP_CONTRACT_ADDRESS: z.string().default("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE"),
   VELAR_PERP_CONTRACT_NAME: z.string().default("velar-artha-perp"),
 });
@@ -103,6 +113,16 @@ export class ConfigManager {
       throw new Error("ConfigManager not initialized. Call ConfigManager.load() first.");
     }
     return ConfigManager.instance;
+  }
+
+  /**
+   * Test-only: drop the cached config so the next load() re-reads process.env.
+   * load() is deliberately idempotent in production — config must not change
+   * under a running process — which leaves tests unable to exercise more than
+   * one environment without this seam.
+   */
+  static reset(): void {
+    ConfigManager.instance = undefined as unknown as ConfigManager;
   }
 
   get allowedTokens(): string[] {

@@ -22,6 +22,7 @@ import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/user.js";
 import botRoutes from "./routes/bot.js";
 import tokenRoutes from "./routes/tokens.js";
+import chainRoutes from "./routes/chains.js";
 import limitOrderRoutes from "./routes/limitOrders.js";
 import strategiesRoutes from "./routes/strategies.js";
 import agentsRoutes from "./routes/agents.js";
@@ -245,6 +246,7 @@ export function createServer(): HttpServer {
   });
   app.use("/api/bot", botRoutes);
   app.use("/api", tokenRoutes);
+  app.use("/api", chainRoutes);
 
   const webDistPath = path.resolve(__dirname, "../../web/dist");
   if (fs.existsSync(webDistPath)) {

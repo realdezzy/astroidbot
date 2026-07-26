@@ -1,4 +1,5 @@
 import type { RebalanceAction } from "../types.js";
+import type { ChainDescriptor, ChainFamily } from "./chain.js";
 
 /**
  * Chain-dispatch contract. Mirrors TransactionService's existing Stacks-specific
@@ -15,7 +16,16 @@ import type { RebalanceAction } from "../types.js";
  * applies to it; callers branch on chainFamily to know which to call.
  */
 export interface ChainAdapter {
-  readonly chainFamily: string;
+  // Everything chain-specific that is data rather than behaviour: network id,
+  // native/stable symbols, explorer URLs, per-family config. Adapters read
+  // their constants from here instead of declaring their own, so adding a
+  // chain is a descriptor file rather than a class.
+  readonly descriptor: ChainDescriptor;
+
+  // Execution shape — which of the optional execute* methods below applies.
+  // Several chains share a family; it is NOT a unique key. Use
+  // descriptor.chainId to identify a network.
+  readonly chainFamily: ChainFamily;
 
   // Ticker of the chain's gas/native asset ("STX", "ETH"). Wallet.balance
   // stores this asset's balance, so wallet-listing code needs it to know which
@@ -31,10 +41,8 @@ export interface ChainAdapter {
   // this, so it must be a symbol the chain's DEX providers can actually route.
   readonly stableSymbol: string;
 
-  // Concrete network identifier persisted to Wallet.chain — "stacks:mainnet",
-  // "base:sepolia". chainFamily says which adapter handles the wallet; this
-  // says which network within that family it lives on, and is resolved from
-  // config at call time so it reflects the deployment's current network.
+  // Concrete network identifier, equal to descriptor.chainId. Retained as a
+  // method for the call sites that already use it.
   chainId(): string;
 
   generateWalletKeypair(): Promise<{ privateKeyHex: string; address: string }>;

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { ConfigManager } from "../../../src/config.js";
+import type { ChainAdapter } from "../../../src/types/chainAdapter.js";
 
 const mockTxService = {
   execute: vi.fn(),
@@ -10,7 +11,23 @@ vi.mock("../../../src/services/transaction.js", () => ({
   TransactionService: { getInstance: () => mockTxService },
 }));
 
+// Adapters now carry a descriptor: the registry keys on descriptor.chainId,
+// so a mock without one is not a valid adapter.
+const baseDescriptor = {
+  chainId: "base:mainnet",
+  family: "evm",
+  displayName: "Base",
+  nativeSymbol: "ETH",
+  nativeDecimals: 18,
+  stableSymbol: "USDC",
+  isTestnet: false,
+  tradable: true,
+  explorerTxUrl: (t: string) => t,
+  explorerAddressUrl: (a: string) => a,
+};
+
 const mockEvmAdapter = {
+  descriptor: baseDescriptor,
   chainFamily: "evm",
   executeEvmCall: vi.fn(),
   confirmTransaction: vi.fn(),
@@ -37,8 +54,8 @@ describe("executeSwap dispatch Unit Tests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Re-register a fresh mock EVM adapter each test since the registry is a singleton.
-    (ChainAdapterRegistry.getInstance() as any).adapters = new Map();
-    ChainAdapterRegistry.getInstance().register(mockEvmAdapter as any);
+    ChainAdapterRegistry.getInstance().reset();
+    ChainAdapterRegistry.getInstance().register(mockEvmAdapter as unknown as ChainAdapter);
   });
 
   it("dispatches a Stacks-kind payload (no `kind`) to TransactionService.execute", async () => {
@@ -70,7 +87,7 @@ describe("executeSwap dispatch Unit Tests", () => {
           { to: "0xRouter", data: "0xswap", value: "1000000000000000000" },
         ],
       },
-      { action, walletId: 2, senderAddress: "0xSafeAddr", maxOutbound: 9.9, chainFamily: "evm" }
+      { action, walletId: 2, senderAddress: "0xSafeAddr", maxOutbound: 9.9, chainId: "base:mainnet" }
     );
 
     expect(result).toEqual({ txId: "0xevm" });
@@ -88,7 +105,7 @@ describe("executeSwap dispatch Unit Tests", () => {
   it("returns an error for an evm-kind payload with no calls, without throwing", async () => {
     const result = await executeSwapPayload(
       { kind: "evm", calls: [] },
-      { action, walletId: 2, senderAddress: "0xSafeAddr", maxOutbound: 9.9, chainFamily: "evm" }
+      { action, walletId: 2, senderAddress: "0xSafeAddr", maxOutbound: 9.9, chainId: "base:mainnet" }
     );
     expect(result).toEqual({ error: "EVM swap payload is missing calls" });
   });
@@ -100,11 +117,31 @@ describe("executeSwap dispatch Unit Tests", () => {
     expect(mockTxService.confirmTransaction).toHaveBeenCalledWith("0xabc", 5, false);
   });
 
-  it("confirmSwap routes any other chainFamily to that adapter's confirmTransaction", async () => {
+  it("confirmSwap routes a chainId to that adapter's confirmTransaction", async () => {
     mockEvmAdapter.confirmTransaction.mockResolvedValue("pending");
-    const state = await confirmSwap("0xdef", 6, "evm");
+    const state = await confirmSwap("0xdef", 6, "base:mainnet");
     expect(state).toBe("pending");
     expect(mockEvmAdapter.confirmTransaction).toHaveBeenCalledWith("0xdef", 6, false);
     expect(mockTxService.confirmTransaction).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a bare chainFamily, resolving it to that family's default network", async () => {
+    // Callers written before multi-EVM pass "evm"; it must keep working and
+    // land on base:mainnet rather than silently failing to find an adapter.
+    mockEvmAdapter.confirmTransaction.mockResolvedValue("confirmed");
+    const state = await confirmSwap("0xlegacy", 7, "evm");
+    expect(state).toBe("confirmed");
+    expect(mockEvmAdapter.confirmTransaction).toHaveBeenCalledWith("0xlegacy", 7, false);
+  });
+
+  it("reports the wallet's own chain when that chain is not enabled, rather than substituting a default", async () => {
+    // Executing a Celo wallet's trade on Base because Celo was disabled would
+    // move real funds on the wrong network. It must fail, naming the chain.
+    const result = await executeSwapPayload(
+      { kind: "evm", calls: [{ to: "0xRouter", data: "0xswap" }] },
+      { action, walletId: 3, senderAddress: "0xAddr", maxOutbound: 1, chainId: "celo:mainnet" }
+    );
+    expect(result).toEqual({ error: 'No chain adapter registered for "celo:mainnet"' });
+    expect(mockEvmAdapter.executeEvmCall).not.toHaveBeenCalled();
   });
 });

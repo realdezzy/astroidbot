@@ -6,7 +6,7 @@ import { WebSocketManager } from "../api/websocket.js";
 import { NotificationService } from "./notificationService.js";
 import type { SwappableToken } from "../types.js";
 import { executeSwapPayload } from "./chains/executeSwap.js";
-import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
+import { walletChainId, walletStableSymbol } from "./chains/walletChain.js";
 
 export class LimitOrderService {
   private static instance: LimitOrderService;
@@ -38,7 +38,7 @@ export class LimitOrderService {
     const wallet = await db.findWalletById(data.walletId);
     if (!wallet) throw new Error(`Wallet ${data.walletId} not found`);
 
-    const tokens = await registry.getSwappableTokens(false, wallet.chainFamily ?? "stacks");
+    const tokens = await registry.getSwappableTokens(false, walletChainId(wallet));
     const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, data.userId);
     const tokenBalanceObj = balances.find(b =>
       b.symbol.toUpperCase() === data.tokenIn.toUpperCase() || b.token === data.tokenIn
@@ -134,7 +134,7 @@ export class LimitOrderService {
   }
 
   async checkAndExecute(
-    activeWallets: Array<{ id: number; userId: number; address: string; chainFamily?: string }>,
+    activeWallets: Array<{ id: number; userId: number; address: string; chainFamily?: string; chain?: string }>,
     _tokens: SwappableToken[]
   ): Promise<{ executed: number }> {
     const db = DatabaseService.getInstance();
@@ -152,17 +152,14 @@ export class LimitOrderService {
       const wallet = activeWallets.find((w) => w.id === order.walletId);
       if (!wallet) continue;
 
-      const chainFamily = wallet.chainFamily ?? "stacks";
+      const chainId = walletChainId(wallet);
 
       try {
         // targetPrice is denominated in the wallet's chain's USD stablecoin —
         // "USDCx" on Stacks, "USDC" on Base. Previously hardcoded to the Stacks
         // symbol, which no Base provider can route, so every Base order read a
         // current price of 0 and could only ever fire via forceAfter.
-        const adapters = ChainAdapterRegistry.getInstance();
-        const stableSymbol = adapters.has(chainFamily)
-          ? adapters.get(chainFamily).stableSymbol
-          : "USDCx";
+        const stableSymbol = walletStableSymbol(wallet);
 
         // Current price via a 1-unit quote. A stablecoin prices at 1 against
         // itself; quoting it against itself has no route.
@@ -171,7 +168,7 @@ export class LimitOrderService {
           currentPrice = 1;
         } else {
           const priceQuote = await registry
-            .getBestQuote(order.tokenIn, stableSymbol, 1, chainFamily)
+            .getBestQuote(order.tokenIn, stableSymbol, 1, chainId)
             .catch(() => null);
           currentPrice = priceQuote?.quote.amountOut ?? 0;
         }
@@ -201,7 +198,7 @@ export class LimitOrderService {
         if (!shouldExecute) continue;
 
         try {
-          const bestQuoteResult = await registry.getBestQuote(order.tokenIn, order.tokenOut, order.amountIn, chainFamily);
+          const bestQuoteResult = await registry.getBestQuote(order.tokenIn, order.tokenOut, order.amountIn, chainId);
           if (!bestQuoteResult) {
             throw new Error("No route found for limit order");
           }
@@ -236,7 +233,7 @@ export class LimitOrderService {
             senderAddress: wallet.address,
             maxOutbound: est.amountOut,
             useGasless,
-            chainFamily,
+            chainId,
           });
 
           if ("txId" in result) {

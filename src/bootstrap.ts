@@ -9,10 +9,7 @@ import { AlexDEXService } from "./services/dex/alex.js";
 import { BitflowDEXService } from "./services/dex/bitflow.js";
 import { VelarDEXService } from "./services/dex/velar.js";
 import { DEXRegistry } from "./services/dex/dexRegistry.js";
-import { ChainAdapterRegistry } from "./services/chains/chainAdapterRegistry.js";
-import { StacksAdapter } from "./services/chains/stacksAdapter.js";
-import { BaseAdapter } from "./services/chains/evm/baseAdapter.js";
-import { UniswapV3BaseProvider } from "./services/dex/providers/uniswapV3Base.js";
+import { registerEnabledChains } from "./services/chains/registerChains.js";
 import { TelegramService } from "./services/telegram.js";
 import { createServer } from "./api/server.js";
 import { BotStatus } from "./types.js";
@@ -111,17 +108,12 @@ export async function bootstrap(): Promise<Server> {
   registry.registerProvider(alex);
   registry.registerProvider(velar);
 
-  ChainAdapterRegistry.getInstance().register(new StacksAdapter());
-
-  // Base (EVM, ERC-4337 via Pimlico) is opt-in — only registered once an
-  // operator configures a Pimlico API key, so deployments without it are
-  // completely unaffected (identical to how VelumX gasless relay is gated
-  // on its own config below).
-  if (ConfigManager.getInstance().config.PIMLICO_API_KEY) {
-    ChainAdapterRegistry.getInstance().register(new BaseAdapter());
-    registry.registerProvider(UniswapV3BaseProvider.initialize());
-    logger.info("Base (EVM) chain support enabled via Pimlico");
-  }
+  // Chain adapters and their DEX providers come from ENABLED_CHAINS — one
+  // list, one registration path, whatever the family. Defaults to
+  // "stacks:mainnet", so a deployment that sets nothing is Stacks-only exactly
+  // as before. Misconfiguration throws here rather than surfacing later as a
+  // chain that mysteriously isn't enabled.
+  registerEnabledChains();
 
   const httpServer = createServer();
 

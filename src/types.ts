@@ -7,6 +7,10 @@ export interface SwappableToken {
   // Stamped by DEXRegistry when merging provider token lists. Absent means
   // "stacks" — tokens from providers written before multi-chain support.
   chainFamily?: string;
+  // Concrete network the token lives on ("base:mainnet"). Two chains in the
+  // same family can both list "USDC" at different addresses, so this is what
+  // actually disambiguates a token; chainFamily alone does not.
+  chainId?: string;
 }
 
 export interface PortfolioTarget {

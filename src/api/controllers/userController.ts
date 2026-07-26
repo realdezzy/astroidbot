@@ -8,6 +8,8 @@ import { PortfolioManager } from "../../services/portfolio.js";
 import { KMSService } from "../../services/kms.js";
 import { RiskManager } from "../../services/riskManager.js";
 import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
+import { walletChainId, walletDescriptor, groupByChainId } from "../../services/chains/walletChain.js";
+import { resolveChainId } from "../../services/chains/executeSwap.js";
 import { executeSwapPayload } from "../../services/chains/executeSwap.js";
 import { logger } from "../../utils/logger.js";
 import { encrypt } from "../../utils/crypto.js";
@@ -56,31 +58,36 @@ export class UserController {
 
       const registry = DEXRegistry.getInstance();
       const pm = PortfolioManager.getInstance();
-      const adapters = ChainAdapterRegistry.getInstance();
-
-      // Token list and native-asset price are per chain family, so resolve them
-      // once per distinct family present rather than once globally as "STX".
-      const families = [...new Set(wallets.map((w) => w.chainFamily ?? "stacks"))];
-      const perFamily = new Map<string, { tokens: SwappableToken[]; nativeSymbol: string; nativePrice: number }>();
+      // Token list and native-asset price are per chain, so resolve them once
+      // per distinct chain present rather than once globally as "STX". Keyed by
+      // ChainId, not family — Base and Celo are both "evm" but share neither a
+      // token universe nor a native asset.
+      const chainIds = [...groupByChainId(wallets).keys()];
+      const perChain = new Map<string, { tokens: SwappableToken[]; nativeSymbol: string; nativePrice: number }>();
       await Promise.all(
-        families.map(async (family) => {
-          const nativeSymbol = adapters.has(family) ? adapters.get(family).nativeSymbol : "STX";
+        chainIds.map(async (chainId) => {
+          const descriptor = walletDescriptor({ chain: chainId });
+          const nativeSymbol = descriptor.nativeSymbol;
           const [tokens, price] = await Promise.all([
-            registry.getSwappableTokens(false, family),
-            registry.getTokenPrice(nativeSymbol, family).catch(() => 0),
+            registry.getSwappableTokens(false, chainId),
+            registry.getTokenPrice(nativeSymbol, chainId).catch(() => 0),
           ]);
-          perFamily.set(family, {
+          perChain.set(chainId, {
             tokens,
             nativeSymbol,
-            nativePrice: price || (family === "stacks" ? 2.0 : 0),
+            // No fabricated fallback price for non-Stacks chains: this number
+            // feeds RiskManager position sizing, and a guessed price there is
+            // worse than an unpriced balance.
+            nativePrice: price || (descriptor.family === "stacks" ? 2.0 : 0),
           });
         })
       );
 
       const updatedWallets = await Promise.all(
         wallets.map(async (w) => {
+          const chainId = walletChainId(w);
           const family = w.chainFamily ?? "stacks";
-          const { tokens, nativeSymbol, nativePrice } = perFamily.get(family)!;
+          const { tokens, nativeSymbol, nativePrice } = perChain.get(chainId)!;
           try {
             const balances = await pm.fetchBalances(w.address, tokens, req.userId!);
             const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
@@ -277,15 +284,26 @@ export class UserController {
 
   static async generateWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { name, chainFamily } = req.body as { name?: string; chainFamily?: string };
+      const { name, chainId, chainFamily } = req.body as {
+        name?: string;
+        chainId?: string;
+        chainFamily?: string;
+      };
       const db = DatabaseService.getInstance();
 
-      const family = chainFamily ?? "stacks";
+      // chainId is the real identifier; chainFamily is accepted for clients
+      // written before multi-EVM and resolves to that family's default network.
+      const targetChain = resolveChainId({ chainId, chainFamily });
       const adapters = ChainAdapterRegistry.getInstance();
-      if (!adapters.has(family)) {
-        return next(new ValidationError(`Chain "${family}" is not enabled on this deployment`));
+      if (!adapters.has(targetChain)) {
+        return next(
+          new ValidationError(
+            `Chain "${targetChain}" is not enabled on this deployment. ` +
+            `Enabled: ${adapters.list().map((d) => d.chainId).join(", ") || "(none)"}`
+          )
+        );
       }
-      const adapter = adapters.get(family);
+      const adapter = adapters.get(targetChain);
 
       const existing = await db.findWalletsByUserId(req.userId!);
       const walletName = name?.trim() || `Wallet ${existing.length + 1}`;
@@ -298,11 +316,11 @@ export class UserController {
         address,
         name: walletName,
         encryptedKey,
-        chainFamily: family,
+        chainFamily: adapter.chainFamily,
         chain: adapter.chainId(),
       });
 
-      logger.info("Wallet generated", { userId: req.userId, address, chainFamily: family });
+      logger.info("Wallet generated", { userId: req.userId, address, chain: adapter.chainId() });
 
       res.status(201).json({
         id: wallet.id,
@@ -323,26 +341,36 @@ export class UserController {
 
   static async importWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { privateKey, name, chainFamily } = req.body as { privateKey: string; name?: string; chainFamily?: string };
+      const { privateKey, name, chainId, chainFamily } = req.body as {
+        privateKey: string;
+        name?: string;
+        chainId?: string;
+        chainFamily?: string;
+      };
       const db = DatabaseService.getInstance();
 
-      const family = chainFamily ?? "stacks";
+      const targetChain = resolveChainId({ chainId, chainFamily });
       const adapters = ChainAdapterRegistry.getInstance();
-      if (!adapters.has(family)) {
-        return next(new ValidationError(`Chain "${family}" is not enabled on this deployment`));
+      if (!adapters.has(targetChain)) {
+        return next(
+          new ValidationError(
+            `Chain "${targetChain}" is not enabled on this deployment. ` +
+            `Enabled: ${adapters.list().map((d) => d.chainId).join(", ") || "(none)"}`
+          )
+        );
       }
-      const adapter = adapters.get(family);
+      const adapter = adapters.get(targetChain);
 
       let address: string;
       try {
         address = await adapter.deriveAddressFromPrivateKey(privateKey.trim());
       } catch {
-        return next(new ValidationError(`Invalid ${family} private key`));
+        return next(new ValidationError(`Invalid ${adapter.descriptor.displayName} private key`));
       }
 
       // Scoped by family: the same key material imported on two chains is two
       // distinct wallets, and only a collision within one chain is a duplicate.
-      const existing = await db.findWalletByAddress(address, family);
+      const existing = await db.findWalletByAddress(address, adapter.chainFamily);
       if (existing) {
         return next(new ConflictError("A wallet with this address already exists"));
       }
@@ -356,18 +384,19 @@ export class UserController {
         address,
         name: walletName,
         encryptedKey,
-        chainFamily: family,
+        chainFamily: adapter.chainFamily,
         chain: adapter.chainId(),
       });
 
-      logger.info("Wallet imported", { userId: req.userId, address, chainFamily: family });
+      logger.info("Wallet imported", { userId: req.userId, address, chain: adapter.chainId() });
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens(false, family);
+      const tokens = await registry.getSwappableTokens(false, targetChain);
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!);
       const nativeBal = balances.find((b) => b.symbol === adapter.nativeSymbol)?.balance ?? 0;
 
-      const nativePrice = await registry.getTokenPrice(adapter.nativeSymbol, family) || (family === "stacks" ? 2.0 : 0);
+      const nativePrice = await registry.getTokenPrice(adapter.nativeSymbol, targetChain)
+        || (adapter.chainFamily === "stacks" ? 2.0 : 0);
 
       await db.updateWalletBalance(wallet.id, nativeBal);
 
@@ -503,7 +532,7 @@ export class UserController {
       if (wallet.userId !== req.userId) return next(new ForbiddenError());
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens(false, wallet.chainFamily ?? "stacks");
+      const tokens = await registry.getSwappableTokens(false, walletChainId(wallet));
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       res.json(balances);
@@ -526,15 +555,15 @@ export class UserController {
       if (!wallet) return next(new NotFoundError("Wallet"));
       if (wallet.userId !== req.userId) return next(new ForbiddenError());
 
-      const family = wallet.chainFamily ?? "stacks";
+      const chainId = walletChainId(wallet);
       const adapters = ChainAdapterRegistry.getInstance();
-      if (!adapters.has(family)) {
-        return next(new ValidationError(`Chain "${family}" is not enabled on this deployment`));
+      if (!adapters.has(chainId)) {
+        return next(new ValidationError(`Chain "${chainId}" is not enabled on this deployment`));
       }
-      const adapter = adapters.get(family);
+      const adapter = adapters.get(chainId);
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens(false, family);
+      const tokens = await registry.getSwappableTokens(false, chainId);
       const tokenObj = tokens.find(t => t.contractId === token || t.symbol === token);
       // Unknown-token fallback is the chain's native decimals — 6 on Stacks
       // (unchanged) and 18 on EVM, where assuming 6 would be off by 1e12.
@@ -581,10 +610,10 @@ export class UserController {
       if (!wallet || wallet.userId !== req.userId!) {
         return next(new NotFoundError("Wallet"));
       }
-      const chainFamily = wallet.chainFamily ?? "stacks";
+      const chainId = walletChainId(wallet);
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens(false, chainFamily);
+      const tokens = await registry.getSwappableTokens(false, chainId);
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       const tokenBalanceObj = balances.find(b => b.symbol.toUpperCase() === tokenIn.toUpperCase() || b.token === tokenIn);
@@ -636,7 +665,10 @@ export class UserController {
         if (!provider) {
           return res.status(400).json({ error: `Selected DEX provider '${dex}' is not registered` });
         }
-        if ((provider.chainFamily ?? "stacks") !== chainFamily) {
+        // Scoped by network, not family: every EVM DEX shares the family
+        // "evm", so a family check would happily hand a Base wallet a Celo
+        // router whose addresses don't exist on Base.
+        if (!registry.getProvidersForChain(chainId).some((p) => p.name === provider.name)) {
           return res.status(400).json({ error: `Selected DEX provider '${dex}' does not support this wallet's chain` });
         }
         const hasRoute = await provider.hasRoute(tokenIn, tokenOut);
@@ -649,7 +681,7 @@ export class UserController {
         }
         selectedProviderName = provider.name;
       } else {
-        const bestQuoteResult = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainFamily);
+        const bestQuoteResult = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainId);
         if (!bestQuoteResult) {
           return res.status(400).json({ error: "No swap route found for this pair on any DEX" });
         }
@@ -677,7 +709,7 @@ export class UserController {
         senderAddress: wallet.address,
         maxOutbound: est.amountOut,
         useGasless,
-        chainFamily,
+        chainId,
       });
 
       if ("txId" in result) {

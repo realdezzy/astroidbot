@@ -47,6 +47,7 @@ model Wallet {
   perpPositions PerpPosition[]
 
   @@unique([chainFamily, address])
+  @@index([userId, chain])
 }
 
 

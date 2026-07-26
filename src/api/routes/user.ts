@@ -7,20 +7,25 @@ import { UserController } from "../controllers/userController.js";
 
 const router = Router();
 
-// chainFamily is validated against ChainAdapterRegistry in the controller
+// chainId/chainFamily are validated against ChainAdapterRegistry in the controller
 // rather than a hardcoded enum here, so a deployment without PIMLICO_API_KEY
 // rejects "evm" with a clear message and adding a chain needs no schema edit.
 const chainFamilySchema = z.string().min(1).max(32).optional();
+// "base:mainnet" — the real chain identifier; chainFamily remains accepted for
+// clients written before multi-EVM.
+const chainIdSchema = z.string().min(1).max(64).optional();
 
 const generateWalletSchema = z.object({
   name: z.string().min(1).max(64).optional(),
   chainFamily: chainFamilySchema,
+  chainId: chainIdSchema,
 });
 
 const importWalletSchema = z.object({
   privateKey: z.string().min(32).max(128),
   name: z.string().min(1).max(64).optional(),
   chainFamily: chainFamilySchema,
+  chainId: chainIdSchema,
 });
 
 const revealKeySchema = z.object({

@@ -7,6 +7,7 @@ import { QueueManager } from "./queue.js";
 import type { RebalanceAction } from "../types.js";
 import { safeValidateStrategyConfig } from "./strategy/configValidation.js";
 import { executeSwapPayload } from "./chains/executeSwap.js";
+import { DEFAULT_CHAIN_ID } from "./chains/descriptors/index.js";
 
 // Exported for use by strategyWorker — handles DEX quoting, building, broadcasting,
 // and DB/WebSocket bookkeeping for a list of approved actions.
@@ -16,7 +17,7 @@ export async function executeApprovedActions(
   userId: number,
   senderAddress: string,
   slippageBps: number,
-  chainFamily = "stacks",
+  chainId = DEFAULT_CHAIN_ID,
 ): Promise<{ executed: number; attempted: number }> {
   let executed = 0;
   let attempted = 0;
@@ -29,7 +30,7 @@ export async function executeApprovedActions(
 
   for (const action of actions) {
     attempted++;
-    const bestQuoteResult = await registry.getBestQuote(action.tokenIn, action.tokenOut, action.amountIn, chainFamily);
+    const bestQuoteResult = await registry.getBestQuote(action.tokenIn, action.tokenOut, action.amountIn, chainId);
     if (!bestQuoteResult || bestQuoteResult.quote.amountOut <= 0) continue;
 
     const { providerName, quote: est } = bestQuoteResult;
@@ -59,7 +60,7 @@ export async function executeApprovedActions(
       senderAddress,
       maxOutbound: est.amountOut,
       useGasless,
-      chainFamily,
+      chainId,
     });
 
     if ("txId" in result) {

@@ -1,8 +1,8 @@
 {
-  "maxWarnings": 91,
+  "maxWarnings": 89,
   "byRule": {
-    "@typescript-eslint/no-explicit-any": 67,
+    "@typescript-eslint/no-explicit-any": 65,
     "no-console": 24
   },
-  "updatedAt": "2026-07-26T21:20:54.008Z"
+  "updatedAt": "2026-07-26T22:07:49.387Z"
 }

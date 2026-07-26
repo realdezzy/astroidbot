@@ -7,6 +7,8 @@ import { TelegramService } from "../services/telegram.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { logger } from "../utils/logger.js";
 import { executeSwapPayload } from "../services/chains/executeSwap.js";
+import { walletChainId } from "../services/chains/walletChain.js";
+import { DEFAULT_CHAIN_ID } from "../services/chains/descriptors/index.js";
 
 
 interface TradeJob {
@@ -30,10 +32,10 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
   const qm = QueueManager.getInstance();
 
   const wallet = await db.findWalletById(walletId);
-  const chainFamily = wallet?.chainFamily ?? "stacks";
+  const chainId = wallet ? walletChainId(wallet) : DEFAULT_CHAIN_ID;
 
   // Find best route across DEXs registered for this wallet's chain
-  const bestQuote = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainFamily);
+  const bestQuote = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainId);
   if (!bestQuote || bestQuote.quote.amountOut <= 0) {
     throw new Error(`No viable swap route: ${tokenIn} → ${tokenOut}`);
   }
@@ -73,7 +75,7 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
     senderAddress,
     maxOutbound: est.amountOut,
     useGasless: settings?.useGasless ?? false,
-    chainFamily,
+    chainId,
   });
 
   if ("txId" in result) {

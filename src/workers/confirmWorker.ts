@@ -1,6 +1,8 @@
 import type { Job } from "bullmq";
 import { DatabaseService } from "../services/db.js";
 import { confirmSwap } from "../services/chains/executeSwap.js";
+import { walletChainId } from "../services/chains/walletChain.js";
+import { DEFAULT_CHAIN_ID } from "../services/chains/descriptors/index.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { logger } from "../utils/logger.js";
 
@@ -20,11 +22,11 @@ export async function processConfirmJob(job: Job<ConfirmJob>): Promise<void> {
 
   const trade = await db.prisma.trade.findUnique({
     where: { id: tradeId },
-    include: { wallet: { select: { chainFamily: true } } },
+    include: { wallet: { select: { chainFamily: true, chain: true } } },
   });
-  const chainFamily = trade?.wallet.chainFamily ?? "stacks";
+  const chainId = trade ? walletChainId(trade.wallet) : DEFAULT_CHAIN_ID;
 
-  const state = await confirmSwap(txId, tradeId, chainFamily);
+  const state = await confirmSwap(txId, tradeId, chainId);
 
   if (state === "confirmed") {
     wss.broadcastTradeEvent(userId, "trade_confirmed", { tradeId, txId });

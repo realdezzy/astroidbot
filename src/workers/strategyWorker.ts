@@ -14,6 +14,7 @@ import { AIOrchestrator } from "../services/ai.js";
 import { ConfigManager } from "../config.js";
 import type { StrategyContext, StrategyState } from "../types/strategy.js";
 import type { StrategyRunJob } from "../services/queue.js";
+import { walletChainId } from "../services/chains/walletChain.js";
 import { executeApprovedActions } from "../services/strategyEngine.js";
 import { logger } from "../utils/logger.js";
 import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
@@ -52,7 +53,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
     if (activeAgent) aiMode = activeAgent.aiMode;
   }
 
-  const tokens = await registry.getSwappableTokens(false, wallet.chainFamily ?? "stacks");
+  const tokens = await registry.getSwappableTokens(false, walletChainId(wallet));
   const tokenSymbols = tokens.map(t => t.symbol);
   const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
   if (balances.length === 0) return;
@@ -179,7 +180,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   });
 
   const slippageBps = (config.maxSlippageBps as number) ?? settings.slippageBps;
-  const { executed, attempted } = await executeApprovedActions(sizedActions, walletId, userId, wallet.address, slippageBps, wallet.chainFamily ?? "stacks");
+  const { executed, attempted } = await executeApprovedActions(sizedActions, walletId, userId, wallet.address, slippageBps, walletChainId(wallet));
 
   if (attempted > 0 && executed === 0) {
     await handleStrategyFailure(strategyId, userId, "All trade executions failed in the cycle", db);

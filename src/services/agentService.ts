@@ -7,7 +7,7 @@ import { PortfolioManager } from "./portfolio.js";
 import { NotificationService } from "./notificationService.js";
 import { RiskManager } from "./riskManager.js";
 import { buildAgentPrompt } from "./ai/prompts/agent.js";
-import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
+import { walletChainId, walletNativeSymbol, groupByChainId } from "./chains/walletChain.js";
 import { AgentDecisionSchema } from "../validation/ai/schemas.js";
 import type { RebalanceAction, SwappableToken } from "../types.js";
 
@@ -86,25 +86,25 @@ export class AgentService {
       }
 
       const registry = DEXRegistry.getInstance();
-      const adapters = ChainAdapterRegistry.getInstance();
       const pm = PortfolioManager.getInstance();
 
-      // A user's wallets can span chain families, and each family has its own
-      // token universe and native asset — resolve both per family rather than
-      // pricing every wallet's balance as STX.
-      const tokensByFamily = new Map<string, SwappableToken[]>();
+      // A user's wallets can span chains, and each chain has its own token
+      // universe and native asset — resolve both per chain rather than pricing
+      // every wallet's balance as STX. Keyed by ChainId, not family: Base and
+      // Celo are both "evm" but share neither token list nor native asset.
+      const tokensByChain = new Map<string, SwappableToken[]>();
       await Promise.all(
-        [...new Set(wallets.map((w) => w.chainFamily ?? "stacks"))].map(async (family) => {
-          tokensByFamily.set(family, await registry.getSwappableTokens(false, family));
+        [...groupByChainId(wallets).keys()].map(async (chainId) => {
+          tokensByChain.set(chainId, await registry.getSwappableTokens(false, chainId));
         })
       );
 
       const updatedWallets = await Promise.all(
         wallets.map(async (w) => {
-          const family = w.chainFamily ?? "stacks";
+          const chainId = walletChainId(w);
           try {
-            const nativeSymbol = adapters.has(family) ? adapters.get(family).nativeSymbol : "STX";
-            const balances = await pm.fetchBalances(w.address, tokensByFamily.get(family) ?? [], agent.userId);
+            const nativeSymbol = walletNativeSymbol(w);
+            const balances = await pm.fetchBalances(w.address, tokensByChain.get(chainId) ?? [], agent.userId);
             const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
             if (nativeBal !== w.balance) {
               await db.updateWalletBalance(w.id, nativeBal);
@@ -224,7 +224,7 @@ export class AgentService {
           reason: `Agent "${agent.name}" (AI): ${t.reason ?? "autonomous"}`,
         };
 
-        const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, wallet.chainFamily ?? "stacks");
+        const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, walletChainId(wallet));
         const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId);
 
           const riskSettings = {
@@ -258,7 +258,7 @@ export class AgentService {
             agent.userId,
             wallet.address,
             riskSettings.slippageBps,
-            wallet.chainFamily ?? "stacks"
+            walletChainId(wallet)
           );
           if (res.executed > 0) {
             executed = true;

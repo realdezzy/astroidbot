@@ -3,6 +3,7 @@ import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
 import { RiskManager } from "../services/riskManager.js";
 import { confirmSwap } from "../services/chains/executeSwap.js";
+import { walletChainId } from "../services/chains/walletChain.js";
 import { TelegramService } from "../services/telegram.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { BotStatus } from "../types.js";
@@ -63,7 +64,7 @@ export async function runCycle(): Promise<void> {
     // Retry pending confirmations from previous cycles (single-check per cycle).
     const pendingTrades = await db.findPendingTrades();
     for (const trade of pendingTrades) {
-      confirmSwap(trade.txId ?? "dry-run-tx-id", trade.id, trade.wallet.chainFamily ?? "stacks").then((state) => {
+      confirmSwap(trade.txId ?? "dry-run-tx-id", trade.id, walletChainId(trade.wallet)).then((state) => {
         if (state === "confirmed") {
           wss.broadcastTradeEvent(trade.userId, "trade_confirmed", {
             tradeId: trade.id,
@@ -81,7 +82,10 @@ export async function runCycle(): Promise<void> {
       });
     }
 
-    const walletList = wallets.map((w) => ({ id: w.id, userId: w.userId, address: w.address, chainFamily: w.chainFamily }));
+    const walletList = wallets.map((w) => ({
+      id: w.id, userId: w.userId, address: w.address,
+      chainFamily: w.chainFamily, chain: w.chain,
+    }));
     const { executed: limitOrdersExecuted } = await executeLimitOrderCycle(walletList, tokens);
     totalActionsExecuted += limitOrdersExecuted;
 

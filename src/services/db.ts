@@ -293,7 +293,7 @@ export class DatabaseService {
   async findPendingTrades() {
     return this.prisma.trade.findMany({
       where: { status: { in: ["PENDING", "BROADCAST"] } },
-      include: { wallet: { select: { chainFamily: true } } },
+      include: { wallet: { select: { chainFamily: true, chain: true } } },
     });
   }
 
