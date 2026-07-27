@@ -4,7 +4,9 @@ import { ChainAdapterRegistry } from "./chainAdapterRegistry.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
 import { StacksAdapter } from "./stacksAdapter.js";
 import { EvmChainAdapter } from "./evm/evmChainAdapter.js";
+import { SolanaAdapter } from "./svm/solanaAdapter.js";
 import { UniswapV3Provider } from "../dex/providers/uniswapV3.js";
+import { JupiterProvider } from "../dex/providers/jupiter.js";
 import { BUILT_IN_DESCRIPTORS, parseCustomEvmChains } from "./descriptors/index.js";
 import type { ChainAdapter } from "../../types/chainAdapter.js";
 import type { ChainDescriptor } from "../../types/chain.js";
@@ -20,9 +22,7 @@ function adapterFor(descriptor: ChainDescriptor): ChainAdapter {
     case "evm":
       return new EvmChainAdapter(descriptor);
     case "svm":
-      throw new Error(
-        `Chain ${descriptor.chainId}: Solana support is not implemented yet (see Docs/multichain-implementation-plan.md P3)`
-      );
+      return new SolanaAdapter(descriptor);
     default:
       throw new Error(`Chain ${descriptor.chainId} has unknown family "${descriptor.family}"`);
   }
@@ -43,6 +43,10 @@ function registerProviderFor(descriptor: ChainDescriptor): void {
 
   if (descriptor.family === "evm" && descriptor.evm?.dex) {
     DEXRegistry.getInstance().registerProvider(new UniswapV3Provider(descriptor));
+  }
+
+  if (descriptor.family === "svm" && descriptor.svm?.jupiterApiUrl) {
+    DEXRegistry.getInstance().registerProvider(new JupiterProvider(descriptor));
   }
   // Stacks providers (ALEX/Bitflow/Velar) are registered directly by
   // bootstrap: they are per-DEX rather than per-chain and predate descriptors.

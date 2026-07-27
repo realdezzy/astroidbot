@@ -70,6 +70,17 @@ export interface ChainAdapter {
     senderAddress: string;
   }): Promise<{ txId: string } | { error: string }>;
 
+  // Solana-shaped execution: aggregators return a complete serialized
+  // transaction rather than a call list, so there is nothing to assemble —
+  // the adapter refreshes the blockhash, signs and sends. A third method
+  // rather than a reshaped executeEvmCall, for the same reason executeEvmCall
+  // exists alongside executeContractCall: the shapes genuinely differ.
+  executeSvmCall?(params: {
+    transactionBase64: string;
+    walletId: number;
+    senderAddress: string;
+  }): Promise<{ txId: string } | { error: string }>;
+
   transfer(params: {
     walletId: number;
     senderAddress: string;

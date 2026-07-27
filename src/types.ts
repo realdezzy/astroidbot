@@ -69,7 +69,7 @@ export interface SwapRoute {
 // executeSwapPayload (src/services/chains/executeSwap.ts) — which every
 // trade-execution call site goes through.
 export interface TransactionPayload {
-  kind?: "stacks" | "evm";
+  kind?: "stacks" | "evm" | "svm";
   // Stacks
   contractAddress?: string;
   contractName?: string;
@@ -80,6 +80,25 @@ export interface TransactionPayload {
   // provider can express multi-step operations (e.g. ERC-20 approve + swap)
   // as one batched UserOperation.
   calls?: { to: string; data: string; value?: string }[];
+  // Solana — a base64 transaction the provider (e.g. Jupiter) already built
+  // and serialized. Solana aggregators return a complete unsigned transaction
+  // rather than a call list, so forcing it into the EVM shape would mean
+  // taking it apart only to reassemble it; the adapter signs and sends it.
+  swapTransaction?: string;
+  // Address lookup tables the transaction references, when the caller needs
+  // them for local reconstruction.
+  addressLookupTables?: string[];
+}
+
+// Narrows an svm payload before the Solana branch dereferences it, mirroring
+// assertStacksPayload. A payload of the wrong kind reaching here is a bug in
+// the provider that built it, not a user error.
+export function assertSvmPayload(payload: TransactionPayload): asserts payload is TransactionPayload & {
+  swapTransaction: string;
+} {
+  if (!payload.swapTransaction) {
+    throw new Error("Expected an SVM-shaped TransactionPayload (swapTransaction)");
+  }
 }
 
 // Narrows a payload to its Stacks shape at the point of Stacks execution. All

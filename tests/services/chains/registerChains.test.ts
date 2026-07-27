@@ -102,8 +102,27 @@ describe("registerEnabledChains", () => {
     expect(registry.list().map((d) => d.chainId)).toContain("arc:mainnet");
   });
 
-  it("reports Solana as not yet implemented instead of registering a broken adapter", async () => {
-    await loadWith({ ENABLED_CHAINS: "solana:mainnet" });
-    expect(() => registerEnabledChains()).toThrow(/not implemented yet/);
+  it("registers Solana alongside EVM and Stacks — three families at once", async () => {
+    await loadWith({ ENABLED_CHAINS: "stacks:mainnet,celo:mainnet,solana:mainnet" });
+    registerEnabledChains();
+
+    const registry = ChainAdapterRegistry.getInstance();
+    expect(registry.forFamily("stacks")).toHaveLength(1);
+    expect(registry.forFamily("evm")).toHaveLength(1);
+    expect(registry.forFamily("svm")).toHaveLength(1);
+    expect(registry.get("solana:mainnet").nativeSymbol).toBe("SOL");
+    // 9 decimals, not the EVM 18 or Stacks 6.
+    expect(registry.get("solana:mainnet").nativeDecimals).toBe(9);
+  });
+
+  it("registers Solana devnet as listable but not tradable", async () => {
+    // Jupiter does not serve devnet, so wallets and balances work there but
+    // quoting does not — exactly the listable/tradable split.
+    await loadWith({ ENABLED_CHAINS: "solana:devnet" });
+    registerEnabledChains();
+
+    const registry = ChainAdapterRegistry.getInstance();
+    expect(registry.has("solana:devnet")).toBe(true);
+    expect(registry.tradable().map((d) => d.chainId)).not.toContain("solana:devnet");
   });
 });

@@ -1,6 +1,6 @@
 import { TransactionService } from "../transaction.js";
 import { ChainAdapterRegistry } from "./chainAdapterRegistry.js";
-import { assertStacksPayload } from "../../types.js";
+import { assertStacksPayload, assertSvmPayload } from "../../types.js";
 import { logger } from "../../utils/logger.js";
 import { DEFAULT_CHAIN_FOR_FAMILY, DEFAULT_CHAIN_ID } from "./descriptors/index.js";
 import type { RebalanceAction, TransactionPayload } from "../../types.js";
@@ -81,6 +81,26 @@ export async function executeSwapPayload(
           data: c.data,
           value: c.value ? BigInt(c.value) : undefined,
         })),
+        walletId: params.walletId,
+        senderAddress: params.senderAddress,
+      });
+    }
+
+    if (payload.kind === "svm") {
+      assertSvmPayload(payload);
+
+      const chainId = resolveChainId(params);
+      const registry = ChainAdapterRegistry.getInstance();
+      if (!registry.has(chainId)) {
+        return { error: `No chain adapter registered for "${chainId}"` };
+      }
+      const adapter = registry.get(chainId);
+      if (!adapter.executeSvmCall) {
+        return { error: `Chain "${chainId}" does not support Solana-style execution` };
+      }
+
+      return await adapter.executeSvmCall({
+        transactionBase64: payload.swapTransaction,
         walletId: params.walletId,
         senderAddress: params.senderAddress,
       });
