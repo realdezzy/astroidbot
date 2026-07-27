@@ -268,6 +268,10 @@ model Notification {
 
 model Candle {
   id        Int      @id @default(autoincrement())
+  // Network the token lives on. Without it the unique key collides across
+  // chains: "USDC" on Base and "USDC" on Stacks are different assets at
+  // different prices, and one would silently overwrite the other's candles.
+  chainId   String   @default("stacks:mainnet")
   token     String
   timeframe String   // "1m", "5m", "15m", "1h", "4h", "1d"
   timestamp DateTime
@@ -277,8 +281,35 @@ model Candle {
   close     Float
   volume    Float    @default(0)
 
-  @@unique([token, timeframe, timestamp])
-  @@index([token, timeframe, timestamp])
+  @@unique([chainId, token, timeframe, timestamp])
+  @@index([chainId, token, timeframe, timestamp])
+}
+
+// Cross-chain token catalogue backing the public discovery pages. Synced from
+// the registered DEX providers rather than a third-party market-data feed, so
+// prices are DEX-derived by construction — see isVerified / liquidityUsd for
+// the quality signals that gate what gets listed.
+model Token {
+  id             Int       @id @default(autoincrement())
+  chainId        String
+  contractId     String    // address, principal, or mint depending on the chain
+  symbol         String
+  name           String
+  decimals       Int
+  logoUrl        String?
+  priceUsd       Float?
+  priceChange24h Float?
+  volume24h      Float?
+  liquidityUsd   Float?
+  marketCapUsd   Float?
+  isVerified     Boolean   @default(false)
+  lastSyncedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([chainId, contractId])
+  @@index([chainId, volume24h])
+  @@index([symbol])
 }
 
 model PoolStatsHistory {

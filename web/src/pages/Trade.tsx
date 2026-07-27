@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUp,
@@ -28,6 +29,9 @@ interface WalletItem {
   address: string;
   name: string;
   balance: number;
+  chainId?: string;
+  chain?: string;
+  chainFamily?: string;
 }
 interface QuoteItem {
   dex: string;
@@ -53,12 +57,23 @@ type TradeTab = "swap" | "history";
 
 export function Trade() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TradeTab>("swap");
   const [selectedWalletIds, setSelectedWalletIds] = useState<number[]>([]);
   const [direction, setDirection] = useState<"BUY" | "SELL">("BUY");
-  const [tokenIn, setTokenIn] = useState("STX");
-  const [tokenOut, setTokenOut] = useState("USDCx");
+
+  // Deep-link prefill from the token discovery pages: /trade?chainId=…&tokenOut=…
+  // The whole point of the discovery flow is that a user arrives here with
+  // everything chosen and only has to type an amount.
+  const prefillChainId = searchParams.get("chainId");
+  const prefillTokenIn = searchParams.get("tokenIn");
+  const prefillTokenOut = searchParams.get("tokenOut");
+
+  const [tokenIn, setTokenIn] = useState(prefillTokenIn ?? "STX");
+  const [tokenOut, setTokenOut] = useState(prefillTokenOut ?? "USDCx");
   const [amount, setAmount] = useState("");
+  const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [selectedDex, setSelectedDex] = useState<string | null>(null);
@@ -129,6 +144,33 @@ export function Trade() {
     setShowConfirm(false);
     setSelectedDex(null);
   }, [tokenIn, tokenOut, amount, direction]);
+
+  // Deep-link arrival: pick a wallet on the requested chain and focus the
+  // amount field, so the user's only remaining action is typing a number.
+  // Runs once — after that the user's own wallet choice must win.
+  const prefillApplied = useRef(false);
+  useEffect(() => {
+    if (prefillApplied.current) return;
+    if (!prefillChainId || !wallets || wallets.length === 0) return;
+    prefillApplied.current = true;
+
+    const walletChain = (w: WalletItem) => w.chainId ?? w.chain;
+    const compatible = wallets.filter((w) => walletChain(w) === prefillChainId);
+
+    if (compatible.length === 0) {
+      // Don't silently trade on the wrong chain. Say so, and leave the user to
+      // create a wallet — a same-ticker token on another chain is a different
+      // asset entirely.
+      setPrefillNotice(
+        `You have no wallet on ${prefillChainId}. Create one to trade this token.`
+      );
+      return;
+    }
+
+    const preferred = compatible.find((w) => w.balance > 0) ?? compatible[0]!;
+    setSelectedWalletIds([preferred.id]);
+    amountRef.current?.focus();
+  }, [prefillChainId, wallets]);
 
   const toggleWallet = (id: number) => {
     setMsg(null);
@@ -340,6 +382,7 @@ export function Trade() {
               </div>
               <div className="flex items-center gap-3">
                 <input
+                  ref={amountRef}
                   value={amount}
                   onChange={(e) => {
                     setAmount(e.target.value);
@@ -494,6 +537,11 @@ export function Trade() {
               </div>
             )}
 
+            {prefillNotice && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                {prefillNotice}
+              </div>
+            )}
             {msg && (
               <div
                 className={classNames(

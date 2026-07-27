@@ -8,6 +8,7 @@ import {
   Bot,
   Clock,
   ShieldBan,
+  Coins,
   UserCog,
   ArrowRightLeft,
   Wallet,
@@ -31,7 +32,7 @@ const navItems = [
   { to: "/perp", icon: TrendingUp, label: "Perp" },
   { to: "/limit-orders", icon: Clock, label: "Limit Orders" },
   { to: "/agents", icon: Bot, label: "Agents" },
-  { to: "/tokens", icon: ShieldBan, label: "Tokens" },
+  { to: "/tokens", icon: Coins, label: "Tokens" },
   { to: "/settings", icon: Settings, label: "Settings" },
   { to: "/account", icon: UserCog, label: "Account" },
 ];

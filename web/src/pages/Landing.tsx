@@ -126,6 +126,7 @@ export function Landing() {
             <a href="#features" className="hover:text-title-text transition-colors">Features</a>
             <a href="#calculator" className="hover:text-title-text transition-colors">Calculator</a>
             <a href="#integrations" className="hover:text-title-text transition-colors">Integrations</a>
+            <Link to="/tokens" className="hover:text-title-text transition-colors">Tokens</Link>
             <Link to="/docs" className="hover:text-title-text transition-colors">Docs</Link>
             <a href="#contact" className="hover:text-title-text transition-colors">Contact</a>
           </nav>
@@ -184,12 +185,14 @@ export function Landing() {
             Launch Trading Bot
             <ArrowRight className="w-5 h-5" />
           </Link>
-          <a
-            href="#features"
+          {/* Points at real data rather than a marketing anchor — a visitor can
+              browse tokens across every chain before creating an account. */}
+          <Link
+            to="/tokens"
             className="px-8 py-4 bg-card-bg hover:bg-bg-hover border border-card-border hover:border-brand-500/30 text-main-text font-medium rounded-xl text-base transition-all duration-200"
           >
-            Explore Features
-          </a>
+            Explore Tokens
+          </Link>
         </div>
 
         {/* Dashboard Showcase */}
@@ -571,6 +574,7 @@ export function Landing() {
           <div className="flex flex-wrap justify-center items-center gap-4 sm:gap-8 text-xs text-muted-text">
             <a href="#features" className="hover:text-title-text transition-colors">Features</a>
             <a href="#calculator" className="hover:text-title-text transition-colors">Calculator</a>
+            <Link to="/tokens" className="hover:text-title-text transition-colors">Tokens</Link>
             <Link to="/docs" className="hover:text-title-text transition-colors">Docs</Link>
             <a href="/terms" className="hover:text-title-text transition-colors">Terms of Service</a>
             <a href="/privacy" className="hover:text-title-text transition-colors">Privacy Policy</a>

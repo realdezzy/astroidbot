@@ -10,6 +10,7 @@ import { BotStatus } from "../types.js";
 import { executeLimitOrderCycle } from "./limitOrderCycle.js";
 import { StrategyEngine } from "../services/strategyEngine.js";
 import { AgentService } from "../services/agentService.js";
+import { TokenDiscoveryService } from "../services/tokenDiscovery.js";
 
 
 export async function runCycle(): Promise<void> {
@@ -28,6 +29,14 @@ export async function runCycle(): Promise<void> {
     const registry = DEXRegistry.getInstance();
     const risk = RiskManager.getInstance();
     const wss = WebSocketManager.getInstance();
+
+    // Token catalogue refresh rides the existing global tick rather than
+    // introducing a second scheduler — there is exactly one periodic mechanism
+    // in this codebase on purpose. Fire-and-forget: discovery is a read-side
+    // convenience and must never delay or fail a trading cycle.
+    TokenDiscoveryService.getInstance()
+      .syncAll()
+      .catch((err) => logger.warn("Token discovery sync failed", { error: err }));
 
     const tokens = await registry.getSwappableTokens();
     if (tokens.length === 0) {

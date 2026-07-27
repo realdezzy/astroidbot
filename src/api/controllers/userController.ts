@@ -908,6 +908,13 @@ export class UserController {
       await Promise.all(
         Array.from(tokensToFetch).map(async (tokenSymbol) => {
           try {
+            // KNOWN LIMITATION: this aggregates a user's holdings by bare
+            // symbol across every wallet, so a user holding USDC on both
+            // Stacks and Base sees one merged series priced against Stacks.
+            // Candles are now chain-scoped in storage (so the two no longer
+            // corrupt each other), but this endpoint still has to pick one
+            // chain. Fixing it properly means restructuring the aggregation to
+            // be per-chain — tracked as follow-up work, not silently ignored.
             const candles = await candleService.getCandles(tokenSymbol, candleTf, limit * 2);
             candleMap.set(tokenSymbol, candles);
           } catch (err) {

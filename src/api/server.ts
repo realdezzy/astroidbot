@@ -23,6 +23,7 @@ import userRoutes from "./routes/user.js";
 import botRoutes from "./routes/bot.js";
 import tokenRoutes from "./routes/tokens.js";
 import chainRoutes from "./routes/chains.js";
+import discoveryRoutes from "./routes/discovery.js";
 import limitOrderRoutes from "./routes/limitOrders.js";
 import strategiesRoutes from "./routes/strategies.js";
 import agentsRoutes from "./routes/agents.js";
@@ -246,6 +247,11 @@ export function createServer(): HttpServer {
   });
   app.use("/api/bot", botRoutes);
   app.use("/api", tokenRoutes);
+  // Registered AFTER tokenRoutes on purpose: discovery's
+  // /tokens/:chainId/:contractId is the same shape as the existing
+  // /tokens/:pair/price, and mounting it first would swallow that route with
+  // contractId="price".
+  app.use("/api", discoveryRoutes);
   app.use("/api", chainRoutes);
 
   const webDistPath = path.resolve(__dirname, "../../web/dist");

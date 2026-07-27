@@ -13,6 +13,8 @@ import { Trades } from "./pages/Trades";
 import { Perp } from "./pages/Perp";
 import { LimitOrders } from "./pages/LimitOrders";
 import { Tokens } from "./pages/Tokens";
+import { TokenDiscovery } from "./pages/TokenDiscovery";
+import { TokenDetail } from "./pages/TokenDetail";
 import { Agents } from "./pages/Agents";
 import { Portfolio } from "./pages/Portfolio";
 import { Settings } from "./pages/Settings";
@@ -61,6 +63,10 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/reset-password/:token" element={<ResetPassword />} />
         <Route path="/docs" element={<Docs />} />
+        {/* Public: discovery is the top of the funnel, so it must not require
+            a login. The Trade action carries the chain + token through auth. */}
+        <Route path="/tokens" element={<TokenDiscovery />} />
+        <Route path="/tokens/:chainId/:contractId" element={<TokenDetail />} />
         <Route path="/docs/:slug" element={<Docs />} />
         <Route
           element={
@@ -79,7 +85,8 @@ function AppRoutes() {
           <Route path="/limit-orders" element={<LimitOrders />} />
           <Route path="/strategies" element={<Navigate to="/agents" replace />} />
           <Route path="/agents" element={<Agents />} />
-          <Route path="/tokens" element={<Tokens />} />
+          {/* The old /tokens page was a blocklist manager, not discovery. */}
+          <Route path="/settings/tokens" element={<Tokens />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/account" element={<Account />} />
         </Route>
