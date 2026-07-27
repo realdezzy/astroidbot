@@ -1272,14 +1272,20 @@ async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
       return;
     }
 
+    // Defaults come from the wallet's own chain. Defaulting to STX/USDCx for a
+    // Base or Solana wallet produces a trade with no route on any provider.
+    const aiChain = walletDescriptor(wallet);
+    const aiTokenIn = (t.tokenIn as string) ?? aiChain.nativeSymbol;
+    const aiTokenOut = (t.tokenOut as string) ?? aiChain.stableSymbol;
+
     const qm = (await import("../services/queue.js")).QueueManager.getInstance();
     await qm.enqueueTrade({
       walletId: wallet.id, userId: user.id, senderAddress: wallet.address,
-      tokenIn: (t.tokenIn as string) ?? "STX", tokenOut: (t.tokenOut as string) ?? "USDCx",
+      tokenIn: aiTokenIn, tokenOut: aiTokenOut,
       amountIn: (t.amountIn as number) ?? 1, direction: ((t.direction as string) ?? "BUY") as "BUY" | "SELL",
       reason: `NL: ${text}`,
     });
-    const reply = `✅ Trade enqueued: ${(t.direction as string) ?? "BUY"} ${t.amountIn ?? ""} ${(t.tokenIn as string) ?? "STX"} → ${(t.tokenOut as string) ?? "USDCx"}`;
+    const reply = `✅ Trade enqueued on ${aiChain.displayName}: ${(t.direction as string) ?? "BUY"} ${t.amountIn ?? ""} ${aiTokenIn} → ${aiTokenOut}`;
     ctx.session.chatHistory.push({ role: "assistant", content: reply });
     ctx.session.chatHistory = ctx.session.chatHistory.slice(-6);
     await ctx.reply(reply);
