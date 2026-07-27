@@ -44,7 +44,7 @@ Places buy and sell orders at fixed intervals around the current price.
 **Configuration:**
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| Token Pair | Trading pair (e.g. STX/sUSDT) | STX/sUSDT |
+| Token Pair | Trading pair (e.g. STX/USDCx) | STX/USDCx |
 | Grid Levels | Number of buy/sell bands (3-10) | 5 |
 | Spread (bps) | Price gap between grid levels | 30 |
 | Max Position (%) | Maximum wallet % per trade | 25% |
@@ -66,7 +66,7 @@ Buys a fixed amount at regular intervals regardless of price.
 | Parameter | Description | Example |
 |-----------|-------------|---------|
 | From Token | Source token (usually STX) | STX |
-| To Token | Target token to accumulate | sUSDT |
+| To Token | Target token to accumulate | USDCx |
 | Amount per Buy | How much to swap each interval | 1.0 |
 | Interval (minutes) | Time between buys | 60 |
 

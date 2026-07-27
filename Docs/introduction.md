@@ -15,7 +15,7 @@ AstroidBot is your AI-powered trading companion on the Stacks blockchain. It aut
 - **Place limit orders** — set a target price and walk away; the bot executes when the market hits it
 - **Run AI agents** — let an LLM analyze the market and suggest or execute trades autonomously
 - **Manage wallets** — generate, import, and track multiple Stacks wallets securely
-- **Ask in plain English** — type "buy 5 STX for sUSDT" or "how's my portfolio?" and the AI handles it
+- **Ask in plain English** — type "buy 5 STX for USDCx" or "how's my portfolio?" and the AI handles it
 
 ## Two Ways to Use AstroidBot
 
@@ -43,7 +43,7 @@ The web dashboard is your analytics and strategy headquarters. Use it to:
 Every trade needs a wallet. When you first sign up, AstroidBot automatically creates one. You can add more wallets (generate new keys or import existing ones). All private keys are encrypted with AES-256-GCM and never exposed in plaintext.
 
 ### Strategies vs Agents
-- **Strategy** — a deterministic trading rule (e.g. "buy 1 STX of sUSDT every hour"). Configure it once, it runs on schedule.
+- **Strategy** — a deterministic trading rule (e.g. "buy 1 STX of USDCx every hour"). Configure it once, it runs on schedule.
 - **Agent** — an AI-powered worker that can run multiple strategies AND make its own decisions. Agents have three modes:
   - **Off** — runs assigned strategies only, no AI decisions
   - **Advisor** — logs AI analysis but doesn't trade (safe preview)

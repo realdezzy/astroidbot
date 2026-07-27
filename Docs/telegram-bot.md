@@ -35,7 +35,7 @@ Every sub-screen has **← Back** and **🏠 Home** buttons. Back returns to the
 
 Execute a swap in 4 taps:
 
-1. **Tap 🛒 Quick Trade** → pick a token from the 16 available tokens (e.g. sUSDT)
+1. **Tap 🛒 Quick Trade** → pick a token from the 16 available tokens (e.g. USDCx)
 2. **Choose direction** — 🟢 BUY (spend STX to get the token) or 🔴 SELL (sell the token for STX)
 3. **Type the amount** — reply with a number like `5.0` (STX amount to spend/receive)
 4. **Confirm** — review the quote: estimated output, fee, price impact, wallet used. Tap **✅ Confirm Trade** to execute.
@@ -116,7 +116,7 @@ You don't need to remember commands. Just type naturally:
 
 | You say | Bot does |
 |---------|----------|
-| "buy 10 STX for sUSDT" | Executes a BUY trade |
+| "buy 10 STX for USDCx" | Executes a BUY trade |
 | "show my portfolio" | Opens portfolio screen |
 | "how do I create a wallet?" | Explains wallet creation |
 | "what can you do?" | Lists platform features |

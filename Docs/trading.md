@@ -12,7 +12,7 @@ Execute swaps between any supported Stacks tokens. AstroidBot automatically find
 
 1. Go to **Trade** in the sidebar
 2. **Select wallets** — check the boxes for wallets you want to trade from (multi-wallet support)
-3. **Pick tokens** — choose the input token (e.g. STX) and output token (e.g. sUSDT) from the searchable dropdowns
+3. **Pick tokens** — choose the input token (e.g. STX) and output token (e.g. USDCx) from the searchable dropdowns
 4. **Choose direction** — the swap arrow can be rotated to switch buy/sell direction
 5. **Enter amount** — type how much of the input token to spend
 6. **Review quote** — the quote card shows:
@@ -54,8 +54,8 @@ Tap **📈 Trades** on the main menu. Shows last 20 trades with direction, amoun
 ## Supported Tokens & DEXs
 
 The bot aggregates liquidity from multiple Stacks DEXs (typically 200+ tokens cached automatically):
-- **ALEX**: Standard and stable token pools (STX, sUSDT, ALEX, USDA)
-- **Bitflow**: Stablecoins and protocol tokens (sUSDT, USDA, STX)
+- **ALEX**: Standard and stable token pools (STX, USDCx, ALEX, USDA)
+- **Bitflow**: Stablecoins and protocol tokens (USDCx, USDA, STX)
 - **Velar**: Protocol tokens and liquidity pools (STX, VELAR, etc.)
 - **Faktory**: Meme tokens and newly launched bonding curve assets (e.g. AGENTX, WELSH, etc.)
 

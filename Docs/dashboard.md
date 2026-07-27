@@ -53,7 +53,7 @@ The charts respond to the theme toggle — light and dark modes are fully suppor
 
 The chat input bar on the Dashboard and Agents pages lets you type in plain English:
 
-- **Trading**: "buy 10 STX for sUSDT"
+- **Trading**: "buy 10 STX for USDCx"
 - **Navigation**: "show my limit orders" or "take me to agents"
 - **Settings**: "set max position to 25%"
 - **Info**: "how do I import a wallet?" or "hello"

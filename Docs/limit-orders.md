@@ -27,7 +27,7 @@ Limit orders let you set a target price and walk away. The bot monitors prices e
    - **Wallet** — select which wallet to trade from
    - **Direction** — BUY or SELL
    - **Token In** — the token you're spending (e.g. STX)
-   - **Token Out** — the token you're buying (e.g. sUSDT)
+   - **Token Out** — the token you're buying (e.g. USDCx)
    - **Amount** — how much to spend
    - **Target Price (USD)** — the price at which to execute
 4. Click **Create Order**
@@ -60,7 +60,7 @@ Limit orders let you set a target price and walk away. The bot monitors prices e
 ## Limit Order Execution
 
 **Price Checking:**
-The bot uses the sUSDT price of the input token as a proxy for the real pair price. This works well for tokens that are directionally correlated with sUSDT (the Stacks USD stablecoin). For exotic token pairs, the execution price may differ slightly from your target.
+The bot uses the USDCx price of the input token as a proxy for the real pair price. This works well for tokens that are directionally correlated with USDCx (the Stacks USD stablecoin). For exotic token pairs, the execution price may differ slightly from your target.
 
 **Execution Conditions:**
 - **BUY order**: executes when current price **≤** target price (buy when it drops to your target)
