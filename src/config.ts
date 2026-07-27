@@ -60,6 +60,19 @@ const envSchema = z.object({
   // the supported path for chains like ARC or Robinhood Chain whose router
   // deployments we can't pin from here. See descriptors/defineEvmChain.ts.
   CUSTOM_EVM_CHAINS: z.string().default(""),
+  // Social trading. Off by default and deliberately so: this surface lets a
+  // public post move real funds, and it should be a considered decision to
+  // enable rather than something that arrives with an upgrade.
+  // Enum-transformed, not z.coerce.boolean(): Boolean("false") is true, so a
+  // coerced kill switch would be *enabled* by the very value meant to disable
+  // it. DRY_RUN above uses the same shape for the same reason.
+  SOCIAL_TRADING_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("false"),
+  SOCIAL_BOT_HANDLES: z.string().default(""),
+  X_BEARER_TOKEN: z.string().optional(),
+  NEYNAR_API_KEY: z.string().optional(),
   VELAR_PERP_CONTRACT_ADDRESS: z.string().default("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE"),
   VELAR_PERP_CONTRACT_NAME: z.string().default("velar-artha-perp"),
 });

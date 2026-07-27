@@ -99,3 +99,25 @@ export const UNISWAP_V3_ROUTER_ABI = [
     outputs: [{ name: "amountOut", type: "uint256" }],
   },
 ] as const;
+
+// Wrapped-native (WETH9 and every clone). `deposit` wraps the value sent with
+// the call; `withdraw` unwraps back to the native asset. Both are needed
+// because Uniswap V3 pools only hold ERC-20s, so a user trading their native
+// balance must wrap first — otherwise "trade ETH" silently means "trade WETH
+// you may not have".
+export const WRAPPED_NATIVE_ABI = [
+  {
+    type: "function",
+    name: "deposit",
+    stateMutability: "payable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "amount", type: "uint256" }],
+    outputs: [],
+  },
+] as const;

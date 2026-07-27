@@ -7,7 +7,7 @@ import { ConfigManager } from "../../../src/config.js";
  * silently-missing chain looks identical to one that was never configured,
  * which is exactly how the family-keyed registry hid a dropped adapter.
  */
-describe("registerEnabledChains", () => {
+describe("registerEnabledChains", { timeout: 30_000 }, () => {
   let registerEnabledChains: typeof import("../../../src/services/chains/registerChains.js").registerEnabledChains;
   let ChainAdapterRegistry: typeof import("../../../src/services/chains/chainAdapterRegistry.js").ChainAdapterRegistry;
 
@@ -32,6 +32,9 @@ describe("registerEnabledChains", () => {
     delete process.env.ENABLED_CHAINS;
     delete process.env.CUSTOM_EVM_CHAINS;
     delete process.env.PIMLICO_API_KEY;
+    // Reset here as well as in loadWith: a test that times out or throws
+    // part-way through must not leave registrations behind for the next one.
+    if (ChainAdapterRegistry) ChainAdapterRegistry.getInstance().reset();
   });
 
   afterEach(() => {

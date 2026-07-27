@@ -27,6 +27,7 @@ model User {
   tradeSettings TradeSettings[]
   trades        Trade[]
   perpPositions PerpPosition[]
+  socialAccounts SocialAccount[]
 }
 
 model Wallet {
@@ -323,4 +324,60 @@ model PoolStatsHistory {
   netWhaleFlowUsd     Float    @default(0)
 
   @@index([token, timestamp])
+}
+
+// A linked social identity that may act on a user's behalf.
+//
+// Keyed on platformUserId, never the handle: handles are transferable and
+// re-registrable, so trusting one would let anyone who acquires an abandoned
+// @name move another user's funds.
+model SocialAccount {
+  id             Int       @id @default(autoincrement())
+  userId         Int
+  user           User      @relation(fields: [userId], references: [id])
+  platform       String    // "x" | "farcaster"
+  platformUserId String    // immutable numeric/fid identifier
+  handle         String    // display only — never used for authorization
+  verifiedAt     DateTime?
+  // Caps enforced before execution and independently of RiskManager, so a
+  // compromised social account cannot drain an account even if it passes
+  // every trading-risk check.
+  perTradeLimitUsd Float   @default(50)
+  dailyLimitUsd    Float   @default(200)
+  // Confirm-first by default: a reply with a signed link the user must open.
+  // Auto-execute is strictly opt-in.
+  autoExecute    Boolean   @default(false)
+  enabled        Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  commands SocialCommand[]
+
+  @@unique([platform, platformUserId])
+  @@index([userId])
+}
+
+// One row per inbound post that addressed the bot.
+//
+// The unique key on [platform, postId] is the idempotency guard: streams
+// redeliver, webhooks retry, and a restart can replay a backlog. Without it
+// the same tweet could execute a trade more than once.
+model SocialCommand {
+  id              Int       @id @default(autoincrement())
+  socialAccountId Int?
+  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id])
+  platform        String
+  postId          String
+  authorId        String
+  rawText         String
+  parsedIntent    String?   // JSON of the validated intent, or null if unparseable
+  status          String    @default("RECEIVED") // RECEIVED|REJECTED|AWAITING_CONFIRMATION|EXECUTED|FAILED
+  rejectionReason String?
+  tradeId         Int?
+  confirmToken    String?   @unique
+  confirmExpiresAt DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@unique([platform, postId])
+  @@index([socialAccountId, createdAt])
 }

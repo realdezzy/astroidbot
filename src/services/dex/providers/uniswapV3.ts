@@ -11,7 +11,12 @@ import {
 import { logger } from "../../../utils/logger.js";
 import type { SwappableToken, TransactionPayload } from "../../../types.js";
 import type { DEXQuote } from "../../../types/dexProvider.js";
-import { ERC20_ABI, UNISWAP_V3_QUOTER_V2_ABI, UNISWAP_V3_ROUTER_ABI } from "../../chains/evm/abis.js";
+import {
+  ERC20_ABI,
+  UNISWAP_V3_QUOTER_V2_ABI,
+  UNISWAP_V3_ROUTER_ABI,
+  WRAPPED_NATIVE_ABI,
+} from "../../chains/evm/abis.js";
 import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
@@ -26,8 +31,11 @@ import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js"
  * descriptor. Base, Celo (Ubeswap) and any V3 fork declared through
  * CUSTOM_EVM_CHAINS share this one implementation.
  *
- * Only ERC-20-to-ERC-20 swaps are handled here; native-asset input/output is
- * wrapped by the caller (see EvmChainAdapter's wrap/unwrap support).
+ * Native-asset trades are handled here rather than pushed onto callers: naming
+ * the chain's native symbol resolves to its wrapped form, and the payload
+ * gains a deposit call before the swap and a withdraw after it as needed.
+ * Under ERC-4337 the whole sequence is one atomic UserOperation, so a
+ * half-wrapped balance can't be stranded.
  */
 export class UniswapV3Provider extends BaseDEXProvider {
   readonly name: string;
@@ -93,7 +101,26 @@ export class UniswapV3Provider extends BaseDEXProvider {
     return createPublicClient({ chain, transport: http(this.rpcUrl()) }) as PublicClient;
   }
 
+  /** True when the caller named the chain's native asset (ETH, CELO, …). */
+  private isNative(symbolOrAddress: string): boolean {
+    return symbolOrAddress.toUpperCase() === this.descriptor.nativeSymbol.toUpperCase();
+  }
+
   private resolveToken(symbolOrAddress: string): SwappableToken | null {
+    // Uniswap pools hold only ERC-20s, so the native asset routes through its
+    // wrapped form. Without this, asking to trade ETH resolved to nothing and
+    // reported "no route" on a pair with deep liquidity.
+    if (this.isNative(symbolOrAddress) && this.evm.wrappedNative) {
+      return {
+        contractId: this.evm.wrappedNative,
+        symbol: this.descriptor.nativeSymbol,
+        name: `Wrapped ${this.descriptor.nativeSymbol}`,
+        decimals: this.descriptor.nativeDecimals,
+        chainFamily: this.descriptor.family,
+        chainId: this.descriptor.chainId,
+      };
+    }
+
     const needle = symbolOrAddress.toLowerCase();
     const known = this.tokenList.find(
       (t) => t.symbol.toLowerCase() === needle || t.contractId.toLowerCase() === needle
@@ -270,10 +297,27 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
       const calls: { to: string; data: string; value?: string }[] = [];
 
+      const wrapsIn = this.isNative(tokenIn) && !!this.evm.wrappedNative;
+      const unwrapsOut = this.isNative(tokenOut) && !!this.evm.wrappedNative;
+
+      // Wrap first: the swap spends the wrapped token, so the deposit has to
+      // land before it. Under ERC-4337 all of this is one atomic
+      // UserOperation, so a partially-wrapped balance can't be left behind.
+      if (wrapsIn) {
+        const depositData = encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: "deposit" });
+        calls.push({
+          to: this.evm.wrappedNative!,
+          data: depositData,
+          value: amountInRaw.toString(),
+        });
+      }
+
       // Only include the approval call if the account's current allowance to
       // the router is insufficient — avoids a redundant approve on every swap
       // once one large approval has gone through.
-      const currentAllowance = await this.breaker
+      // A fresh wrap means the balance is new and unapproved, so skip the
+      // allowance read and always approve.
+      const currentAllowance = wrapsIn ? 0n : await this.breaker
         .execute(() =>
           this.publicClient().readContract({
             address: tIn.contractId as Address,
@@ -294,6 +338,17 @@ export class UniswapV3Provider extends BaseDEXProvider {
       }
 
       calls.push({ to: router, data: swapData, value: "0" });
+
+      // Unwrap after the swap so the user ends up holding the native asset
+      // they asked for rather than its wrapped form.
+      if (unwrapsOut) {
+        const withdrawData = encodeFunctionData({
+          abi: WRAPPED_NATIVE_ABI,
+          functionName: "withdraw",
+          args: [amountOutMinimumRaw],
+        });
+        calls.push({ to: this.evm.wrappedNative!, data: withdrawData });
+      }
 
       return { kind: "evm", calls };
     } catch (err) {
