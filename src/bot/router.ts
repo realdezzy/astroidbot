@@ -16,9 +16,16 @@ import { controlScreen } from "./screens/controlScreen.js";
 import { tradeScreen } from "./screens/tradeScreen.js";
 import { tradesScreen } from "./screens/tradesScreen.js";
 import { agentsScreen, runAgent, toggleAgent, setAgentAiMode, deleteAgent, startStrategyWizard, promptStrategyWallets, promptStrategyField } from "./screens/agentsScreen.js";
-import { DEXRegistry } from "../services/dex/dexRegistry.js";
-import { generateWalletKeypair, deriveAddressFromPrivateKey } from "../services/wallet.js";
-import { encrypt } from "../utils/crypto.js";
+import {
+  promptChainForWallet,
+  createWalletOnChain,
+  promptKeyForChain,
+  importWalletKey,
+  saveImportedWallet,
+} from "./callbacks/wallet.js";
+import { decodeCallback } from "./callbacks/codec.js";
+import { activeChain, activeChainTokens } from "./chainContext.js";
+import { walletDescriptor } from "../services/chains/walletChain.js";
 import { escapeMd } from "./utils.js";
 import { sendEmail, buildOtpEmail } from "../utils/email.js";
 import type { BotContext } from "../types/bot.js";
@@ -368,34 +375,12 @@ export function registerRouter(bot: Bot<BotContext>): void {
 
     // ── Wallet import ──
     if (wf === "import_wallet") {
-      let address: string;
-      try { address = deriveAddressFromPrivateKey(text); } catch { return ctx.reply("Invalid Stacks private key. Try again or /cancel."); }
-      const db = DatabaseService.getInstance();
-      if (await db.findWalletByAddress(address)) return ctx.reply("Wallet already exists.");
-      ctx.session.tempPrivateKey = encrypt(text);
-      ctx.session.tempAddress = address;
-      ctx.session.waitingFor = "import_wallet_name";
-      return ctx.reply("✍️ *Enter a name for this imported wallet:*", { parse_mode: "Markdown" });
+      return importWalletKey(ctx, text);
     }
 
     // ── Wallet import name input ──
     if (wf === "import_wallet_name") {
-      const db = DatabaseService.getInstance();
-      const user = await db.findUserByTelegramId(tid);
-      if (!user) return;
-      const wallets = await db.findWalletsByUserId(user.id);
-      const walletName = text.trim() || `Wallet ${wallets.length + 1}`;
-      const tempAddress = ctx.session.tempAddress!;
-      await db.createWallet({
-        userId: user.id,
-        address: tempAddress,
-        name: walletName,
-        encryptedKey: ctx.session.tempPrivateKey!,
-      });
-      ctx.session.waitingFor = null;
-      delete ctx.session.tempPrivateKey;
-      delete ctx.session.tempAddress;
-      await ctx.reply(`✅ Wallet *${escapeMd(walletName)}* imported!\n\nAddress: \`${tempAddress}\``, { parse_mode: "Markdown" });
+      await saveImportedWallet(ctx, text);
       return walletsScreen(ctx);
     }
 
@@ -434,9 +419,14 @@ export function registerRouter(bot: Bot<BotContext>): void {
 
     if (wf === "trade_token_in") {
       const symbol = text.toUpperCase();
-      const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+      // Scoped to the active chain: unscoped, a Base token validates fine for a
+      // Stacks wallet and then fails at quote time with an opaque "no route".
+      const tokens = await activeChainTokens(ctx);
+      const chain = await activeChain(ctx);
       const found = tokens.some((t) => t.symbol.toUpperCase() === symbol);
-      if (!found && symbol !== "STX" && symbol !== "USDCX") {
+      const isChainAsset =
+        symbol === chain.nativeSymbol.toUpperCase() || symbol === chain.stableSymbol.toUpperCase();
+      if (!found && !isChainAsset) {
         return ctx.reply(`❌ Token *${escapeMd(symbol)}* is not recognized by any DEX provider. Please try another symbol:`, { parse_mode: "Markdown" });
       }
       ctx.session.tradeTokenIn = symbol;
@@ -446,9 +436,12 @@ export function registerRouter(bot: Bot<BotContext>): void {
 
     if (wf === "trade_token_out") {
       const symbol = text.toUpperCase();
-      const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+      const tokens = await activeChainTokens(ctx);
+      const chain = await activeChain(ctx);
       const found = tokens.some((t) => t.symbol.toUpperCase() === symbol);
-      if (!found && symbol !== "STX" && symbol !== "USDCX") {
+      const isChainAsset =
+        symbol === chain.nativeSymbol.toUpperCase() || symbol === chain.stableSymbol.toUpperCase();
+      if (!found && !isChainAsset) {
         return ctx.reply(`❌ Token *${escapeMd(symbol)}* is not recognized by any DEX provider. Please try another symbol:`, { parse_mode: "Markdown" });
       }
       if (symbol === ctx.session.tradeTokenIn) {
@@ -789,8 +782,9 @@ export function registerRouter(bot: Bot<BotContext>): void {
       if (!walletId) return;
       const wallet = await db.findWalletById(walletId);
       if (!wallet || wallet.userId !== user.id) return;
-      const tokenIn = ctx.session.tradeTokenIn ?? "STX";
-      const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
+      const walletChain = walletDescriptor(wallet);
+      const tokenIn = ctx.session.tradeTokenIn ?? walletChain.nativeSymbol;
+      const tokenOut = ctx.session.tradeTokenOut ?? walletChain.stableSymbol;
       const rawAmount = ctx.session.tradeAmount;
       const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));
       if (amount <= 0) return;
@@ -963,27 +957,23 @@ export function registerRouter(bot: Bot<BotContext>): void {
       return controlScreen(ctx);
     }
 
+    // ── Chain picker results (wallet|new|<chain>, wallet|imp|<chain>) ──
+    const parsed = decodeCallback(data);
+    if (parsed?.namespace === "wallet") {
+      if (parsed.action === "new") return createWalletOnChain(ctx, parsed.args[0] ?? "");
+      if (parsed.action === "imp") return promptKeyForChain(ctx, parsed.args[0] ?? "");
+    }
+
     // ── Wallet create / import / delete / reveal ──
+    // Wallet provisioning is chain-first: pick the chain, then generate or
+    // import through that chain's adapter. Previously both paths called the
+    // Stacks-only helpers, so a Telegram user could never get a wallet on any
+    // other chain no matter what the deployment had enabled.
     if (action === "create_wallet") {
-      const tid = BigInt(ctx.from?.id ?? 0);
-      const db = DatabaseService.getInstance();
-      const user = await db.findUserByTelegramId(tid);
-      if (!user) return;
-      const { privateKeyHex, address } = generateWalletKeypair();
-      const wallets = await db.findWalletsByUserId(user.id);
-      const walletName = `Wallet ${wallets.length + 1}`;
-      await db.createWallet({
-        userId: user.id,
-        address,
-        name: walletName,
-        encryptedKey: encrypt(privateKeyHex),
-      });
-      await ctx.reply(`✅ Wallet *${escapeMd(walletName)}* created!\n\nAddress: \`${address}\``, { parse_mode: "Markdown" });
-      return walletsScreen(ctx);
+      return promptChainForWallet(ctx, "create");
     }
     if (action === "import_wallet") {
-      ctx.session.waitingFor = "import_wallet";
-      return ctx.reply("📥 Paste your Stacks private key:\n\n/cancel to abort.");
+      return promptChainForWallet(ctx, "import");
     }
     if (action === "delete_wallet") {
       ctx.session.waitingFor = "delete_wallet";

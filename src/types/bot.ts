@@ -26,6 +26,14 @@ export interface SessionData {
   tempStrategyWalletIds: number[] | undefined;
   tempStrategyFields: string[] | undefined;
   tempStrategyFieldIndex: number | undefined;
+  // Chain the import flow is provisioning for, set by the chain picker before
+  // the key is requested. Without it the bot could only ever make Stacks
+  // wallets, whatever the deployment had enabled.
+  importChainId: string | undefined;
+  // Chain the user is currently browsing/trading on. Token lists, quotes and
+  // orders are all scoped to it — unscoped, a Base token can appear in a
+  // Stacks wallet's picker and vice versa.
+  activeChainId: string | undefined;
   chatHistory?: { role: "user" | "assistant"; content: string }[];
 }
 
