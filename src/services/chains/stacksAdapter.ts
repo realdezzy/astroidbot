@@ -35,12 +35,12 @@ export class StacksAdapter extends BaseChainAdapter {
     return 30_000;
   }
 
-  async generateWalletKeypair(): Promise<{ privateKeyHex: string; address: string }> {
+  async generateWalletKeypair(): Promise<{ privateKey: string; address: string }> {
     return generateWalletKeypair();
   }
 
-  async deriveAddressFromPrivateKey(privateKeyHex: string): Promise<string> {
-    return deriveAddressFromPrivateKey(privateKeyHex);
+  async deriveAddressFromPrivateKey(privateKey: string): Promise<string> {
+    return deriveAddressFromPrivateKey(privateKey);
   }
 
   async executeContractCall(params: {

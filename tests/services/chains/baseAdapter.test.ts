@@ -83,9 +83,9 @@ describe("BaseAdapter Unit Tests", () => {
   });
 
   it("generateWalletKeypair returns the Safe's counterfactual address, not the owner EOA address", async () => {
-    const { privateKeyHex, address } = await adapter.generateWalletKeypair();
+    const { privateKey, address } = await adapter.generateWalletKeypair();
     expect(address).toBe(FAKE_SAFE_ADDRESS);
-    expect(privateKeyHex).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(privateKey).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
   it("deriveAddressFromPrivateKey re-derives the same Safe address from an owner key", async () => {

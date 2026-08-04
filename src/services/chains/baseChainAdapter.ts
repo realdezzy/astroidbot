@@ -79,7 +79,7 @@ export abstract class BaseChainAdapter implements ChainAdapter {
    */
   protected async withWalletLock<T>(
     walletId: number,
-    fn: (privateKeyHex: string, wallet: { id: number; address: string }) => Promise<T>
+    fn: (privateKey: string, wallet: { id: number; address: string }) => Promise<T>
   ): Promise<T | { error: string }> {
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
@@ -95,8 +95,8 @@ export abstract class BaseChainAdapter implements ChainAdapter {
         return { error: `Wallet ${walletId} not found` };
       }
 
-      const privateKeyHex = await KMSService.getInstance().decryptPrivateKey(wallet.encryptedKey);
-      return await fn(privateKeyHex, wallet);
+      const privateKey = await KMSService.getInstance().decryptPrivateKey(wallet.encryptedKey);
+      return await fn(privateKey, wallet);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error("Chain transaction failed", {
@@ -158,8 +158,8 @@ export abstract class BaseChainAdapter implements ChainAdapter {
     await this.db.updateTradeStatus(tradeId, "CONFIRMED", txId);
   }
 
-  abstract generateWalletKeypair(): Promise<{ privateKeyHex: string; address: string }>;
-  abstract deriveAddressFromPrivateKey(privateKeyHex: string): Promise<string>;
+  abstract generateWalletKeypair(): Promise<{ privateKey: string; address: string }>;
+  abstract deriveAddressFromPrivateKey(privateKey: string): Promise<string>;
   abstract transfer(params: {
     walletId: number;
     senderAddress: string;

@@ -175,13 +175,13 @@ export class EvmChainAdapter extends BaseChainAdapter {
     });
   }
 
-  async generateWalletKeypair(): Promise<{ privateKeyHex: string; address: string }> {
-    const privateKeyHex = generatePrivateKey();
-    return { privateKeyHex, address: await this.deriveAddressFromPrivateKey(privateKeyHex) };
+  async generateWalletKeypair(): Promise<{ privateKey: string; address: string }> {
+    const privateKey = generatePrivateKey();
+    return { privateKey, address: await this.deriveAddressFromPrivateKey(privateKey) };
   }
 
-  async deriveAddressFromPrivateKey(privateKeyHex: string): Promise<string> {
-    const key = privateKeyHex as Hex;
+  async deriveAddressFromPrivateKey(privateKey: string): Promise<string> {
+    const key = privateKey as Hex;
     if (this.evm.custody === "eoa") {
       return privateKeyToAccount(key).address;
     }
@@ -202,7 +202,7 @@ export class EvmChainAdapter extends BaseChainAdapter {
     walletId: number;
     senderAddress: string;
   }): Promise<{ txId: string } | { error: string }> {
-    return this.withWalletLock(params.walletId, async (privateKeyHex) => {
+    return this.withWalletLock(params.walletId, async (privateKey) => {
       // Checked inside the lock, not before it: a dry run should still exercise
       // the same contention path as a real send, so DRY_RUN testing catches
       // lock bugs rather than bypassing them.
@@ -210,10 +210,10 @@ export class EvmChainAdapter extends BaseChainAdapter {
       if (dry) return dry;
 
       if (this.evm.custody === "eoa") {
-        return this.sendAsEoa(privateKeyHex as Hex, params.calls, params.senderAddress);
+        return this.sendAsEoa(privateKey as Hex, params.calls, params.senderAddress);
       }
 
-      const client = await this.smartAccountClientFor(privateKeyHex as Hex);
+      const client = await this.smartAccountClientFor(privateKey as Hex);
       const txHash = await client.sendTransaction({
         calls: params.calls.map((c) => ({
           to: c.to as Hex,
@@ -233,11 +233,11 @@ export class EvmChainAdapter extends BaseChainAdapter {
   }
 
   private async sendAsEoa(
-    privateKeyHex: Hex,
+    privateKey: Hex,
     calls: { to: string; data: string; value?: bigint }[],
     senderAddress: string
   ): Promise<{ txId: string } | { error: string }> {
-    const account = privateKeyToAccount(privateKeyHex);
+    const account = privateKeyToAccount(privateKey);
     const wallet = createWalletClient({
       account,
       chain: this.chain(),

@@ -74,21 +74,21 @@ describe("SolanaAdapter", () => {
 
   describe("keypairs", () => {
     it("generates a base58 secret key and a base58 address", async () => {
-      const { privateKeyHex, address } = await adapter.generateWalletKeypair();
+      const { privateKey, address } = await adapter.generateWalletKeypair();
       // base58 rather than hex, so a key can move between AstroidBot and any
       // standard Solana wallet without conversion.
-      expect(bs58.decode(privateKeyHex)).toHaveLength(64);
+      expect(bs58.decode(privateKey)).toHaveLength(64);
       expect(address).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
     });
 
     it("derives the same address the generator returned", async () => {
-      const { privateKeyHex, address } = await adapter.generateWalletKeypair();
-      expect(await adapter.deriveAddressFromPrivateKey(privateKeyHex)).toBe(address);
+      const { privateKey, address } = await adapter.generateWalletKeypair();
+      expect(await adapter.deriveAddressFromPrivateKey(privateKey)).toBe(address);
     });
 
     it("accepts a hex-encoded key as well as base58", async () => {
-      const { privateKeyHex, address } = await adapter.generateWalletKeypair();
-      const asHex = Buffer.from(bs58.decode(privateKeyHex)).toString("hex");
+      const { privateKey, address } = await adapter.generateWalletKeypair();
+      const asHex = Buffer.from(bs58.decode(privateKey)).toString("hex");
       expect(await adapter.deriveAddressFromPrivateKey(asHex)).toBe(address);
     });
 

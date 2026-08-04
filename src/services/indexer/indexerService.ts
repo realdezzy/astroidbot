@@ -1,4 +1,5 @@
 import { ChainAdapterRegistry } from "../chains/chainAdapterRegistry.js";
+import { ChainHealthMonitor } from "../chains/chainHealth.js";
 import { ConfigManager } from "../../config.js";
 import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
@@ -122,7 +123,10 @@ export class IndexerService {
     const startedAt = Date.now();
 
     try {
-      const result = await indexer.run();
+      // Tracked for per-chain health: the indexer touches every indexed chain
+      // every tick, which makes it by far the best signal for "can this
+      // process reach that chain at all".
+      const result = await ChainHealthMonitor.getInstance().track(chainId, () => indexer.run());
 
       if (result.swapsIngested > 0 || result.poolsDiscovered > 0) {
         logger.info("[indexer] ingested", {

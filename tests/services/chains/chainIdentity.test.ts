@@ -37,7 +37,7 @@ function fakeAdapter(d: ChainDescriptor): ChainAdapter {
     nativeDecimals: d.nativeDecimals,
     stableSymbol: d.stableSymbol,
     chainId: () => d.chainId,
-    generateWalletKeypair: async () => ({ privateKeyHex: "0x", address: "0x" }),
+    generateWalletKeypair: async () => ({ privateKey: "0x", address: "0x" }),
     deriveAddressFromPrivateKey: async () => "0x",
     transfer: async () => ({ txId: "0x" }),
     confirmTransaction: async () => "confirmed" as const,

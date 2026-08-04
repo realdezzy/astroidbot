@@ -14,9 +14,17 @@ vi.mock("viem", async (importOriginal) => {
   };
 });
 
-describe("UniswapV3BaseProvider Unit Tests", () => {
-  let UniswapV3BaseProvider: typeof import("../../../src/services/dex/providers/uniswapV3Base.js").UniswapV3BaseProvider;
-  let provider: import("../../../src/services/dex/providers/uniswapV3Base.js").UniswapV3BaseProvider;
+/**
+ * UniswapV3Provider, exercised against Base's descriptor.
+ *
+ * These ran against a `UniswapV3BaseProvider` subclass until that class was
+ * deleted: it added a BASE_NETWORK-driven singleton and no behaviour, and
+ * nothing outside its own test imported it. Every V3 fork is
+ * `new UniswapV3Provider(descriptor)` now, so the tests point at that.
+ */
+describe("UniswapV3Provider", () => {
+  let UniswapV3Provider: typeof import("../../../src/services/dex/providers/uniswapV3.js").UniswapV3Provider;
+  let provider: import("../../../src/services/dex/providers/uniswapV3.js").UniswapV3Provider;
 
   const WETH = "0x4200000000000000000000000000000000000006";
   const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -26,22 +34,23 @@ describe("UniswapV3BaseProvider Unit Tests", () => {
     process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";
     process.env.AES_KEY = "testkey";
     process.env.JWT_SECRET = "change-me-in-production-to-32-char-min-xyz";
-    process.env.BASE_NETWORK = "mainnet";
     if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
     if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
     ConfigManager.load();
-    ({ UniswapV3BaseProvider } = await import("../../../src/services/dex/providers/uniswapV3Base.js"));
+    ({ UniswapV3Provider } = await import("../../../src/services/dex/providers/uniswapV3.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    provider = UniswapV3BaseProvider.initialize();
+    const { BASE_MAINNET } = await import("../../../src/services/chains/descriptors/base.js");
+    provider = new UniswapV3Provider(BASE_MAINNET);
   });
 
   it("only ships addresses viem will accept as contract targets", async () => {
     // Regression: MAINNET_QUOTER was one hex char short. viem threw inside
     // quoteRaw's per-fee-tier catch, so every mainnet pair silently reported
-    // "no route" with nothing logged. initialize() now validates the constants.
+    // "no route" with nothing logged. Descriptor addresses are validated at
+    // adapter registration now — see assertValidAddresses.
     const { isAddress } = await import("viem");
     const tokens = await provider.getSwappableTokens();
     for (const t of tokens) {
@@ -134,9 +143,8 @@ describe("UniswapV3BaseProvider Unit Tests", () => {
   });
 
   it("caches decimals so a repeated quote does not re-read the contract", async () => {
-    // A distinct address from the test above: initialize() hands back a
-    // singleton, so the decimals cache is shared across cases and reusing an
-    // address would make this pass for the wrong reason.
+    // An ERC-20's decimals cannot change, so re-reading them is a round trip
+    // per quote for an answer that is already known.
     const MEME = "0x2222222222222222222222222222222222222223";
     mockPublicClient.readContract.mockResolvedValue(6);
     mockPublicClient.simulateContract.mockResolvedValue({ result: [1000000n, 0n, 0, 0n] });

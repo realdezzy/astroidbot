@@ -5,6 +5,7 @@ import { DatabaseService } from "./services/db.js";
 import { RedisService } from "./services/redis.js";
 import { hardenOutboundHttp, installProcessGuards, connectDatabase } from "./runtime.js";
 import { registerEnabledChains } from "./services/chains/registerChains.js";
+import { ChainHealthMonitor } from "./services/chains/chainHealth.js";
 import { IndexerService } from "./services/indexer/indexerService.js";
 import { runMarketDataIngestion } from "./services/indexer/ingestionCycle.js";
 
@@ -91,6 +92,11 @@ function createHealthServer(): http.Server {
         status: healthy ? "ok" : "degraded",
         service: "indexer",
         chains: IndexerService.getInstance().indexedChains(),
+        // Per-chain detail, so "the indexer is up but Celo has been failing
+        // for an hour" is answerable without reading logs. It does not affect
+        // the status code: one unreachable chain is degraded capability, not a
+        // reason to restart a container that is ingesting four others fine.
+        chainHealth: ChainHealthMonitor.getInstance().snapshot(),
         uptimeSeconds: Math.round((Date.now() - health.startedAt.getTime()) / 1000),
         lastRunAt: health.lastRunAt,
         lastRunMs: health.lastRunMs,

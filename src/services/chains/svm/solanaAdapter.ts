@@ -67,10 +67,10 @@ export class SolanaAdapter extends BaseChainAdapter {
    * base58-encoded. Stored as base58 rather than hex so an operator can move a
    * key between AstroidBot and any standard Solana wallet without conversion.
    */
-  async generateWalletKeypair(): Promise<{ privateKeyHex: string; address: string }> {
+  async generateWalletKeypair(): Promise<{ privateKey: string; address: string }> {
     const keypair = Keypair.generate();
     return {
-      privateKeyHex: bs58.encode(keypair.secretKey),
+      privateKey: bs58.encode(keypair.secretKey),
       address: keypair.publicKey.toBase58(),
     };
   }

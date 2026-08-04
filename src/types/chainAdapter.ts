@@ -45,8 +45,22 @@ export interface ChainAdapter {
   // method for the call sites that already use it.
   chainId(): string;
 
-  generateWalletKeypair(): Promise<{ privateKeyHex: string; address: string }>;
-  deriveAddressFromPrivateKey(privateKeyHex: string): Promise<string>;
+  /**
+   * A new account for this chain.
+   *
+   * **The key's encoding is the adapter's own and differs by family** — EVM
+   * returns 0x-prefixed hex, Stacks bare hex, Solana base58. That is safe only
+   * because a key is never handed to an adapter other than the one that
+   * produced it; do not parse one generically. (The field was called
+   * `privateKeyHex` until the conformance suite pointed out that this was
+   * false for Solana, and a caller who believed it would have decoded garbage.)
+   *
+   * `address` is what the chain will accept as a counterparty — for ERC-4337
+   * chains that is the Safe's counterfactual address, not the owner EOA the
+   * key belongs to.
+   */
+  generateWalletKeypair(): Promise<{ privateKey: string; address: string }>;
+  deriveAddressFromPrivateKey(privateKey: string): Promise<string>;
 
   executeContractCall?(params: {
     action: RebalanceAction;

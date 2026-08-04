@@ -312,8 +312,8 @@ export class UserController {
       const existing = await db.findWalletsByUserId(req.userId!);
       const walletName = name?.trim() || `Wallet ${existing.length + 1}`;
 
-      const { privateKeyHex, address } = await adapter.generateWalletKeypair();
-      const encryptedKey = encrypt(privateKeyHex);
+      const { privateKey, address } = await adapter.generateWalletKeypair();
+      const encryptedKey = encrypt(privateKey);
 
       const wallet = await db.createWallet({
         userId: req.userId!,

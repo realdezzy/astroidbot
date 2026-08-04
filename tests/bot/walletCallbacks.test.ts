@@ -71,7 +71,7 @@ function adapter(chainId: string, family: string, displayName: string, address: 
     },
     chainFamily: family,
     chainId: () => chainId,
-    generateWalletKeypair: vi.fn().mockResolvedValue({ privateKeyHex: "priv", address }),
+    generateWalletKeypair: vi.fn().mockResolvedValue({ privateKey: "priv", address }),
     deriveAddressFromPrivateKey: vi.fn().mockResolvedValue(address),
   };
 }

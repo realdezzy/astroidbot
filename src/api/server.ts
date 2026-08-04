@@ -16,6 +16,7 @@ import { logger, loggerStorage } from "../utils/logger.js";
 import { AppError, InternalError } from "./errors.js";
 import { WebSocketManager } from "./websocket.js";
 import { DatabaseService } from "../services/db.js";
+import { ChainHealthMonitor } from "../services/chains/chainHealth.js";
 import { authenticate, requireAdmin } from "./middleware/auth.js";
 import { TelegramService } from "../services/telegram.js";
 import authRoutes from "./routes/auth.js";
@@ -115,7 +116,22 @@ export function createServer(): HttpServer {
       uptime: process.uptime(),
       wsClients: WebSocketManager.getInstance().getConnectedCount(),
       telegramBotUsername: ConfigManager.getInstance().config.TELEGRAM_BOT_USERNAME || null,
+      chains: ChainHealthMonitor.getInstance().snapshot(),
     });
+  });
+
+  /**
+   * Per-chain RPC health.
+   *
+   * Deliberately **not** 503 when a chain is down. This process is serving
+   * requests fine; one chain being unreachable is a degraded capability, not a
+   * dead instance, and returning 503 would have an orchestrator restart a
+   * healthy container over someone else's outage. `degraded: true` is the
+   * signal to alert on; the container-level check stays on /api/health.
+   */
+  app.get("/api/health/chains", (_req: Request, res: Response) => {
+    const monitor = ChainHealthMonitor.getInstance();
+    res.json({ degraded: monitor.anyUnhealthy(), chains: monitor.snapshot() });
   });
 
   app.get("/api/health/liveness", (_req: Request, res: Response) => {

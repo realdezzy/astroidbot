@@ -144,7 +144,7 @@ describe("Wallet provisioning across chain families", () => {
 
   it("defaults to a stacks wallet when no chain is given", async () => {
     stacksAdapter.generateWalletKeypair.mockResolvedValue({
-      privateKeyHex: "a".repeat(64),
+      privateKey: "a".repeat(64),
       address: "SP123",
     });
     mockDbInstance.createWallet.mockImplementation(async (d: Record<string, unknown>) => ({
@@ -166,7 +166,7 @@ describe("Wallet provisioning across chain families", () => {
   it("generates an EVM wallet through the evm adapter when Base is enabled", async () => {
     registeredAdapters.set("base:sepolia", evmAdapter);
     evmAdapter.generateWalletKeypair.mockResolvedValue({
-      privateKeyHex: "0x" + "b".repeat(64),
+      privateKey: "0x" + "b".repeat(64),
       address: "0x1111111111111111111111111111111111111111",
     });
     mockDbInstance.createWallet.mockImplementation(async (d: Record<string, unknown>) => ({

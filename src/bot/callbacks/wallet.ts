@@ -74,7 +74,7 @@ export async function createWalletOnChain(
   if (!user) return ctx.reply("⚠️ Account not found. Send /start first.");
 
   try {
-    const { privateKeyHex, address } = await adapter.generateWalletKeypair();
+    const { privateKey, address } = await adapter.generateWalletKeypair();
     const wallets = await db.findWalletsByUserId(user.id);
     const walletName = `Wallet ${wallets.length + 1}`;
 
@@ -82,7 +82,7 @@ export async function createWalletOnChain(
       userId: user.id,
       address,
       name: walletName,
-      encryptedKey: encrypt(privateKeyHex),
+      encryptedKey: encrypt(privateKey),
       chainFamily: adapter.chainFamily,
       chain: adapter.chainId(),
     });
