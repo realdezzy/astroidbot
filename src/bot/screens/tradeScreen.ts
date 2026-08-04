@@ -171,11 +171,12 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
         .text("🏠 Home", "home");
 
       await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch (err: any) {
+    } catch (err) {
       if (ctx.chat) {
         try { await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id); } catch { }
       }
-      await ctx.reply(`❌ Quote calculation failed: ${err.message || "Unknown error"}.`);
+      const reason = err instanceof Error ? err.message : "Unknown error";
+      await ctx.reply(`❌ Quote calculation failed: ${reason}.`);
       return tradeScreen(ctx, "pick_wallet");
     }
     return;

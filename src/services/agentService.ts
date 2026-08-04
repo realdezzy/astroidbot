@@ -10,6 +10,7 @@ import { buildAgentPrompt } from "./ai/prompts/agent.js";
 import { walletChainId, walletNativeSymbol, groupByChainId } from "./chains/walletChain.js";
 import { AgentDecisionSchema } from "../validation/ai/schemas.js";
 import type { RebalanceAction, SwappableToken } from "../types.js";
+import { Prisma } from "@prisma/client";
 
 interface AgentRunResult {
   actions: number;
@@ -153,7 +154,7 @@ export class AgentService {
 
       await db.prisma.tradeAgent.update({
         where: { id: agent.id },
-        data: { state: state as any },
+        data: { state: state as Prisma.InputJsonValue },
       });
 
       await this.handleAgentSuccess(agentId);

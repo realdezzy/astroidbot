@@ -4,7 +4,8 @@ import { ConfigManager } from "../../config.js";
 import { generateWalletKeypair, deriveAddressFromPrivateKey } from "../wallet.js";
 import { TransactionService } from "../transaction.js";
 import type { ChainDescriptor } from "../../types/chain.js";
-import type { RebalanceAction } from "../../types.js";
+import type { ClarityArgs, RebalanceAction } from "../../types.js";
+import type { PostCondition } from "@stacks/transactions";
 
 /**
  * Stacks.
@@ -48,12 +49,12 @@ export class StacksAdapter extends BaseChainAdapter {
     contractAddress: string;
     contractName: string;
     functionName: string;
-    functionArgs: any[];
+    functionArgs: ClarityArgs;
     walletId: number;
     senderAddress: string;
     maxOutbound: number;
     useGasless?: boolean;
-    postConditionsOverride?: any[];
+    postConditionsOverride?: PostCondition[];
   }): Promise<{ txId: string } | { error: string }> {
     return TransactionService.getInstance().execute(
       params.action,

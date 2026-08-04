@@ -8,6 +8,22 @@ import {
 import { ConfigManager } from "../src/config.js";
 import { beforeAll, vi } from "vitest";
 
+/**
+ * normalizePostConditions is private, and testing it directly is deliberate:
+ * it decides whether a swap carries the DEX's exact post-conditions or a
+ * rebuilt approximation, and getting that wrong removes the on-chain slippage
+ * protection without failing anything.
+ */
+interface NormalizeSeam {
+  normalizePostConditions(
+    action: RebalanceAction,
+    senderAddress: string,
+    contractAddress: string,
+    txFee: bigint,
+    overridePostConditions?: PostCondition[]
+  ): PostCondition[];
+}
+
 vi.mock("../src/services/db.js", () => {
   const mockDbInstance = {
     updateTradeStatus: vi.fn().mockResolvedValue(true),
@@ -142,7 +158,7 @@ describe("TransactionService (from src/)", () => {
         amount: 100n,
       };
 
-      const result = (txService as any).normalizePostConditions(
+      const result = (txService as unknown as NormalizeSeam).normalizePostConditions(
         action,
         "SP1",
         "SP2",
@@ -171,7 +187,7 @@ describe("TransactionService (from src/)", () => {
         amount: "0",
       };
 
-      const result = (txService as any).normalizePostConditions(
+      const result = (txService as unknown as NormalizeSeam).normalizePostConditions(
         action,
         "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
         "SP2",
@@ -195,7 +211,7 @@ describe("TransactionService (from src/)", () => {
 
       // No override → buildPostConditions computes the STX limit with fee
       const txService = TransactionService.getInstance();
-      const result = (txService as any).normalizePostConditions(
+      const result = (txService as unknown as NormalizeSeam).normalizePostConditions(
         action,
         "SPMYF9RSJWA9SGDM25ARH13C3HSEM93EWDPE07J2",
         "SP2",
@@ -215,11 +231,11 @@ describe("TransactionService (from src/)", () => {
       const txService = TransactionService.getInstance();
       
       // Mock fetchTransactionStatus to simulate a pending transaction
-      const fetchSpy = vi.spyOn(txService as any, "fetchTransactionStatus")
+      const fetchSpy = vi.spyOn(txService as unknown as Record<string, () => unknown>, "fetchTransactionStatus")
         .mockResolvedValue({ status: "pending" });
 
       // Override sleep to resolve immediately and speed up the test
-      const sleepSpy = vi.spyOn(txService as any, "sleep").mockResolvedValue(undefined);
+      const sleepSpy = vi.spyOn(txService as unknown as Record<string, () => unknown>, "sleep").mockResolvedValue(undefined);
 
       // Trigger first poll (blocking loop)
       const firstPollPromise = txService.confirmTransaction("0xtesttxid123", 123, true);

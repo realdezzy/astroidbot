@@ -64,7 +64,7 @@ describe("TransactionService Devnet Integration Test", () => {
     process.env.DRY_RUN = "false"; // We want to broadcast to the local node
 
     // Reset ConfigManager instance for network settings reload
-    (ConfigManager as any).instance = undefined;
+    (ConfigManager as unknown as { instance?: unknown }).instance = undefined;
     ConfigManager.load();
   });
 

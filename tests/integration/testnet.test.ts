@@ -68,7 +68,7 @@ describe("TransactionService Testnet Integration Test", () => {
     process.env.DRY_RUN = "false"; // We want to broadcast to Testnet
 
     // Reset ConfigManager instance for network settings reload
-    (ConfigManager as any).instance = undefined;
+    (ConfigManager as unknown as { instance?: unknown }).instance = undefined;
     ConfigManager.load();
   });
 

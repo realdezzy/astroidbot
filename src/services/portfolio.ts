@@ -312,7 +312,7 @@ export class PortfolioManager {
     ];
 
     let data: StacksBalance | null = null;
-    let fetchError: any = null;
+    let fetchError: unknown = null;
 
     for (const url of urls) {
       try {

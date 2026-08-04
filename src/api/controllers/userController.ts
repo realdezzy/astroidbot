@@ -26,6 +26,7 @@ import {
   ConflictError,
   UnauthorizedError,
   AppError,
+  messageOf,
 } from "../errors.js";
 
 export class UserController {
@@ -540,9 +541,9 @@ export class UserController {
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
 
       res.json(balances);
-    } catch (error: any) {
+    } catch (error) {
       logger.error("Failed to fetch wallet balances", { error });
-      next(new AppError(error?.message || "Failed to fetch wallet balances", 502, "BAD_GATEWAY"));
+      next(new AppError(messageOf(error, "Failed to fetch wallet balances"), 502, "BAD_GATEWAY"));
     }
   }
 
@@ -770,9 +771,9 @@ export class UserController {
           isBest: q.isBest,
         })),
       });
-    } catch (error: any) {
+    } catch (error) {
       logger.error("Quote fetch failed", { error });
-      next(new AppError(error?.message || "Quote fetch failed", 502, "BAD_GATEWAY"));
+      next(new AppError(messageOf(error, "Quote fetch failed"), 502, "BAD_GATEWAY"));
     }
   }
 

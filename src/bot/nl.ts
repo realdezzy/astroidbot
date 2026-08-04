@@ -14,6 +14,7 @@ import { tradesScreen } from "./screens/tradesScreen.js";
 import { agentsScreen } from "./screens/agentsScreen.js";
 import { walletDescriptor } from "../services/chains/walletChain.js";
 import type { BotContext } from "../types/bot.js";
+import { Prisma } from "@prisma/client";
 
 export async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
   const tid = BigInt(ctx.from?.id ?? 0);
@@ -146,7 +147,7 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
 
   if (action === "settings") {
     const key = parsed.key as string;
-    const value = parsed.value as any;
+    const value = parsed.value as string | number | boolean;
     if (!key || value === undefined) return;
     const db = DatabaseService.getInstance();
     const s = await db.findTradeSettings(user.id, "personal");
@@ -200,7 +201,7 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
 
   if (action === "create_strategy") {
     const type = parsed.type as string;
-    const config = parsed.config as Record<string, any>;
+    const config = parsed.config as Prisma.InputJsonValue;
     if (!type || !config) return;
     const db = DatabaseService.getInstance();
     await db.prisma.tradingStrategy.create({

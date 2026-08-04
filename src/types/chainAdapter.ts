@@ -1,4 +1,5 @@
-import type { RebalanceAction } from "../types.js";
+import type { PostCondition } from "@stacks/transactions";
+import type { ClarityArgs, RebalanceAction } from "../types.js";
 import type { ChainDescriptor, ChainFamily } from "./chain.js";
 
 /**
@@ -67,12 +68,12 @@ export interface ChainAdapter {
     contractAddress: string;
     contractName: string;
     functionName: string;
-    functionArgs: any[];
+    functionArgs: ClarityArgs;
     walletId: number;
     senderAddress: string;
     maxOutbound: number;
     useGasless?: boolean;
-    postConditionsOverride?: any[];
+    postConditionsOverride?: PostCondition[];
   }): Promise<{ txId: string } | { error: string }>;
 
   // `calls` is always an array (single-call is just a one-element array) so

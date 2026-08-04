@@ -53,3 +53,14 @@ export class InternalError extends AppError {
     super(message, 500, "INTERNAL_ERROR");
   }
 }
+
+/**
+ * An unknown thrown value's message, or a fallback.
+ *
+ * `catch (error: any)` and `error?.message` were how this was done before —
+ * which reads fine and silently produces `undefined` for anything thrown that
+ * isn't an Error, sending the caller a 502 with no reason at all.
+ */
+export function messageOf(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}

@@ -1,3 +1,15 @@
+import type { ClarityValue, PostCondition } from "@stacks/transactions";
+
+/**
+ * Clarity call arguments, in either form that genuinely reaches
+ * TransactionService.execute.
+ *
+ * DEX providers hand over `ClarityValue`s they built themselves; perpService
+ * passes the string forms `parseClarityArgs` understands. Both are real call
+ * paths, so the union is the honest type — this was `any[]`, which typechecked
+ * everything and described nothing.
+ */
+export type ClarityArgs = ClarityValue[] | string[];
 export interface SwappableToken {
   contractId: string;
   symbol: string;
@@ -74,8 +86,8 @@ export interface TransactionPayload {
   contractAddress?: string;
   contractName?: string;
   functionName?: string;
-  functionArgs?: any[];
-  postConditions?: any[];
+  functionArgs?: ClarityValue[];
+  postConditions?: PostCondition[];
   // EVM — always a list of calls (single-call is a one-element array) so a
   // provider can express multi-step operations (e.g. ERC-20 approve + swap)
   // as one batched UserOperation.
@@ -109,8 +121,8 @@ export function assertStacksPayload(payload: TransactionPayload): asserts payloa
   contractAddress: string;
   contractName: string;
   functionName: string;
-  functionArgs: any[];
-  postConditions: any[];
+  functionArgs: ClarityValue[];
+  postConditions: PostCondition[];
 } {
   if (
     !payload.contractAddress ||

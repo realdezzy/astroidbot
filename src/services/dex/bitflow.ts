@@ -15,12 +15,25 @@ interface LocalPool {
   feeRate: number;
 }
 
+/**
+ * Runs `fn` with the Bitflow SDK's console noise suppressed.
+ *
+ * The SDK writes expected conditions — a route with no quote, a read-only call
+ * that reverts, an upstream 502 — straight to console at error level, several
+ * per pool per refresh. None of it is actionable and all of it drowns our own
+ * logs, so it is filtered by message rather than by level.
+ *
+ * eslint-disable no-console: this function does not log to the console, it
+ * *intercepts* it. Routing these through the logger is the one thing that
+ * cannot work here — the calls originate inside a dependency.
+ */
+/* eslint-disable no-console */
 async function callSilently<T>(fn: () => Promise<T>): Promise<T> {
   const originalError = console.error;
   const originalWarn = console.warn;
   const originalLog = console.log;
 
-  const filter = (...args: any[]) => {
+  const filter = (...args: unknown[]) => {
     const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
     return (
       msg.includes("Error calling read-only function") ||
@@ -37,15 +50,15 @@ async function callSilently<T>(fn: () => Promise<T>): Promise<T> {
     );
   };
 
-  console.error = (...args: any[]) => {
+  console.error = (...args: unknown[]) => {
     if (filter(...args)) return;
     originalError(...args);
   };
-  console.warn = (...args: any[]) => {
+  console.warn = (...args: unknown[]) => {
     if (filter(...args)) return;
     originalWarn(...args);
   };
-  console.log = (...args: any[]) => {
+  console.log = (...args: unknown[]) => {
     if (filter(...args)) return;
     originalLog(...args);
   };
@@ -58,6 +71,7 @@ async function callSilently<T>(fn: () => Promise<T>): Promise<T> {
     console.log = originalLog;
   }
 }
+/* eslint-enable no-console */
 
 export class BitflowDEXService implements DEXProvider {
   name = "Bitflow";
@@ -187,8 +201,8 @@ export class BitflowDEXService implements DEXProvider {
       });
 
       return this.pools;
-    } catch (error: any) {
-      if (error?.message?.includes("404")) {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("404")) {
         // Permanent failure — mark SDK as unusable so we stop retrying
         this.sdkInitFailed = true;
         logger.warn("Bitflow API returned 404 — disabling Bitflow integration for this session");

@@ -147,7 +147,9 @@ export function createServer(): HttpServer {
       try {
         const queue = QueueManager.getInstance().getQueue(QUEUES.TRADE_EXECUTION);
         const client = await queue.client;
-        const pingRes = await (client as any).ping();
+        // BullMQ types `queue.client` as its own connection wrapper; ping is
+        // ioredis's and isn't on that type, though it is on the object.
+        const pingRes = await (client as unknown as { ping(): Promise<string> }).ping();
         redisOk = pingRes === "PONG";
       } catch (redisErr) {
         logger.error("Redis readiness check failed", { error: (redisErr as Error).message });

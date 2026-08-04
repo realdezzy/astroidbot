@@ -18,6 +18,7 @@ import { walletChainId } from "../services/chains/walletChain.js";
 import { executeApprovedActions } from "../services/strategyEngine.js";
 import { logger } from "../utils/logger.js";
 import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
+import { Prisma } from "@prisma/client";
 
 
 export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void> {
@@ -176,7 +177,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   // Persist state mutations written by the strategy (e.g. lastAiRefresh, wasAboveHigh).
   await db.prisma.tradingStrategy.update({
     where: { id: strategyId },
-    data: { state: state as any },
+    data: { state: state as Prisma.InputJsonValue },
   });
 
   const slippageBps = (config.maxSlippageBps as number) ?? settings.slippageBps;

@@ -14,7 +14,7 @@ const baseSchema = z.object({
   walletIds: z.array(z.number().int().positive()).optional(),
 }).passthrough();
 
-const schemas: Record<string, z.ZodObject<any>> = {
+const schemas: Record<string, z.ZodTypeAny> = {
   portfolio_rebalance: baseSchema.extend({
     rebalanceThreshold: percentage.default(2),
     maxPositionPct: percentage.default(25),

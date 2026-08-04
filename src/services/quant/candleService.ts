@@ -1,6 +1,7 @@
 import { DatabaseService } from "../db.js";
 import { logger } from "../../utils/logger.js";
 import { DEFAULT_CHAIN_ID } from "../chains/descriptors/index.js";
+import { Prisma } from "@prisma/client";
 
 export interface CandleData {
   open: number;
@@ -190,7 +191,7 @@ export class CandleService {
     };
     const intervalMs = intervalMsMap[timeframe] ?? 60_000;
     const now = Date.now();
-    const candlesToCreate: any[] = [];
+    const candlesToCreate: Prisma.CandleCreateManyInput[] = [];
     let lastPrice = startPrice;
 
     for (let i = limit; i >= 1; i--) {

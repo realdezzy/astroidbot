@@ -260,7 +260,7 @@ export class DatabaseService {
     txId?: string,
     errorMessage?: string
   ) {
-    const extraData: Record<string, any> = {};
+    const extraData: Prisma.TradeUpdateInput = {};
     if (status === "CONFIRMED") {
       extraData.confirmedAt = new Date();
       try {

@@ -22,7 +22,7 @@ export interface SessionData {
   tempAgentContext: string | undefined;
   activeAgentId: number | undefined;
   tempStrategyType: string | undefined;
-  tempStrategyConfig: Record<string, any> | undefined;
+  tempStrategyConfig: Record<string, unknown> | undefined;
   tempStrategyWalletIds: number[] | undefined;
   tempStrategyFields: string[] | undefined;
   tempStrategyFieldIndex: number | undefined;
