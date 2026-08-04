@@ -49,8 +49,12 @@ describe("native asset wrapping", () => {
   it("resolves the native symbol to the wrapped token so a route exists at all", async () => {
     // This is the bug: "ETH" resolved to null, every tier missed, and the user
     // saw "no route" on the deepest pair on the chain.
-    const resolved = (
-      provider as unknown as { resolveToken: (s: string) => { contractId: string } | null }
+    // resolveToken became async when unknown tokens started having their
+    // decimals read on-chain; the native branch still answers without a call.
+    const resolved = await (
+      provider as unknown as {
+        resolveToken: (s: string) => Promise<{ contractId: string } | null>;
+      }
     ).resolveToken("ETH");
     expect(resolved?.contractId.toLowerCase()).toBe(WETH);
   });

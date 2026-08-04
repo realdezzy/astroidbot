@@ -112,6 +112,60 @@ describe("UniswapV3BaseProvider Unit Tests", () => {
     expect(payload!.calls).toHaveLength(1); // swap only
   });
 
+  // ─── Uncatalogued tokens ───────────────────────────────────────────────────
+  // Token discovery surfaces the long tail the descriptor never listed, each
+  // with a Trade button, so an address that isn't in the curated token list is
+  // now the common path rather than an edge case.
+
+  it("reads decimals from the contract for a token outside the curated list", async () => {
+    const MEME = "0x5aD1Bd30914cF62668Aaba0606490D17723aF962";
+
+    // decimals() -> 6. Assuming 18 here would build parseUnits("1", 18): a
+    // request to spend 10^12 times what the user asked for.
+    mockPublicClient.readContract.mockResolvedValue(6);
+    mockPublicClient.simulateContract.mockResolvedValue({ result: [1000000n, 0n, 0, 0n] });
+
+    const ok = await provider.hasRoute(MEME, USDC);
+
+    expect(ok).toBe(true);
+    expect(mockPublicClient.readContract).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: "decimals" })
+    );
+  });
+
+  it("caches decimals so a repeated quote does not re-read the contract", async () => {
+    // A distinct address from the test above: initialize() hands back a
+    // singleton, so the decimals cache is shared across cases and reusing an
+    // address would make this pass for the wrong reason.
+    const MEME = "0x2222222222222222222222222222222222222223";
+    mockPublicClient.readContract.mockResolvedValue(6);
+    mockPublicClient.simulateContract.mockResolvedValue({ result: [1000000n, 0n, 0, 0n] });
+
+    await provider.hasRoute(MEME, USDC);
+    const afterFirst = mockPublicClient.readContract.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { functionName: string }).functionName === "decimals"
+    ).length;
+
+    await provider.hasRoute(MEME, USDC);
+    const afterSecond = mockPublicClient.readContract.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { functionName: string }).functionName === "decimals"
+    ).length;
+
+    expect(afterFirst).toBe(1);
+    expect(afterSecond).toBe(1);
+  });
+
+  it("refuses to resolve a token whose decimals cannot be read", async () => {
+    const BROKEN = "0x1111111111111111111111111111111111111112";
+    mockPublicClient.readContract.mockRejectedValue(new Error("no such method"));
+    mockPublicClient.simulateContract.mockResolvedValue({ result: [1000000n, 0n, 0, 0n] });
+
+    // Failing closed costs a "no route". Guessing costs funds, because
+    // decimals scales the amount actually spent.
+    const payload = await provider.buildSwapPayload(BROKEN, USDC, 1, 0.9, SENDER);
+    expect(payload).toBeNull();
+  });
+
   it("buildSwapPayload returns null when no pool exists on any fee tier", async () => {
     mockPublicClient.simulateContract.mockRejectedValue(new Error("execution reverted"));
     const payload = await provider.buildSwapPayload(WETH, USDC, 1, 0.9, SENDER);

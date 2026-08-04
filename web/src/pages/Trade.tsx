@@ -11,6 +11,9 @@ import {
   Square,
   ArrowRightLeft,
   Receipt,
+  Share2,
+  CheckCircle2,
+  Clock,
 } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { formatNumber, classNames } from "../lib/utils";
@@ -68,6 +71,7 @@ export function Trade() {
   const prefillChainId = searchParams.get("chainId");
   const prefillTokenIn = searchParams.get("tokenIn");
   const prefillTokenOut = searchParams.get("tokenOut");
+  const confirmToken = searchParams.get("confirm");
 
   const [tokenIn, setTokenIn] = useState(prefillTokenIn ?? "STX");
   const [tokenOut, setTokenOut] = useState(prefillTokenOut ?? "USDCx");
@@ -77,6 +81,41 @@ export function Trade() {
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [selectedDex, setSelectedDex] = useState<string | null>(null);
+
+  const { data: pendingSocialData, isLoading: pendingSocialLoading } = useQuery<{
+    ok: boolean;
+    command: {
+      id: number;
+      platform: string;
+      rawText: string;
+      parsedIntent: {
+        action: "buy" | "sell";
+        amount: number;
+        token: string;
+      } | null;
+      confirmExpiresAt: string;
+    };
+  }>({
+    queryKey: ["pending-social-command", confirmToken],
+    queryFn: () => apiFetch(`/me/social-commands/confirm?token=${confirmToken}`),
+    enabled: !!confirmToken,
+  });
+
+  const confirmSocialMutation = useMutation({
+    mutationFn: (token: string) =>
+      apiFetch<{ ok: boolean; message: string }>("/me/social-commands/confirm", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    onSuccess: (data) => {
+      setMsg({ type: "success", text: data.message || "Social trade confirmed and enqueued!" });
+      queryClient.invalidateQueries({ queryKey: ["trades"] });
+      queryClient.invalidateQueries({ queryKey: ["wallets"] });
+    },
+    onError: (err: Error) => {
+      setMsg({ type: "error", text: err.message || "Failed to confirm social trade" });
+    },
+  });
 
   const { data: tokensData } = useQuery<{ tokens: Token[] }>({
     queryKey: ["tokens"],
@@ -320,7 +359,63 @@ export function Trade() {
       {activeTab === "history" && <TradeHistory />}
 
       {activeTab === "swap" && (
-        <div className="max-w-lg mx-auto">
+        <div className="max-w-lg mx-auto space-y-4">
+          {/* Pending Social Trade Banner */}
+          {confirmToken && (
+            <div className="bg-gradient-to-r from-violet-900/40 via-brand-950/40 to-violet-900/40 border border-violet-500/30 rounded-3xl p-5 space-y-3 backdrop-blur shadow-xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Share2 className="w-5 h-5 text-violet-400" />
+                  <span className="text-sm font-bold text-title-text uppercase tracking-wider">
+                    Social Trade Authorization
+                  </span>
+                </div>
+                <span className="flex items-center gap-1 text-xs text-amber-400 font-medium bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">
+                  <Clock className="w-3.5 h-3.5" /> 5-Min TTL
+                </span>
+              </div>
+
+              {pendingSocialLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-text py-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-violet-400" /> Loading mention details...
+                </div>
+              ) : pendingSocialData?.command ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-text/90 italic bg-input-bg/60 p-3 rounded-2xl border border-divider-color/40">
+                    &quot;{pendingSocialData.command.rawText}&quot;
+                  </p>
+                  <div className="flex items-center justify-between text-xs text-title-text font-medium bg-violet-500/10 p-3 rounded-2xl border border-violet-500/20">
+                    <span>Requested Command:</span>
+                    <span className="font-bold text-violet-300 uppercase">
+                      {pendingSocialData.command.parsedIntent?.action}{" "}
+                      {pendingSocialData.command.parsedIntent?.amount}{" "}
+                      {pendingSocialData.command.parsedIntent?.token}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => confirmSocialMutation.mutate(confirmToken)}
+                    disabled={confirmSocialMutation.isPending}
+                    className="w-full py-3 bg-gradient-to-r from-violet-600 to-brand-500 hover:from-violet-500 hover:to-brand-400 text-white font-bold text-sm rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-50"
+                  >
+                    {confirmSocialMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Authorizing...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" /> Confirm & Execute Social Trade
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-red-400">
+                  Invalid or expired confirmation link. Please check your social post reply for updated details.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="bg-card-bg/80 backdrop-blur border border-card-border rounded-3xl p-1 space-y-1 shadow-2xl">
             {/* Multi-wallet selector */}
             <div className="px-4 pt-4 pb-2 space-y-2">

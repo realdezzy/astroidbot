@@ -21,10 +21,30 @@ vi.mock("../../src/services/dex/dexRegistry.js", () => ({
   DEXRegistry: { getInstance: () => mockDexRegistry },
 }));
 
+/**
+ * Stub market-data provider. TokenDiscoveryService talks to the
+ * MarketDataProvider interface now rather than to DexScreener directly, so the
+ * tests drive it through the same seam production swaps implementations on.
+ */
+const mockMarketData = {
+  name: "stub",
+  supportsChain: vi.fn().mockReturnValue(true),
+  getMarketData: vi.fn().mockResolvedValue(new Map()),
+  search: vi.fn().mockResolvedValue([]),
+  topTokens: vi.fn().mockResolvedValue([]),
+};
+
 const tradableChains: { chainId: string }[] = [];
+/** Registry contents drive the testnet filter, so `list` matters here too. */
+const registeredChains: { chainId: string; isTestnet: boolean }[] = [];
 
 vi.mock("../../src/services/chains/chainAdapterRegistry.js", () => ({
-  ChainAdapterRegistry: { getInstance: () => ({ tradable: () => tradableChains }) },
+  ChainAdapterRegistry: {
+    getInstance: () => ({
+      tradable: () => tradableChains,
+      list: () => registeredChains,
+    }),
+  },
 }));
 
 describe("TokenDiscoveryService", () => {
@@ -46,9 +66,13 @@ describe("TokenDiscoveryService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     tradableChains.length = 0;
+    registeredChains.length = 0;
     mockToken.upsert.mockResolvedValue({});
     mockToken.findMany.mockResolvedValue([]);
     mockToken.count.mockResolvedValue(0);
+    mockMarketData.getMarketData.mockResolvedValue(new Map());
+    mockMarketData.search.mockResolvedValue([]);
+    service.setMarketDataProvider(mockMarketData);
   });
 
   describe("syncChain", () => {
@@ -80,7 +104,10 @@ describe("TokenDiscoveryService", () => {
 
       const call = mockToken.upsert.mock.calls[0]![0];
       expect(call.update).not.toHaveProperty("priceUsd");
-      expect(call.create.priceUsd).toBeNull();
+      // On create the column is simply omitted, which stores NULL — the same
+      // outcome as passing null explicitly, and the point is that no bogus
+      // zero is written either way.
+      expect(call.create.priceUsd ?? null).toBeNull();
     });
 
     it("keeps syncing after one token fails", async () => {
@@ -176,5 +203,29 @@ describe("TokenDiscoveryService", () => {
       const and = mockToken.findMany.mock.calls[0]![0].where.AND;
       expect(and[0].OR).toHaveLength(3);
     });
+
+    it("handles category trending filter by volume sort", async () => {
+      await service.discover({ category: "trending" });
+      expect(mockToken.findMany.mock.calls[0]![0].orderBy).toEqual([
+        { volume24h: { sort: "desc", nulls: "last" } },
+      ]);
+    });
+
+    it("handles category gainers filter by price change sort", async () => {
+      await service.discover({ category: "gainers" });
+      expect(mockToken.findMany.mock.calls[0]![0].orderBy).toEqual([
+        { priceChange24h: { sort: "desc", nulls: "last" } },
+      ]);
+    });
+
+    it("handles category new filter with date threshold", async () => {
+      await service.discover({ category: "new" });
+      const where = mockToken.findMany.mock.calls[0]![0].where;
+      expect(where.pairCreatedAt).toHaveProperty("gte");
+      expect(mockToken.findMany.mock.calls[0]![0].orderBy).toEqual([
+        { pairCreatedAt: { sort: "desc", nulls: "last" } },
+      ]);
+    });
   });
 });
+

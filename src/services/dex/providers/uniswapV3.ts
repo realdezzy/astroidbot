@@ -106,7 +106,44 @@ export class UniswapV3Provider extends BaseDEXProvider {
     return symbolOrAddress.toUpperCase() === this.descriptor.nativeSymbol.toUpperCase();
   }
 
-  private resolveToken(symbolOrAddress: string): SwappableToken | null {
+  /**
+   * Decimals for tokens outside the curated list. Permanent — an ERC-20's
+   * decimals cannot change, so there is nothing to invalidate.
+   */
+  private decimalsCache = new Map<string, number>();
+
+  /**
+   * Reads an unknown token's decimals on-chain.
+   *
+   * Returns null rather than a default when the read fails. Guessing is not
+   * safe here: `decimals` scales the *amount being spent*. Assuming 18 for a
+   * 6-decimal token turns "swap 1 token" into `parseUnits("1", 18)` — a
+   * request to spend 10^12 times more than the user asked for. Refusing to
+   * resolve costs a "no route"; guessing can cost funds.
+   */
+  private async fetchDecimals(address: string): Promise<number | null> {
+    const key = address.toLowerCase();
+    const cached = this.decimalsCache.get(key);
+    if (cached !== undefined) return cached;
+
+    try {
+      const raw = await this.publicClient().readContract({
+        address: key as Address,
+        abi: ERC20_ABI,
+        functionName: "decimals",
+      });
+
+      const decimals = Number(raw);
+      if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) return null;
+
+      this.decimalsCache.set(key, decimals);
+      return decimals;
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveToken(symbolOrAddress: string): Promise<SwappableToken | null> {
     // Uniswap pools hold only ERC-20s, so the native asset routes through its
     // wrapped form. Without this, asking to trade ETH resolved to nothing and
     // reported "no route" on a pair with deep liquidity.
@@ -126,14 +163,21 @@ export class UniswapV3Provider extends BaseDEXProvider {
       (t) => t.symbol.toLowerCase() === needle || t.contractId.toLowerCase() === needle
     );
     if (known) return known;
-    // Unknown ERC-20 address — assume the chain's native decimals (18 on every
-    // EVM chain). A symbol we don't recognise correctly fails to resolve.
+
+    // Unknown ERC-20 address. Its decimals are read from the contract rather
+    // than assumed: token discovery now surfaces the long tail of tokens that
+    // were never in the curated list, each with a Trade button, so "unknown
+    // address" went from a rare edge case to the common path. A symbol we
+    // don't recognise still fails to resolve — there's nothing to read it off.
     if (symbolOrAddress.startsWith("0x") && symbolOrAddress.length === 42) {
+      const decimals = await this.fetchDecimals(symbolOrAddress);
+      if (decimals === null) return null;
+
       return {
         contractId: symbolOrAddress,
         symbol: symbolOrAddress,
         name: symbolOrAddress,
-        decimals: this.descriptor.nativeDecimals,
+        decimals,
         chainFamily: this.descriptor.family,
         chainId: this.descriptor.chainId,
       };
@@ -193,15 +237,17 @@ export class UniswapV3Provider extends BaseDEXProvider {
   }
 
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {
-    const tIn = this.resolveToken(tokenIn);
-    const tOut = this.resolveToken(tokenOut);
+    const [tIn, tOut] = await Promise.all([
+      this.resolveToken(tokenIn),
+      this.resolveToken(tokenOut),
+    ]);
     if (!tIn || !tOut) return false;
     const probe = parseUnits("1", tIn.decimals);
     return (await this.quoteRaw(tIn, tOut, probe)) !== null;
   }
 
   async getTokenPrice(tokenSymbol: string): Promise<number> {
-    const token = this.resolveToken(tokenSymbol);
+    const token = await this.resolveToken(tokenSymbol);
     const stable = this.tokenList.find((t) => t.symbol === this.descriptor.stableSymbol);
     if (!token || !stable) return 0;
     if (token.contractId.toLowerCase() === stable.contractId.toLowerCase()) return 1;
@@ -221,8 +267,10 @@ export class UniswapV3Provider extends BaseDEXProvider {
   }
 
   async getQuote(tokenIn: string, tokenOut: string, amountIn: number): Promise<DEXQuote> {
-    const tIn = this.resolveToken(tokenIn);
-    const tOut = this.resolveToken(tokenOut);
+    const [tIn, tOut] = await Promise.all([
+      this.resolveToken(tokenIn),
+      this.resolveToken(tokenOut),
+    ]);
     if (!tIn || !tOut || amountIn <= 0) {
       return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
     }
@@ -267,8 +315,10 @@ export class UniswapV3Provider extends BaseDEXProvider {
     minAmountOut: number,
     senderAddress: string
   ): Promise<TransactionPayload | null> {
-    const tIn = this.resolveToken(tokenIn);
-    const tOut = this.resolveToken(tokenOut);
+    const [tIn, tOut] = await Promise.all([
+      this.resolveToken(tokenIn),
+      this.resolveToken(tokenOut),
+    ]);
     if (!tIn || !tOut) return null;
 
     try {
