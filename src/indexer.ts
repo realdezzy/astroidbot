@@ -6,7 +6,6 @@ import { RedisService } from "./services/redis.js";
 import { hardenOutboundHttp, installProcessGuards, connectDatabase } from "./runtime.js";
 import { registerEnabledChains } from "./services/chains/registerChains.js";
 import { IndexerService } from "./services/indexer/indexerService.js";
-import { assertStandaloneProcess } from "./services/indexer/mode.js";
 import { runMarketDataIngestion } from "./services/indexer/ingestionCycle.js";
 
 /**
@@ -32,6 +31,12 @@ import { runMarketDataIngestion } from "./services/indexer/ingestionCycle.js";
  * What it costs: mutual exclusion is now a cross-process problem. See the
  * per-chain Redis lock in IndexerService — without it, two processes reading
  * the same cursor would both ingest the same blocks and both add the volume.
+ *
+ * **This is the only process that ingests.** There is no flag to move
+ * ingestion back into the API process, because there is no ingestion code
+ * path there to enable — `runCycle()` does not call the indexer at all. A
+ * deployment that doesn't want market data doesn't run this container, and
+ * points MARKET_DATA_PROVIDER at something else.
  */
 
 interface IndexerHealth {
@@ -124,7 +129,6 @@ async function main(): Promise<void> {
   installProcessGuards();
 
   ConfigManager.load();
-  assertStandaloneProcess();
 
   await connectDatabase();
 

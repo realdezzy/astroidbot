@@ -4,12 +4,24 @@ import { ConfigManager } from "../../src/config.js";
 const mockToken = {
   upsert: vi.fn(),
   findMany: vi.fn(),
+  createMany: vi.fn(),
   count: vi.fn(),
   findUnique: vi.fn(),
 };
 
+/**
+ * The indexer's table. It is mocked read-only on purpose: this service is the
+ * backend, and the backend never writes here. If a write method ever needs
+ * adding to make a test pass, the boundary has been crossed.
+ */
+const mockIndexedToken = {
+  findMany: vi.fn(),
+};
+
 vi.mock("../../src/services/db.js", () => ({
-  DatabaseService: { getInstance: () => ({ prisma: { token: mockToken } }) },
+  DatabaseService: {
+    getInstance: () => ({ prisma: { token: mockToken, indexedToken: mockIndexedToken } }),
+  },
 }));
 
 const mockDexRegistry = {
@@ -69,7 +81,9 @@ describe("TokenDiscoveryService", () => {
     registeredChains.length = 0;
     mockToken.upsert.mockResolvedValue({});
     mockToken.findMany.mockResolvedValue([]);
+    mockToken.createMany.mockResolvedValue({ count: 0 });
     mockToken.count.mockResolvedValue(0);
+    mockIndexedToken.findMany.mockResolvedValue([]);
     mockMarketData.getMarketData.mockResolvedValue(new Map());
     mockMarketData.search.mockResolvedValue([]);
     service.setMarketDataProvider(mockMarketData);
@@ -119,6 +133,80 @@ describe("TokenDiscoveryService", () => {
       mockToken.upsert.mockRejectedValueOnce(new Error("db blip"));
 
       expect(await service.syncChain("base:mainnet")).toBe(1);
+    });
+
+    it("refreshes metrics for catalogued tokens no provider lists", async () => {
+      // Tokens promoted out of the index are in no DEX provider's list. If the
+      // sync only walked that list, a promoted token would sit on the
+      // discovery page with identity and permanently blank numbers.
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([
+        { contractId: "0xusdc", symbol: "USDC", name: "USD Coin", decimals: 6 },
+      ]);
+      mockToken.findMany.mockResolvedValue([
+        { contractId: "0xusdc", symbol: "USDC", name: "USD Coin", decimals: 6 },
+        { contractId: "0xlongtail", symbol: "TAIL", name: "Long Tail", decimals: 18 },
+      ]);
+      mockDexRegistry.getTokenPrice.mockResolvedValue(1);
+
+      await service.syncChain("base:mainnet");
+
+      const synced = mockToken.upsert.mock.calls.map(
+        (c) => c[0].where.chainId_contractId.contractId
+      );
+      expect(synced).toContain("0xlongtail");
+      // …once. The listed token must not be synced twice for being in both.
+      expect(synced.filter((id: string) => id === "0xusdc")).toHaveLength(1);
+    });
+
+    it("does not ask the DEX to quote a token it cannot route", async () => {
+      // A promoted token is by definition in no provider list, so quoting it is
+      // a guaranteed round trip to "no route" — several hundred per pass.
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+      mockToken.findMany.mockResolvedValue([
+        { contractId: "0xlongtail", symbol: "TAIL", name: "Long Tail", decimals: 18 },
+      ]);
+
+      await service.syncChain("base:mainnet");
+
+      expect(mockDexRegistry.getTokenPrice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("promotion from the index", () => {
+    /**
+     * The indexer writes IndexedToken and the backend writes Token. Promotion
+     * is the one place the two meet, and it is a read here and a write there —
+     * never the reverse.
+     */
+    it("copies indexed tokens the catalogue doesn't have yet", async () => {
+      tradableChains.push({ chainId: "base:mainnet" });
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+      mockIndexedToken.findMany.mockResolvedValue([
+        { contractId: "0xnew", symbol: "NEW", name: "New Token", decimals: 18 },
+        { contractId: "0xknown", symbol: "KNOWN", name: "Known", decimals: 18 },
+      ]);
+      mockToken.findMany.mockResolvedValue([{ contractId: "0xknown" }]);
+      mockToken.createMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.syncAll();
+
+      expect(result.promoted).toBe(1);
+      const created = mockToken.createMany.mock.calls[0]![0].data;
+      expect(created).toHaveLength(1);
+      expect(created[0]).toMatchObject({ contractId: "0xnew", symbol: "NEW", decimals: 18 });
+    });
+
+    it("only promotes tokens that cleared the liquidity floor and a rollup", async () => {
+      // The indexer catalogues every token with a pool, scams included. The
+      // catalogue is a listing decision, so the floor is applied on the way in.
+      tradableChains.push({ chainId: "base:mainnet" });
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+
+      await service.syncAll();
+
+      const where = mockIndexedToken.findMany.mock.calls[0]![0].where;
+      expect(where.liquidityUsd).toEqual({ gte: MIN_LIQUIDITY_USD });
+      expect(where.lastRolledUpAt).toEqual({ not: null });
     });
   });
 

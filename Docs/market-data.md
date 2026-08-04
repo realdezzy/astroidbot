@@ -36,17 +36,27 @@ It began inside the bot process and was split out for three reasons:
 - **Scale shape.** Indexing more chains is RPC- and CPU-bound. Serving more users is neither. Fused together, they can only be scaled by the larger of the two needs.
 - **Restart cost.** Adding a chain to the index restarts the indexer. It should not also drop every WebSocket connection and stop Telegram polling.
 
-`INDEXER_MODE` decides which process ingests, and **every process in a deployment must agree on it**:
+**There is no flag for where ingestion runs.** The API process has no ingestion code path to enable — `runCycle()` does not call the indexer at all — so a deployment that doesn't want market data doesn't run the container, and points `MARKET_DATA_PROVIDER` somewhere else. An earlier version had an `INDEXER_MODE` with an `inline` option; all it could really express was which processes were disobeying the rule.
 
-| Mode | Meaning |
-|---|---|
-| `standalone` | The dedicated indexer container ingests. The bot never does. What `docker compose` runs. |
-| `inline` | The bot ingests on its own trading tick. One process, one command — the right default for local development. |
-| `off` | Nobody ingests. Pair with `MARKET_DATA_PROVIDER="dexscreener"`, or the pages have no data. |
+**Mutual exclusion is a cross-process problem.** Two runs of the same chain would read the same cursor, ingest the same blocks, and add the same volume — which accumulates additively, so the inflation is permanent and looks exactly like real trading. A per-chain Redis lock (`indexer:ingest:<chainId>`, TTL `INDEXER_LOCK_TTL_MS`) is what prevents it; an in-process guard could only see runs inside one process, which stopped being the interesting case the moment there were two. It is per chain rather than per pass, so a chain locked by someone else doesn't hold up the others.
 
-The standalone process refuses to start under `inline` or `off` rather than starting and doing the wrong amount of work. Both mistakes are invisible at runtime: two ingesters look like one, and zero ingesters look like a chain where nobody is trading.
+## Who writes what
 
-**Mutual exclusion is now a cross-process problem.** Two runs of the same chain would read the same cursor, ingest the same blocks, and add the same volume — which accumulates additively, so the inflation is permanent and looks exactly like real trading. A per-chain Redis lock (`indexer:ingest:<chainId>`, TTL `INDEXER_LOCK_TTL_MS`) is what prevents it; the in-process guard it replaced could only see runs inside one process, which stopped being the interesting case the moment there were two.
+| Table | Written by | Read by |
+|---|---|---|
+| `IndexedPool`, `PoolCandle`, `IndexerCursor`, `IndexedToken` | **indexer only** | backend, through `MarketDataProvider` |
+| `Token` | **backend only** (`TokenDiscoveryService`) | backend |
+
+`IndexedToken` and `Token` are deliberately not the same table, though they were until the indexer moved out of the API process. They answer different questions: `IndexedToken` is *what we saw trade* — every token with a pool, scams and test deployments included — and `Token` is *what this deployment will offer a user*, which is a listing decision. Sharing one table meant both processes upserting the same row, so a row's identity and its metrics could come from different passes and nothing downstream could tell.
+
+The two meet in exactly one place, in one direction. Each discovery sync:
+
+1. reads metrics from `IndexedToken` (via `InternalMarketDataProvider`) and caches them onto `Token`;
+2. **promotes** indexed tokens that clear `INDEXER_MIN_POOL_LIQUIDITY_USD` and have been rolled up at least once into the catalogue, creating `Token` rows for them.
+
+Promotion is what makes the long tail visible: those tokens are in no DEX provider's list, which is the entire reason to run an indexer. The liquidity floor is what keeps it from being a firehose.
+
+`Token` keeps its own market columns as a cache rather than joining to `IndexedToken`. Two reasons: it also holds the tokens of chains that have no indexer at all (Stacks, Solana), so a join would make discovery a union of two shapes; and ranking a page of twenty rows by volume should be one indexed scan.
 
 The indexer serves `GET /health` on `INDEXER_PORT` for the container healthcheck and nothing else. It reports unhealthy only after three *consecutive* failed passes — one failure is the normal response to an RPC endpoint hiccuping, and restarting on it converts a blip into a restart loop that never finishes a pass.
 
@@ -54,7 +64,7 @@ Running it by hand: `npm run start:indexer` (or `npm run dev:indexer`).
 
 ## How the index works
 
-One pass per tick — the trading cycle's in `inline` mode, the indexer's own `INDEXER_POLL_INTERVAL_SECONDS` timer in `standalone`.
+One pass per tick of the indexer's own `INDEXER_POLL_INTERVAL_SECONDS` timer (defaulting to `POLL_INTERVAL_SECONDS`).
 
 ```
 PoolCreated logs ──► IndexedPool ──┐
@@ -103,9 +113,8 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `MARKET_DATA_PROVIDER` | `internal` | `internal` \| `dexscreener` \| `auto` |
-| `INDEXER_MODE` | `inline` | `standalone` \| `inline` \| `off` — which process ingests |
-| `INDEXER_POLL_INTERVAL_SECONDS` | `POLL_INTERVAL_SECONDS` | Standalone tick |
-| `INDEXER_PORT` | `8007` | Health endpoint for the standalone container |
+| `INDEXER_POLL_INTERVAL_SECONDS` | `POLL_INTERVAL_SECONDS` | Indexer tick |
+| `INDEXER_PORT` | `8007` | Health endpoint for the indexer container |
 | `INDEXER_LOCK_TTL_MS` | `300000` | Per-chain ingestion lock; must outlast a normal pass |
 | `INDEXER_CONFIRMATIONS` | `12` | Blocks kept behind the head |
 | `INDEXER_BLOCK_CHUNK_SIZE` | `2000` | Blocks per `eth_getLogs` |

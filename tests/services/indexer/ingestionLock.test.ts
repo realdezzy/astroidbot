@@ -7,9 +7,8 @@ import type { ChainIndexer, IndexRunResult } from "../../../src/services/indexer
  *
  * While the indexer ran inside the API process, a Set was enough: one process,
  * one guard. It now runs in its own container, so "another run" can be another
- * *process* — a second replica, a deploy overlapping its predecessor, an
- * operator who left INDEXER_MODE=inline on the API. An in-process Set cannot
- * see any of those.
+ * *process* — a second replica, or a deploy overlapping its predecessor. An
+ * in-process Set cannot see either.
  *
  * The consequence of losing this is not a crash. Both runs read the same
  * cursor, ingest the same blocks, and add the same volume to the same candles
@@ -40,15 +39,14 @@ vi.mock("../../../src/services/redis.js", () => ({
 const CHAIN = "base:mainnet" as ChainId;
 const LOCK_KEY = `indexer:ingest:${CHAIN}`;
 
-function stubIndexer(onRun?: () => Promise<void>): ChainIndexer & { runs: number } {
+function stubIndexer(chainId: ChainId = CHAIN): ChainIndexer & { runs: number } {
   const indexer = {
-    chainId: CHAIN,
+    chainId,
     runs: 0,
     async run(): Promise<IndexRunResult> {
       indexer.runs++;
-      if (onRun) await onRun();
       return {
-        chainId: CHAIN,
+        chainId,
         poolsDiscovered: 0,
         swapsIngested: 1,
         bucketsWritten: 1,
@@ -66,7 +64,6 @@ async function loadService(): Promise<
   process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";
   process.env.AES_KEY = "testkey";
   process.env.JWT_SECRET = "change-me-in-production-to-32-char-min-xyz";
-  process.env.INDEXER_MODE = "standalone";
   if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
   if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
 
@@ -137,19 +134,24 @@ describe("ingestion locking", () => {
     expect(locks.has(LOCK_KEY)).toBe(false);
   });
 
-  it("does not ingest at all when indexing is off", async () => {
+  it("takes one lock per chain rather than one for the pass", async () => {
+    // Chains run concurrently and are bound by different RPC endpoints. A
+    // single global lock would make the slowest chain set the pace for every
+    // other one, and would let a stuck chain block all of them.
     const IndexerService = await loadService();
-    process.env.INDEXER_MODE = "off";
-    const { ConfigManager } = await import("../../../src/config.js");
-    ConfigManager.reset();
-    ConfigManager.load();
-
     const service = IndexerService.getInstance();
-    const indexer = stubIndexer();
-    service.register(indexer);
 
-    expect(await service.runAll()).toEqual([]);
-    expect(indexer.runs).toBe(0);
-    expect(acquireLock).not.toHaveBeenCalled();
+    const base = stubIndexer();
+    const celo = stubIndexer("celo:mainnet" as ChainId);
+    service.register(base);
+    service.register(celo);
+
+    // Base is already being ingested elsewhere; Celo must be unaffected.
+    locks.set(LOCK_KEY, "held-by-another-process");
+
+    const results = await service.runAll();
+
+    expect(base.runs).toBe(0);
+    expect(results.map((r) => r.chainId)).toEqual(["celo:mainnet"]);
   });
 });

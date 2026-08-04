@@ -67,7 +67,7 @@ npm run dev            # Backend on :8006
 cd web && npm run dev  # Frontend on :5173
 ```
 
-`INDEXER_MODE` defaults to `inline`, so `npm run dev` alone indexes as well as trades — one process, one command. To mirror the Docker topology locally, set `INDEXER_MODE=standalone` and run `npm run dev:indexer` alongside it.
+`npm run dev` does not index — nothing outside the indexer process does. Run `npm run dev:indexer` alongside it to have market data locally, or set `MARKET_DATA_PROVIDER="dexscreener"` to develop the discovery pages without one.
 
 ## API
 

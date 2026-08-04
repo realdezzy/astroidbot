@@ -45,12 +45,6 @@ services:
       - "8006:8006"
     env_file:
       - .env.docker
-    environment:
-      # Pinned here, not in .env.docker: this file *is* the topology, and the
-      # indexer running in its own container is not something an operator
-      # should be able to half-undo by editing an env file. `inline` here would
-      # have both containers ingesting the same chains.
-      INDEXER_MODE: standalone
     volumes:
       - ./docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - ./Docs:/app/Docs:ro
@@ -74,8 +68,6 @@ services:
     entrypoint: ["/docker-entrypoint-indexer.sh"]
     env_file:
       - .env.docker
-    environment:
-      INDEXER_MODE: standalone
     volumes:
       - ./docker-entrypoint-indexer.sh:/docker-entrypoint-indexer.sh:ro
     depends_on:

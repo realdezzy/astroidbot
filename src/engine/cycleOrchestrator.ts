@@ -12,8 +12,6 @@ import { StrategyEngine } from "../services/strategyEngine.js";
 import { AgentService } from "../services/agentService.js";
 import { TokenDiscoveryService } from "../services/tokenDiscovery.js";
 import { pollSocialMentions } from "../services/social/socialRegistry.js";
-import { runMarketDataIngestion } from "../services/indexer/ingestionCycle.js";
-import { shouldIngestInline } from "../services/indexer/mode.js";
 
 
 export async function runCycle(): Promise<void> {
@@ -47,17 +45,6 @@ export async function runCycle(): Promise<void> {
     pollSocialMentions().catch((err) =>
       logger.warn("Social mention poll failed", { error: err })
     );
-
-    // Swap-event ingestion rides this tick only in "inline" mode. In
-    // "standalone" — the production topology — a dedicated indexer process
-    // owns it and this call must not fire, or both processes would ingest the
-    // same chains. Fire-and-forget when it does run: the indexer talks to
-    // external RPC endpoints and must never be able to stall a trading cycle.
-    if (shouldIngestInline()) {
-      runMarketDataIngestion().catch((err) =>
-        logger.warn("Market data ingestion failed", { error: err })
-      );
-    }
 
     const tokens = await registry.getSwappableTokens();
     if (tokens.length === 0) {

@@ -451,12 +451,13 @@ Added because §10.4 needed a real answer, not a label. Delivered in `73fcb1d`; 
 - [x] **P8.3** Exactly-once ingestion: candle write and cursor advance in one transaction; the cursor stops *before* an unreadable range rather than over it; reorg-safe behind `INDEXER_CONFIRMATIONS`.
 - [x] **P8.4** Rollup to `Token` metrics — volume and transaction counts summed across a token's pools, price taken from the single deepest pool.
 - [x] **P8.5** USD anchoring with a fallback chain (deepest local native/stable pool → the same asset on another indexed chain → live router quote), returning null rather than guessing. Robinhood Chain has no local ETH→dollar path at all, which is what forced this.
-- [x] **P8.6** **Separate process.** Ingestion runs in its own container (`src/indexer.ts`), sharing only Postgres and Redis. `INDEXER_MODE` decides which process ingests; a per-chain Redis lock makes concurrent ingestion of a chain impossible across processes, since volume accumulates additively and a replayed range would inflate it permanently.
+- [x] **P8.6** **Separate process.** Ingestion runs in its own container (`src/indexer.ts`), sharing only Postgres and Redis, and in no other process — there is no flag for it. A per-chain Redis lock makes concurrent ingestion of a chain impossible across processes, since volume accumulates additively and a replayed range would inflate it permanently.
+- [x] **P8.7** **Single writer per table.** `IndexedToken` split out of `Token`: the indexer writes its own tables, the backend writes the catalogue, and the two meet only through `MarketDataProvider` — a read from the index and a write to the catalogue, never the reverse. Newly-indexed tokens are promoted into the catalogue above the liquidity floor, which is how the long tail becomes visible without becoming a firehose.
 
 Not done, and worth knowing:
 
-- [ ] **P8.7** Stacks and Solana ingestion. Both need genuinely different `ChainIndexer` implementations; today their discovery rows carry only what the DEX providers report.
-- [ ] **P8.8** Backfill. A newly-indexed chain starts `INDEXER_INITIAL_LOOKBACK_BLOCKS` back and never fills in history before that, so 24h columns are incomplete for the first day of a chain's life.
+- [ ] **P8.8** Stacks and Solana ingestion. Both need genuinely different `ChainIndexer` implementations; today their catalogue rows carry only what the DEX providers report.
+- [ ] **P8.9** Backfill. A newly-indexed chain starts `INDEXER_INITIAL_LOOKBACK_BLOCKS` back and never fills in history before that, so 24h columns are incomplete for the first day of a chain's life.
 
 ---
 

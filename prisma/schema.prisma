@@ -285,10 +285,19 @@ model Candle {
   @@index([chainId, token, timeframe, timestamp])
 }
 
-// Cross-chain token catalogue backing the public discovery pages. Synced from
-// the registered DEX providers rather than a third-party market-data feed, so
-// prices are DEX-derived by construction — see isVerified / liquidityUsd for
-// the quality signals that gate what gets listed.
+// Cross-chain token catalogue backing the public discovery pages.
+//
+// **Written only by the backend** (TokenDiscoveryService), from two sources:
+// the registered DEX providers' token lists — what this deployment can
+// actually route a trade through — and promotion of tokens the indexer has
+// seen trade. The market columns here are a *cache* of IndexedToken, refreshed
+// each discovery sync; IndexedToken is the source of truth and the only place
+// the indexer writes.
+//
+// Keeping the cache rather than joining is deliberate. This table also holds
+// the tokens of chains that have no indexer at all (Stacks, Solana), so a join
+// would make discovery a union of two shapes; and sorting a page of twenty
+// rows by volume should be one indexed scan, not a relation traversal.
 model Token {
   id             Int       @id @default(autoincrement())
   chainId        String
@@ -323,6 +332,58 @@ model Token {
 // Everything below backs MARKET_DATA_PROVIDER="internal": our own swap-event
 // ingestion, so production doesn't depend on a third-party feed. DexScreener
 // stays available as a development provider for exercising the same interface.
+//
+// **Ownership rule: every table below is written by the indexer process and by
+// nothing else.** The backend reads them and never writes them. Token above is
+// the mirror image — written only by the backend. Two processes writing one
+// table is how you get a row whose columns disagree about which pass produced
+// them, and no amount of care in either process fixes it from the outside.
+
+// What the indexer observed about a token: its identity as read off-chain, and
+// the metrics RollupService computes from that token's candles.
+//
+// Separate from Token because the two answer different questions and have
+// different owners. Token is "what can this deployment offer a user" — curated,
+// listable, backend-owned. IndexedToken is "what did we actually see trade" —
+// every token with a pool, including the scams and the test deployments,
+// written only here.
+model IndexedToken {
+  id             Int       @id @default(autoincrement())
+  chainId        String
+  contractId     String
+  // Read from the contract at discovery time. A token whose symbol can't be
+  // read is never catalogued — it would render as a blank row and is
+  // overwhelmingly likely to be broken or hostile.
+  symbol         String
+  name           String
+  decimals       Int
+  dexId          String?
+  // Metrics. Nullable throughout and deliberately so: null is "we don't know",
+  // which is a different fact from zero and must sort to the other end of a
+  // ranked table. Nothing here may be coalesced on write.
+  priceUsd       Float?
+  priceChange5m  Float?
+  priceChange1h  Float?
+  priceChange6h  Float?
+  priceChange24h Float?
+  volume24h      Float?
+  liquidityUsd   Float?
+  marketCapUsd   Float?
+  txnsBuys24h    Int?
+  txnsSells24h   Int?
+  pairCreatedAt  DateTime?
+  // Last time the rollup wrote metrics onto this row — not the last swap. Lets
+  // the backend tell "no trades" from "the indexer stopped".
+  lastRolledUpAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([chainId, contractId])
+  // The discovery read path: rank a chain's tokens by volume.
+  @@index([chainId, volume24h])
+  // Cross-chain native-price anchoring looks a symbol up everywhere else.
+  @@index([symbol])
+}
 
 // A liquidity pool we ingest swaps from. Discovered from the DEX factory's
 // pool-creation events, never hand-listed — a chain's interesting pools are

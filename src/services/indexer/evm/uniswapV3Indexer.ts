@@ -692,21 +692,24 @@ export class UniswapV3Indexer implements ChainIndexer {
   }
 
   /**
-   * Records a discovered token in the catalogue.
+   * Records a token we have seen trade.
+   *
+   * Writes `IndexedToken`, never `Token` — the backend's catalogue is the
+   * backend's to write, and promotes from here on its own schedule. Before the
+   * split this wrote `Token` directly, which meant an on-chain `symbol()` read
+   * could land in the same row a curator had just edited.
    *
    * Identity only — no prices. RollupService fills the metrics in once candles
-   * exist, and keeping the two separate means a token appears in discovery as
-   * soon as it is seen trading rather than waiting a full window for its
-   * first rollup.
+   * exist, and keeping the two separate means a token is known as soon as it is
+   * seen trading rather than waiting a full window for its first rollup.
    *
-   * `create`-only on conflict: a token already catalogued may have been
-   * curated or verified by hand, and an on-chain `symbol()` should not
-   * overwrite that.
+   * `create`-only on conflict: re-reading identity every pass would be two RPC
+   * calls per token per tick to learn something that cannot change.
    */
   private async catalogueToken(address: string, decimals: number): Promise<void> {
     const db = DatabaseService.getInstance();
 
-    const existing = await db.prisma.token.findUnique({
+    const existing = await db.prisma.indexedToken.findUnique({
       where: { chainId_contractId: { chainId: this.chainId, contractId: address } },
       select: { id: true },
     });
@@ -723,7 +726,7 @@ export class UniswapV3Indexer implements ChainIndexer {
     if (!symbol) return;
 
     try {
-      await db.prisma.token.create({
+      await db.prisma.indexedToken.create({
         data: {
           chainId: this.chainId,
           contractId: address,

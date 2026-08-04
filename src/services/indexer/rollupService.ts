@@ -187,12 +187,14 @@ export class RollupService {
   }
 
   /**
-   * Writes metrics onto the Token catalogue.
+   * Writes metrics onto `IndexedToken` — the indexer's own table, never the
+   * backend's `Token` catalogue.
    *
-   * Only tokens already catalogued are touched. The indexer sees every token
-   * that trades on a chain, including scams and test deployments; letting it
-   * create catalogue rows would turn discovery into an unfiltered firehose.
-   * TokenDiscoveryService owns what gets listed.
+   * Only rows `catalogueToken` has already created are touched, and it is not
+   * an upsert. A rollup knows a contract address and some numbers; it has no
+   * symbol, name or decimals, so creating a row here would produce one that
+   * can never render. Pool discovery is what establishes identity, and it
+   * always runs before the candles that describe the same pool exist.
    */
   private async writeTokens(
     chainId: ChainId,
@@ -201,7 +203,7 @@ export class RollupService {
     const db = DatabaseService.getInstance();
     const minLiquidity = ConfigManager.getInstance().config.INDEXER_MIN_POOL_LIQUIDITY_USD;
 
-    const known = await db.prisma.token.findMany({
+    const known = await db.prisma.indexedToken.findMany({
       where: { chainId, contractId: { in: [...metrics.keys()] } },
       select: { id: true, contractId: true, priceUsd: true },
     });
@@ -224,7 +226,7 @@ export class RollupService {
       const volume24h = m.volume24h === 0 && sawTrades ? null : m.volume24h;
 
       return [
-        db.prisma.token.update({
+        db.prisma.indexedToken.update({
           where: { id: token.id },
           data: {
             dexId: m.dexId,
@@ -245,7 +247,7 @@ export class RollupService {
                 }
               : {}),
             ...(m.pairCreatedAt ? { pairCreatedAt: m.pairCreatedAt } : {}),
-            lastSyncedAt: new Date(),
+            lastRolledUpAt: new Date(),
           },
         }),
       ];

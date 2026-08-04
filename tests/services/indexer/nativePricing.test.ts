@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const mockToken = { findMany: vi.fn() };
+// IndexedToken, not Token: the cross-chain anchor must be a price the indexer
+// observed on-chain, never the backend catalogue's cached or DEX-quoted one.
+const mockIndexedToken = { findMany: vi.fn() };
 vi.mock("../../../src/services/db.js", () => ({
-  DatabaseService: { getInstance: () => ({ prisma: { token: mockToken } }) },
+  DatabaseService: { getInstance: () => ({ prisma: { indexedToken: mockIndexedToken } }) },
 }));
 
 const mockDexRegistry = { getTokenPrice: vi.fn() };
@@ -31,7 +33,7 @@ function input(anchorPools: unknown[] = []) {
 describe("resolveNativeUsd", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockToken.findMany.mockResolvedValue([]);
+    mockIndexedToken.findMany.mockResolvedValue([]);
     mockDexRegistry.getTokenPrice.mockResolvedValue(0);
   });
 
@@ -45,7 +47,7 @@ describe("resolveNativeUsd", () => {
 
     expect(price).toBe(3000);
     // A local pool answers outright; no cross-chain lookup should happen.
-    expect(mockToken.findMany).not.toHaveBeenCalled();
+    expect(mockIndexedToken.findMany).not.toHaveBeenCalled();
   });
 
   it("inverts when the native asset is token1", async () => {
@@ -59,24 +61,24 @@ describe("resolveNativeUsd", () => {
   it("falls back to the same asset priced on another chain", async () => {
     // Robinhood has no WETH/rUSDC pool at any fee tier — this path is the only
     // reason that chain's swaps can be valued at all.
-    mockToken.findMany.mockResolvedValue([
+    mockIndexedToken.findMany.mockResolvedValue([
       { symbol: "WETH", priceUsd: 3123.45, liquidityUsd: 50_000_000 },
     ]);
 
     const price = await resolveNativeUsd(input([]));
 
     expect(price).toBe(3123.45);
-    const where = mockToken.findMany.mock.calls[0]![0].where;
+    const where = mockIndexedToken.findMany.mock.calls[0]![0].where;
     // Must not price a mainnet from a testnet, or from itself.
     expect(where.chainId).toEqual({ not: "robinhood:mainnet" });
     expect(where.priceUsd).toEqual({ gt: 0 });
   });
 
   it("matches ETH and WETH as the same asset", async () => {
-    mockToken.findMany.mockResolvedValue([]);
+    mockIndexedToken.findMany.mockResolvedValue([]);
     await resolveNativeUsd(input([]));
 
-    const symbols = mockToken.findMany.mock.calls[0]![0].where.symbol.in;
+    const symbols = mockIndexedToken.findMany.mock.calls[0]![0].where.symbol.in;
     expect(symbols).toEqual(expect.arrayContaining(["ETH", "WETH"]));
   });
 

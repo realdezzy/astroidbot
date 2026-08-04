@@ -17,10 +17,7 @@ const PRUNE_EVERY_N_RUNS = 100;
 let runCount = 0;
 
 export async function runMarketDataIngestion(): Promise<void> {
-  const indexer = IndexerService.getInstance();
-  if (!indexer.enabled()) return;
-
-  const results = await indexer.runAll();
+  const results = await IndexerService.getInstance().runAll();
   if (results.length === 0) return;
 
   // Roll up only the chains that actually moved. A chain with no new swaps has

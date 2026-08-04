@@ -3,7 +3,6 @@ import { ConfigManager } from "../../config.js";
 import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
 import { UniswapV3Indexer } from "./evm/uniswapV3Indexer.js";
-import { indexingEnabled } from "./mode.js";
 import { indexerSettings } from "./settings.js";
 import type { ChainIndexer, IndexRunResult } from "./types.js";
 
@@ -21,10 +20,12 @@ const lockKey = (chainId: string): string => `indexer:ingest:${chainId}`;
  *
  * That exclusion is enforced twice, deliberately. The in-process `running` set
  * catches the common case without touching Redis. The Redis lock catches the
- * case the in-process set cannot even see: ingestion now runs in its own
- * container (INDEXER_MODE=standalone), so "another run" may be another
- * *process* — a second replica, a deploy overlapping its predecessor, or an
- * operator who left the API on INDEXER_MODE=inline.
+ * case the in-process set cannot even see: ingestion runs in its own
+ * container, so "another run" may be another *process* — a second replica, or
+ * a deploy overlapping its predecessor.
+ *
+ * The lock is per chain rather than per pass. Chains are bound by different
+ * RPC endpoints, so one locked chain must not hold up the rest.
  */
 export class IndexerService {
   private static instance: IndexerService;
@@ -71,19 +72,13 @@ export class IndexerService {
     logger.info("[indexer] initialised", { chains: [...this.indexers.keys()] });
   }
 
-  /** True when this deployment indexes at all, wherever it does so. */
-  enabled(): boolean {
-    return indexingEnabled();
-  }
-
   /**
-   * Chain ids this process would ingest, building the indexer set if it hasn't
-   * been built yet. Reported by the standalone process's health endpoint,
-   * where an empty list is the answer to "why is discovery empty" — every
-   * enabled chain lacks a factory address.
+   * Chain ids this process ingests, building the indexer set if it hasn't been
+   * built yet. Reported by the health endpoint, where an empty list is the
+   * answer to "why is discovery empty" — every enabled chain lacks a factory
+   * address.
    */
   indexedChains(): string[] {
-    if (!this.enabled()) return [];
     this.init();
     return [...this.indexers.keys()];
   }
@@ -96,7 +91,6 @@ export class IndexerService {
    * pace for all of them. Failures are isolated per chain.
    */
   async runAll(): Promise<IndexRunResult[]> {
-    if (!this.enabled()) return [];
     this.init();
 
     const results = await Promise.all(

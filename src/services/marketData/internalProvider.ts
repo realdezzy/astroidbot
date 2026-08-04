@@ -6,10 +6,16 @@ import type { MarketDataProvider, TokenMarketData } from "./types.js";
 /**
  * Market data from our own swap index.
  *
- * This is the production provider. It reads what RollupService has already
- * computed onto the Token catalogue, which means a discovery page is one
- * indexed query — no third-party call sits in the request path, so the page
- * cannot be slowed down or taken offline by someone else's rate limit.
+ * This is the production provider, and the **only** thing in the backend that
+ * reads the indexer's tables. It reads what RollupService has already computed
+ * onto `IndexedToken`, which means serving it is one indexed query — no
+ * third-party call sits in the request path, so a page cannot be slowed down
+ * or taken offline by someone else's rate limit.
+ *
+ * Read-only, in both directions: this provider never writes `IndexedToken`
+ * (the indexer process owns it) and never reads `Token` (the backend's own
+ * catalogue, which caches what comes back from here). Keeping that boundary in
+ * one class is why it is worth having a class at all.
  *
  * It reports only what we actually observed. A chain we don't index returns
  * nothing rather than guessing, which is what `supportsChain` is for.
@@ -30,7 +36,7 @@ export class InternalMarketDataProvider implements MarketDataProvider {
     if (contractIds.length === 0) return new Map();
 
     const db = DatabaseService.getInstance();
-    const rows = await db.prisma.token.findMany({
+    const rows = await db.prisma.indexedToken.findMany({
       where: { chainId, contractId: { in: contractIds } },
     });
 
@@ -42,7 +48,7 @@ export class InternalMarketDataProvider implements MarketDataProvider {
     const q = query.trim();
     if (!q) return [];
 
-    const rows = await db.prisma.token.findMany({
+    const rows = await db.prisma.indexedToken.findMany({
       where: {
         ...(chainId ? { chainId } : {}),
         OR: [
@@ -60,7 +66,7 @@ export class InternalMarketDataProvider implements MarketDataProvider {
 
   async topTokens(chainId: ChainId, limit: number): Promise<TokenMarketData[]> {
     const db = DatabaseService.getInstance();
-    const rows = await db.prisma.token.findMany({
+    const rows = await db.prisma.indexedToken.findMany({
       where: { chainId },
       orderBy: [{ volume24h: { sort: "desc", nulls: "last" } }],
       take: limit,
@@ -70,14 +76,13 @@ export class InternalMarketDataProvider implements MarketDataProvider {
   }
 }
 
-/** Prisma row -> provider shape. Nulls stay null; see TokenMarketData. */
+/** IndexedToken row -> provider shape. Nulls stay null; see TokenMarketData. */
 function toMarketData(row: {
   chainId: string;
   contractId: string;
   symbol: string;
   name: string;
   decimals: number;
-  logoUrl: string | null;
   dexId: string | null;
   priceUsd: number | null;
   priceChange5m: number | null;
@@ -97,7 +102,10 @@ function toMarketData(row: {
     symbol: row.symbol,
     name: row.name,
     decimals: row.decimals,
-    logoUrl: row.logoUrl,
+    // Always null: a logo is not something you can read off a chain. The
+    // backend keeps its own on Token, and its sync treats null as "no opinion"
+    // rather than "clear it".
+    logoUrl: null,
     dexId: row.dexId,
     priceUsd: row.priceUsd,
     priceChange5m: row.priceChange5m,

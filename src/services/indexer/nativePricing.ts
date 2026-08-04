@@ -99,7 +99,11 @@ async function fromOtherChains(descriptor: ChainDescriptor): Promise<number | nu
   // disagree about which name they list.
   const aliases = [symbol, `W${symbol}`, symbol.replace(/^W/, "")];
 
-  const candidates = await db.prisma.token.findMany({
+  // IndexedToken, not Token: the anchor must be a price we observed on-chain
+  // ourselves. Token's price column can be a DEX-derived spot quote or a stale
+  // cache, and anchoring on one would misprice every token on this chain by
+  // the same factor — the hardest kind of error to notice.
+  const candidates = await db.prisma.indexedToken.findMany({
     where: {
       symbol: { in: [...new Set(aliases)], mode: "insensitive" },
       chainId: { not: descriptor.chainId },
