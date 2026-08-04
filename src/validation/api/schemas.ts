@@ -82,13 +82,16 @@ export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 export type TradeQueryInput = z.infer<typeof tradeQuerySchema>;
 
-export const createSocialAccountSchema = z.object({
+/**
+ * Starting verification takes the platform and nothing else.
+ *
+ * Notably absent: `platformUserId` and `handle`. Both used to be accepted here
+ * and written straight to the account row, which made "verified" mean "the
+ * user typed their own id". They are now read off the post the user publishes,
+ * so there is nothing for a client to supply and nothing to validate.
+ */
+export const startSocialVerificationSchema = z.object({
   platform: z.enum(["x", "farcaster"]),
-  handle: z.string().min(1).max(64),
-  platformUserId: z.string().min(1).max(128),
-  perTradeLimitUsd: z.number().positive().default(100),
-  dailyLimitUsd: z.number().positive().default(500),
-  autoExecute: z.boolean().default(false),
 });
 
 export const updateSocialAccountSchema = z.object({
@@ -102,7 +105,7 @@ export const confirmSocialCommandSchema = z.object({
   token: z.string().min(1),
 });
 
-export type CreateSocialAccountInput = z.infer<typeof createSocialAccountSchema>;
+export type StartSocialVerificationInput = z.infer<typeof startSocialVerificationSchema>;
 export type UpdateSocialAccountInput = z.infer<typeof updateSocialAccountSchema>;
 export type ConfirmSocialCommandInput = z.infer<typeof confirmSocialCommandSchema>;
 

@@ -5,7 +5,7 @@ import { validateBody, validateQuery } from "../middleware/validate.js";
 import {
   updateSettingsSchema,
   tradeQuerySchema,
-  createSocialAccountSchema,
+  startSocialVerificationSchema,
   updateSocialAccountSchema,
   confirmSocialCommandSchema,
   updateGasSponsorshipSchema,
@@ -83,7 +83,13 @@ router.put(
 );
 
 router.get("/me/social-accounts", authenticate, UserController.getSocialAccounts);
-router.post("/me/social-accounts", authenticate, validateBody(createSocialAccountSchema), UserController.createSocialAccount);
+router.post(
+  "/me/social-accounts/verify",
+  authenticate,
+  validateBody(startSocialVerificationSchema),
+  UserController.startSocialVerification
+);
+router.get("/me/social-accounts/verify", authenticate, UserController.getSocialVerification);
 router.put("/me/social-accounts/:id", authenticate, validateBody(updateSocialAccountSchema), UserController.updateSocialAccount);
 router.delete("/me/social-accounts/:id", authenticate, UserController.deleteSocialAccount);
 

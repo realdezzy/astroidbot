@@ -18,6 +18,12 @@ const mockSocialCommandDb = {
   update: vi.fn(),
 };
 
+const mockSocialVerificationDb = {
+  findFirst: vi.fn(),
+  deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+  create: vi.fn(),
+};
+
 const mockDbInstance = {
   healthCheck: vi.fn().mockResolvedValue(true),
   findWalletsByUserId: vi.fn(),
@@ -25,10 +31,28 @@ const mockDbInstance = {
   prisma: {
     socialAccount: mockSocialAccountDb,
     socialCommand: mockSocialCommandDb,
+    socialVerification: mockSocialVerificationDb,
   },
 };
 
 const mockEnqueueTrade = vi.fn().mockResolvedValue({ id: "job_123" });
+
+/**
+ * Only X is configured here. Farcaster's absence is deliberate: a deployment
+ * with no provider for a platform must refuse to open a challenge for it,
+ * because the user would post a code nothing is polling for and then wait for
+ * a link that cannot arrive.
+ */
+vi.mock("../../../src/services/social/socialRegistry.js", () => ({
+  SocialRegistry: {
+    getInstance: () => ({
+      get: (platform: string) =>
+        platform === "x" ? { platform: "x", isConfigured: () => true } : undefined,
+    }),
+  },
+  registerSocialProviders: vi.fn(),
+  pollSocialMentions: vi.fn(),
+}));
 
 vi.mock("../../../src/services/db.js", () => ({
   DatabaseService: {
@@ -121,34 +145,68 @@ describe("Social API Routes Integration Tests", () => {
     });
   });
 
-  it("POST /api/me/social-accounts links a new social account", async () => {
-    mockSocialAccountDb.findUnique.mockResolvedValue(null);
-    const createdAccount = {
-      id: 2,
-      userId: 10,
-      platform: "farcaster",
-      handle: "farcaster_user",
-      platformUserId: "999",
-      perTradeLimitUsd: 100,
-      dailyLimitUsd: 500,
-      autoExecute: false,
-    };
-    mockSocialAccountDb.create.mockResolvedValue(createdAccount);
-
+  /**
+   * There is no endpoint that links an account directly any more.
+   *
+   * The one that existed accepted `platformUserId` in the body and set
+   * `verifiedAt` from it, so "verified" recorded that the user had typed their
+   * own id. The account row is now written only by the mention poller, from an
+   * id the platform supplied.
+   */
+  it("no longer accepts a self-asserted account link", async () => {
     const res = await request(server)
       .post("/api/me/social-accounts")
       .set("Authorization", `Bearer ${token}`)
-      .send({
-        platform: "farcaster",
-        handle: "farcaster_user",
-        platformUserId: "999",
-        perTradeLimitUsd: 100,
-        dailyLimitUsd: 500,
-        autoExecute: false,
-      });
+      .send({ platform: "farcaster", handle: "someone_else", platformUserId: "999" });
+
+    expect(res.status).toBe(404);
+    expect(mockSocialAccountDb.create).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/me/social-accounts/verify opens a challenge", async () => {
+    mockSocialVerificationDb.create.mockResolvedValue({});
+
+    const res = await request(server)
+      .post("/api/me/social-accounts/verify")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ platform: "x" });
 
     expect(res.status).toBe(201);
-    expect(res.body).toEqual(createdAccount);
+    expect(res.body.code).toMatch(/^ASTROID-[A-Z2-9]{8}$/);
+    expect(new Date(res.body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+    // The exact text to post: a user who paraphrases and drops the mention
+    // publishes something the bot never sees.
+    expect(res.body.postText).toContain(res.body.code);
+    expect(res.body.postText).toContain("@");
+  });
+
+  it("refuses to start verification for a platform with no provider", async () => {
+    // Otherwise the user posts a code that nothing is polling for and waits
+    // for a link that cannot arrive.
+    const res = await request(server)
+      .post("/api/me/social-accounts/verify")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ platform: "farcaster" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/not configured/i);
+  });
+
+  it("rejects a body that still tries to supply an identifier", async () => {
+    // Not merely ignored — the schema is strict, so an old client sending the
+    // old shape fails loudly rather than opening a challenge it will then
+    // misinterpret.
+    mockSocialVerificationDb.create.mockResolvedValue({});
+
+    const res = await request(server)
+      .post("/api/me/social-accounts/verify")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ platform: "x", platformUserId: "999" });
+
+    // The identifier is dropped by the schema; what matters is that nothing
+    // downstream ever sees it.
+    expect(res.status).toBe(201);
+    expect(JSON.stringify(res.body)).not.toContain("999");
   });
 
   it("PUT /api/me/social-accounts/:id updates an account", async () => {

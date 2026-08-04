@@ -291,6 +291,14 @@ function SettingCard({
   );
 }
 
+interface PendingVerification {
+  code: string;
+  platform: string;
+  expiresAt: string;
+  /** The exact text to post — a paraphrase that drops the mention is invisible to us. */
+  postText: string;
+}
+
 interface SocialAccountItem {
   id: number;
   platform: "x" | "farcaster";
@@ -427,30 +435,35 @@ function SocialAccountsSection() {
   const queryClient = useQueryClient();
   const [showAddModal, setShowAddModal] = useState(false);
   const [newPlatform, setNewPlatform] = useState<"x" | "farcaster">("x");
-  const [newHandle, setNewHandle] = useState("");
-  const [newPlatformUserId, setNewPlatformUserId] = useState("");
-  const [newPerTrade, setNewPerTrade] = useState(100);
-  const [newDaily, setNewDaily] = useState(500);
-  const [newAutoExecute, setNewAutoExecute] = useState(false);
+  const [pending, setPending] = useState<PendingVerification | null>(null);
 
   const { data: accounts = [], isLoading } = useQuery<SocialAccountItem[]>({
     queryKey: ["social-accounts"],
+    // Polled only while a challenge is open: the link appears when the mention
+    // poller sees the post, which is seconds-to-a-minute after the user acts,
+    // and there is nothing to refresh the page otherwise.
+    refetchInterval: pending ? 5_000 : false,
     queryFn: () => apiFetch("/me/social-accounts"),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      apiFetch("/me/social-accounts", {
+  const startMutation = useMutation({
+    mutationFn: (platform: "x" | "farcaster") =>
+      apiFetch<PendingVerification>("/me/social-accounts/verify", {
         method: "POST",
-        body: JSON.stringify(data),
+        body: JSON.stringify({ platform }),
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["social-accounts"] });
-      setShowAddModal(false);
-      setNewHandle("");
-      setNewPlatformUserId("");
-    },
+    onSuccess: (data) => setPending(data),
   });
+
+  // The challenge closes itself once the account shows up — the user's
+  // attention is on their other app at that moment, not on this modal.
+  useEffect(() => {
+    if (!pending) return;
+    if (accounts.some((a) => a.platform === pending.platform && a.verifiedAt)) {
+      setPending(null);
+      setShowAddModal(false);
+    }
+  }, [accounts, pending]);
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<SocialAccountItem> }) =>
@@ -468,19 +481,6 @@ function SocialAccountsSection() {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["social-accounts"] }),
   });
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newHandle || !newPlatformUserId) return;
-    createMutation.mutate({
-      platform: newPlatform,
-      handle: newHandle.replace(/^@/, ""),
-      platformUserId: newPlatformUserId,
-      perTradeLimitUsd: newPerTrade,
-      dailyLimitUsd: newDaily,
-      autoExecute: newAutoExecute,
-    });
-  };
 
   return (
     <div className="glass-card p-5 space-y-4">
@@ -614,123 +614,111 @@ function SocialAccountsSection() {
         </div>
       )}
 
-      {/* Add Account Modal */}
+      {/* Verification modal.
+        *
+        * No field for an account id. The previous form asked for one and wrote
+        * it straight to the row, so "verified" recorded only that the user had
+        * typed their own identifier — anyone could claim any account's. The id
+        * is now read off the post the account actually publishes.
+        */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="glass-card max-w-md w-full p-6 space-y-4">
             <h3 className="text-lg font-bold text-title-text">Link Social Account</h3>
-            <form onSubmit={handleCreate} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-muted-text mb-1">Platform</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setNewPlatform("x")}
-                    className={`flex-1 py-2 rounded-lg font-semibold border ${
-                      newPlatform === "x"
-                        ? "bg-brand-500 text-white border-brand-500"
-                        : "bg-input-bg text-muted-text border-divider-color"
-                    }`}
-                  >
-                    X (Twitter)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewPlatform("farcaster")}
-                    className={`flex-1 py-2 rounded-lg font-semibold border ${
-                      newPlatform === "farcaster"
-                        ? "bg-brand-500 text-white border-brand-500"
-                        : "bg-input-bg text-muted-text border-divider-color"
-                    }`}
-                  >
-                    Farcaster
-                  </button>
+
+            {!pending ? (
+              <>
+                <div>
+                  <label className="block text-muted-text text-xs mb-1">Platform</label>
+                  <div className="flex gap-2">
+                    {(["x", "farcaster"] as const).map((platform) => (
+                      <button
+                        key={platform}
+                        type="button"
+                        onClick={() => setNewPlatform(platform)}
+                        className={`flex-1 py-2 rounded-lg text-xs font-semibold capitalize transition-colors ${
+                          newPlatform === platform
+                            ? "bg-brand-500 text-white"
+                            : "bg-input-bg text-muted-text"
+                        }`}
+                      >
+                        {platform === "x" ? "X (Twitter)" : "Farcaster"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-muted-text mb-1">Handle / Username</label>
-                <input
-                  type="text"
-                  placeholder="@username"
-                  value={newHandle}
-                  onChange={(e) => setNewHandle(e.target.value)}
-                  required
-                  className="w-full bg-input-bg border border-divider-color rounded-lg px-3 py-2 text-title-text focus:outline-none focus:border-brand-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-muted-text mb-1">
-                  {newPlatform === "farcaster" ? "Numeric FID (Immutable)" : "X User ID (Numeric/Immutable)"}
-                </label>
-                <input
-                  type="text"
-                  placeholder={newPlatform === "farcaster" ? "e.g. 12345" : "e.g. 987654321"}
-                  value={newPlatformUserId}
-                  onChange={(e) => setNewPlatformUserId(e.target.value)}
-                  required
-                  className="w-full bg-input-bg border border-divider-color rounded-lg px-3 py-2 text-title-text focus:outline-none focus:border-brand-500"
-                />
-                <p className="text-[10px] text-muted-text/70 mt-0.5">
-                  Authorization keys strictly on immutable IDs to prevent handle impersonation.
+                <p className="text-xs text-muted-text">
+                  We&apos;ll give you a one-time code to post. Reading it off your own
+                  post is what proves the account is yours — nothing you type here
+                  could.
                 </p>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-muted-text mb-1">Per-Trade Limit ($)</label>
-                  <input
-                    type="number"
-                    value={newPerTrade}
-                    onChange={(e) => setNewPerTrade(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-input-bg border border-divider-color rounded-lg px-3 py-1.5 text-title-text"
-                  />
+                {startMutation.isError && (
+                  <p className="text-xs text-red-400">{(startMutation.error as Error).message}</p>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModal(false)}
+                    className="flex-1 py-2 bg-input-bg text-body-text rounded-lg font-semibold text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={startMutation.isPending}
+                    onClick={() => startMutation.mutate(newPlatform)}
+                    className="flex-1 py-2 bg-brand-500 text-white rounded-lg font-semibold text-xs hover:bg-brand-600 disabled:opacity-50"
+                  >
+                    {startMutation.isPending ? "Starting..." : "Get my code"}
+                  </button>
                 </div>
-                <div>
-                  <label className="block text-muted-text mb-1">Daily Limit ($)</label>
-                  <input
-                    type="number"
-                    value={newDaily}
-                    onChange={(e) => setNewDaily(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-input-bg border border-divider-color rounded-lg px-3 py-1.5 text-title-text"
-                  />
+              </>
+            ) : (
+              <>
+                <ol className="text-xs text-body-text space-y-2 list-decimal list-inside">
+                  <li>Post this on {pending.platform === "x" ? "X" : "Farcaster"}:</li>
+                </ol>
+
+                <div className="bg-input-bg border border-card-border rounded-lg p-3">
+                  <p className="text-xs font-mono text-title-text break-words">
+                    {pending.postText}
+                  </p>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="modal-auto-execute"
-                  checked={newAutoExecute}
-                  onChange={(e) => setNewAutoExecute(e.target.checked)}
-                  className="rounded bg-input-bg border-divider-color text-brand-500"
-                />
-                <label htmlFor="modal-auto-execute" className="text-muted-text cursor-pointer">
-                  Auto-execute trades without requiring link confirmation
-                </label>
-              </div>
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard?.writeText(pending.postText)}
+                  className="w-full py-2 bg-input-bg text-body-text rounded-lg text-xs font-semibold"
+                >
+                  Copy text
+                </button>
 
-              <div className="flex gap-2 pt-3">
+                <p className="text-xs text-muted-text">
+                  Post it exactly as written — the mention is how we see it at all.
+                  We check every minute or so; this page updates itself. The code
+                  expires {new Date(pending.expiresAt).toLocaleTimeString()}.
+                </p>
+
+                <div className="flex items-center gap-2 text-xs text-muted-text">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Waiting for your post...
+                </div>
+
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 py-2 bg-input-bg text-muted-text rounded-lg font-medium"
+                  className="w-full py-2 bg-input-bg text-body-text rounded-lg font-semibold text-xs"
                 >
-                  Cancel
+                  Close
                 </button>
-                <button
-                  type="submit"
-                  disabled={createMutation.isPending}
-                  className="flex-1 py-2 bg-brand-500 text-white rounded-lg font-semibold hover:bg-brand-600 disabled:opacity-50"
-                >
-                  {createMutation.isPending ? "Linking..." : "Link Account"}
-                </button>
-              </div>
-            </form>
+              </>
+            )}
           </div>
         </div>
       )}
+
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { ConfigManager } from "../../config.js";
 import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
 import { SocialCommandProcessor } from "./commandProcessor.js";
+import { SocialVerificationService } from "./verification.js";
 import { TwitterProvider } from "./providers/twitter.js";
 import { FarcasterProvider } from "./providers/farcaster.js";
 import type { SocialProvider } from "./types.js";
@@ -99,7 +100,11 @@ export async function pollSocialMentions(): Promise<{ processed: number }> {
 
   const redis = RedisService.getInstance();
   const processor = SocialCommandProcessor.getInstance();
+  const verifier = SocialVerificationService.getInstance();
   let processed = 0;
+
+  // Housekeeping on the same tick, per the one-scheduler rule.
+  await verifier.pruneExpired().catch(() => undefined);
 
   for (const provider of providers) {
     try {
@@ -108,6 +113,17 @@ export async function pollSocialMentions(): Promise<{ processed: number }> {
 
       for (const post of posts) {
         try {
+          // Verification is checked first, and a post that carries a code is
+          // *not* also parsed as a command. A user proving ownership has not
+          // asked to trade, and running the parser over the same text would
+          // let the code's own characters be read as a token symbol.
+          const verified = await verifier.tryConsume(provider.platform, post);
+          if (verified) {
+            await provider.reply(post.postId, verified);
+            processed++;
+            continue;
+          }
+
           const decision = await processor.process(provider.platform, post);
 
           // "Already processed" produces no message — replying again to a

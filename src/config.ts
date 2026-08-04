@@ -141,6 +141,12 @@ const envSchema = z.object({
     .transform((v) => v === "true" || v === "1")
     .default("false"),
   SOCIAL_BOT_HANDLES: z.string().default(""),
+  // Caps a newly-verified account starts with. Deliberately small: an account
+  // is linked by posting a code publicly, so the first thing a successful
+  // link should be able to do is very little until the user raises it
+  // deliberately in Settings.
+  SOCIAL_PER_TRADE_LIMIT_USD: z.coerce.number().positive().default(50),
+  SOCIAL_DAILY_LIMIT_USD: z.coerce.number().positive().default(200),
   X_BEARER_TOKEN: z.string().optional(),
   NEYNAR_API_KEY: z.string().optional(),
   // The bot's own Farcaster account id. Numeric and permanent, unlike a

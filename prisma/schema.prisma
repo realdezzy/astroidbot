@@ -538,6 +538,27 @@ model SocialAccount {
   @@index([userId])
 }
 
+// A pending "prove you own this account" challenge.
+//
+// The problem it solves: linking used to accept a `platformUserId` typed into
+// a form, so the claim "this X account is mine" was attested by the person
+// making it. This makes the *platform* the attester instead — the id is read
+// off a post the account actually published, and never comes from the client.
+model SocialVerification {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  platform   String
+  // The one-time string the user posts. Unique because the mention poller
+  // looks a post's text up by it, with no idea whose it is.
+  code       String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, platform])
+  @@index([expiresAt])
+}
+
 // One row per inbound post that addressed the bot.
 //
 // The unique key on [platform, postId] is the idempotency guard: streams

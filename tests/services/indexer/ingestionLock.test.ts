@@ -32,6 +32,20 @@ const releaseLock = vi.fn(async (key: string, token?: string): Promise<void> => 
   if (!token || locks.get(key) === token) locks.delete(key);
 });
 
+/**
+ * Health tracking is stubbed out: this file is about mutual exclusion.
+ *
+ * Left real, it leaks between cases. The monitor is a singleton whose
+ * consecutive-failure count accumulates across the whole file, so the third
+ * deliberately-failing run in here trips the alert path — which reaches for
+ * the admin list in Postgres and makes the suite slow and order-dependent.
+ */
+vi.mock("../../../src/services/chains/chainHealth.js", () => ({
+  ChainHealthMonitor: {
+    getInstance: () => ({ track: <T,>(_chainId: string, fn: () => Promise<T>) => fn() }),
+  },
+}));
+
 vi.mock("../../../src/services/redis.js", () => ({
   RedisService: { getInstance: () => ({ acquireLock, releaseLock }) },
 }));

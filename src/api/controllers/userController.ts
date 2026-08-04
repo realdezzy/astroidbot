@@ -19,6 +19,9 @@ import {
   type Timeframe,
 } from "../../services/portfolioAnalytics.js";
 import { sponsorshipAvailability } from "../../services/chains/gasSponsorship.js";
+import { SocialVerificationService } from "../../services/social/verification.js";
+import { SocialRegistry } from "../../services/social/socialRegistry.js";
+import { ConfigManager } from "../../config.js";
 import {
   NotFoundError,
   InternalError,
@@ -903,41 +906,61 @@ export class UserController {
     }
   }
 
-  static async createSocialAccount(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+  /**
+   * Opens a "post this code" challenge.
+   *
+   * There is deliberately no endpoint that creates a SocialAccount directly.
+   * The one that existed took `platformUserId` from the request body and then
+   * set `verifiedAt` — so the column recorded that the user had asserted
+   * ownership, which is not what anyone reading it would assume. The account
+   * row is now created only by the mention poller, from an id the platform
+   * itself supplied.
+   */
+  static async startSocialVerification(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<Response | void> {
     try {
-      const db = DatabaseService.getInstance();
-      const { platform, handle, platformUserId, perTradeLimitUsd, dailyLimitUsd, autoExecute } = req.body as {
-        platform: "x" | "farcaster";
-        handle: string;
-        platformUserId: string;
-        perTradeLimitUsd?: number;
-        dailyLimitUsd?: number;
-        autoExecute?: boolean;
-      };
+      const { platform } = req.body as { platform: "x" | "farcaster" };
 
-      const existing = await db.prisma.socialAccount.findUnique({
-        where: { platform_platformUserId: { platform, platformUserId } },
-      });
-      if (existing) {
-        return next(new ConflictError(`This ${platform} account is already linked.`));
+      const provider = SocialRegistry.getInstance().get(platform);
+      if (!provider) {
+        return next(
+          new ValidationError(
+            `${platform} is not configured on this deployment — no credentials, or social trading is disabled.`
+          )
+        );
       }
 
-      const account = await db.prisma.socialAccount.create({
-        data: {
-          userId: req.userId!,
-          platform,
-          handle,
-          platformUserId,
-          perTradeLimitUsd: perTradeLimitUsd ?? 100,
-          dailyLimitUsd: dailyLimitUsd ?? 500,
-          autoExecute: autoExecute ?? false,
-          verifiedAt: new Date(),
-        },
-      });
+      const pending = await SocialVerificationService.getInstance().start(req.userId!, platform);
+      const handles = ConfigManager.getInstance().config.SOCIAL_BOT_HANDLES.split(",")[0]?.trim();
 
-      res.status(201).json(account);
+      res.status(201).json({
+        ...pending,
+        // The exact text to post. Handing over a ready-made string is not
+        // decoration: a user who paraphrases it and omits the mention posts
+        // something the bot never sees, and then waits for a link that cannot
+        // arrive.
+        postText: `${pending.code} — verifying my account with @${handles || "astroidbot"}`,
+      });
     } catch (error) {
-      logger.error("Failed to create social account", { error });
+      logger.error("Failed to start social verification", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async getSocialVerification(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const platform = String(req.query.platform ?? "x");
+      const pending = await SocialVerificationService.getInstance().pending(req.userId!, platform);
+      res.json({ pending });
+    } catch (error) {
+      logger.error("Failed to read social verification", { error });
       next(new InternalError());
     }
   }
