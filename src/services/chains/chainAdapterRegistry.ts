@@ -57,6 +57,18 @@ export class ChainAdapterRegistry {
     return this.byChainId.has(chainId);
   }
 
+  /**
+   * Descriptor for a chain, or undefined if it isn't registered.
+   *
+   * The non-throwing counterpart to `get`, for read-side callers that render
+   * whatever chains happen to be enabled — a discovery row for a chain this
+   * deployment no longer runs should degrade to a plain label, not 500 the
+   * whole listing.
+   */
+  find(chainId: ChainId): ChainDescriptor | undefined {
+    return this.byChainId.get(chainId)?.descriptor;
+  }
+
   /** All adapters sharing an execution shape. */
   forFamily(family: ChainFamily): ChainAdapter[] {
     return this.byFamily.get(family) ?? [];

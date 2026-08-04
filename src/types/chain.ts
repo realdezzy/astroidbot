@@ -61,6 +61,12 @@ export interface EvmChainConfig {
     name: string;
     quoter: `0x${string}`;
     swapRouter: `0x${string}`;
+    /**
+     * V3 factory. Only the indexer needs this — it reads `PoolCreated` logs to
+     * discover pools, which is the one thing that can't be derived from the
+     * router. Optional so a chain can be tradable without being indexable.
+     */
+    factory?: `0x${string}`;
     /** Fee tiers to scan when quoting, in hundredths of a bip (500 = 0.05%). */
     feeTiers: number[];
   };

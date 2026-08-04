@@ -38,7 +38,30 @@ RPC_URL_SOLANA_MAINNET="https://your-solana-rpc.example"
 
 A chain is **tradable** only when it has a routing DEX configured. Without one it still supports wallets, balances and discovery — `DEXRegistry` simply never offers it a quote.
 
-This matters for new networks whose DEX deployments don't exist or aren't verifiable yet. They ship as listable and become tradable by adding a `dex` block. `solana:devnet` is registered this way, since Jupiter doesn't serve devnet.
+This matters for new networks whose DEX deployments don't exist or aren't verifiable yet. They ship as listable and become tradable by adding a `dex` block. `solana:devnet` is registered this way, since Jupiter doesn't serve devnet, as is `arc:testnet`, which has no DEX at all yet.
+
+## The built-in catalogue
+
+Every chain this build can describe. Being listed here is inert until `ENABLED_CHAINS` names it.
+
+| ChainId | Family | Native | Tradable | Notes |
+|---|---|---|---|---|
+| `stacks:mainnet` | stacks | STX | yes | ALEX, Bitflow, Velar |
+| `stacks:testnet` | stacks | STX | yes | |
+| `ethereum:mainnet` | evm | ETH | yes | Uniswap V3 |
+| `base:mainnet` | evm | ETH | yes | Uniswap V3, ERC-4337 custody |
+| `base:sepolia` | evm | ETH | yes | |
+| `celo:mainnet` | evm | CELO | yes | Uniswap V3, EOA custody |
+| `robinhood:mainnet` | evm | ETH | yes | Arbitrum Orbit L2, chain 4663, Uniswap V3 |
+| `arc:testnet` | evm | USDC | **no** | Circle's Arc — testnet only, no DEX yet |
+| `solana:mainnet` | svm | SOL | yes | Jupiter |
+| `solana:devnet` | svm | SOL | **no** | Jupiter doesn't serve devnet |
+
+Two entries deserve explanation.
+
+**Robinhood Chain** is a real Arbitrum Orbit L2 with a real Uniswap V3 deployment. Every address in its descriptor was read back off the chain rather than copied from a listing — `QuoterV2.factory()` and a live pool's `factory()` agree, and `SwapRouter02.WETH9()` matches the wrapped-native address. Note that its bridged dollar, **rUSDC, has 18 decimals**, not the 6 that USDC carries almost everywhere else; assuming 6 misprices every quote by 10¹² while looking entirely reasonable.
+
+**Arc has no mainnet.** Circle's Arc is in public testnet and their docs state mainnet parameters are published separately when available. So there is no `arc:mainnet` descriptor, deliberately: an entry with invented parameters would be accepted by `ENABLED_CHAINS`, wallets would be generated against a chain id that doesn't exist, and the failure would surface as unexplained broadcast errors instead of "that chain isn't supported yet".
 
 ## Adding a chain
 

@@ -25,6 +25,7 @@ export const BASE_MAINNET: ChainDescriptor = {
       // validates every address at registration now — see assertValidAddresses.
       quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
       swapRouter: "0x2626664c2603336E57B271c5C0b26F421741e481",
+      factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
       feeTiers: [500, 3000, 10000],
     },
     tokens: {
@@ -56,6 +57,7 @@ export const BASE_SEPOLIA: ChainDescriptor = {
       name: "UniswapV3",
       quoter: "0xC5290058841028F1614F3A6F0F5816cAd0df5E27",
       swapRouter: "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4",
+      factory: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
       feeTiers: [500, 3000, 10000],
     },
     tokens: {

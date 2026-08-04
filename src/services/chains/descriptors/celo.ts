@@ -35,6 +35,7 @@ export const CELO_MAINNET: ChainDescriptor = {
       name: "UniswapV3",
       quoter: "0x82825d0554fA07f7FC52Ab63c961F330fdEFa8E8",
       swapRouter: "0x5615CDAb10dc425a742d643d949a7F474C01abc4",
+      factory: "0xAfE208a311B21f13EF87E33A90049fC17A7acDEc",
       feeTiers: [500, 3000, 10000],
     },
     tokens: {
