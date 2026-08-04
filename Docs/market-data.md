@@ -92,6 +92,12 @@ Discovery also catalogues the traded side of each new pool. Without that the cat
 
 Only oversized results, though. An earlier version split on *any* failure, on the theory that error wordings vary too much to classify. Against a slow endpoint that turned one timeout into a recursive storm of single-block retries — thousands of requests aimed at a provider already struggling, which guaranteed the timeouts continued. A timeout means "ask less often", not "ask for less, immediately, many times over". Transient failures now get one backed-off retry and are then left for the next tick.
 
+**History is backfilled downward.** A newly-indexed chain starts `INDEXER_INITIAL_LOOKBACK_BLOCKS` behind the head, so for its first day every 24H figure was a fraction of the real one — with nothing on the page to say so. A token trading steadily read as one drying up. Once the forward pass reaches the head, each tick also walks *backwards* by at most `INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN` until `INDEXER_BACKFILL_WINDOW_HOURS` of history is covered.
+
+The floor is derived from measured block time rather than a fixed block count: 50k blocks is a week of Ethereum and about three hours of a sub-second L2, so a constant leaves exactly the busiest chains with the least history. Two block reads, once per chain.
+
+Backfill uses its own cursor and never touches `lastBlock`, `lastPrice0` or pool liquidity. Those all mean *latest*, and a walk through older blocks writing them would move a pool's current price backwards in time — which, since the deepest pool sets a token's displayed price, surfaces as the quoted price jumping to a stale one. A chain whose original ingestion start isn't recorded is marked complete rather than walked, because the only available starting point would be the current cursor, and descending through already-ingested blocks inflates additively-accumulated volume permanently.
+
 **Block timestamps are interpolated.** Asking the chain for every block a swap landed in is thousands of round trips per tick and dominated everything else the indexer did. `BlockTimeOracle` samples a bounded number of blocks per range and interpolates, making the cost constant in range size rather than linear. The timestamp's only job is to place a swap in a five-minute bucket, so a few seconds of error is immaterial — and a misplaced swap lands in an adjacent bucket at worst, never lost or mispriced, since price and volume come from the log itself.
 
 ## USD anchoring
@@ -126,6 +132,8 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | `INDEXER_RETRY_BACKOFF_MS` | `1000` | Pause before the single transient retry |
 | `INDEXER_MIN_POOL_LIQUIDITY_USD` | `1000` | Below this, activity counts but the price isn't trusted |
 | `INDEXER_CANDLE_RETENTION_DAYS` | `30` | Candles older than this are pruned |
+| `INDEXER_BACKFILL_WINDOW_HOURS` | `24` | History the downward walk covers; `0` disables it |
+| `INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN` | `10000` | Backfill's per-tick budget, kept below the forward pass's |
 
 The indexer is by far the heaviest RPC consumer in the process. Point each chain at a paid endpoint via the per-chain override — `RPC_URL_ETHEREUM_MAINNET`, `RPC_URL_BASE_MAINNET`, and so on. Public endpoints rate-limit hard, and Ethereum mainnet in particular is not practical to index through one.
 

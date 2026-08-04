@@ -117,6 +117,15 @@ const envSchema = z.object({
   INDEXER_MIN_POOL_LIQUIDITY_USD: z.coerce.number().min(0).default(1_000),
   // Candles older than this are dropped — no window reads them.
   INDEXER_CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  // How much history the backfill walks back to cover, in hours. Defaults to
+  // the widest window the UI renders: with less than this a freshly-indexed
+  // chain shows a 24H column computed from six hours of data, which is not
+  // visibly wrong and is wrong.
+  INDEXER_BACKFILL_WINDOW_HOURS: z.coerce.number().int().min(0).default(24),
+  // Ceiling on backfilled blocks per tick. Separate from
+  // INDEXER_MAX_BLOCKS_PER_RUN so backfill can be given a smaller share:
+  // history is worth having, but never at the cost of falling behind the head.
+  INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN: z.coerce.number().int().positive().default(10_000),
   // Social trading. Off by default and deliberately so: this surface lets a
   // public post move real funds, and it should be a considered decision to
   // enable rather than something that arrives with an upgrade.

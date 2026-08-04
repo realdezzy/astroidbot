@@ -2,7 +2,7 @@ import { InlineKeyboard } from "grammy";
 import { activeChain, activeChainTokens } from "../chainContext.js";
 import { breadcrumb } from "../keyboards/builders.js";
 import { walletDescriptor } from "../../services/chains/walletChain.js";
-import type { BotContext } from "../../types/bot.js";
+import { QUOTE_TTL_MS, type BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { escapeMd } from "../utils.js";
@@ -149,6 +149,18 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
       const { providerName, quote: est } = bestQuoteResult;
       const rate = est.amountOut / amount;
 
+      // Stamped now and re-checked on Confirm. A preview is a chat message and
+      // will still be tappable tomorrow; without this the button was a
+      // standing order to trade at an unknown future price.
+      ctx.session.tradeQuote = {
+        quotedAt: Date.now(),
+        provider: providerName,
+        tokenIn,
+        tokenOut,
+        amountIn: amount,
+        amountOut: est.amountOut,
+      };
+
       const text = [
         `🛒 *Confirm Trade - Step 5/5*`,
         `═════════════════════════`,
@@ -162,6 +174,8 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
         `• Exchange Rate: \`1 ${tokenIn} = ${rate.toFixed(4)} ${tokenOut}\``,
         `• Price Impact: \`${est.priceImpact.toFixed(2)}%\``,
         `• DEX Fee: \`${est.feeAmount.toFixed(4)} ${escapeMd(tokenIn)}\` (${est.feeBps} bps)`,
+        ``,
+        `⏳ *Quote valid for ${Math.round(QUOTE_TTL_MS / 1000)}s.* After that, confirming re-quotes at the current price and shows you this screen again.`,
       ].join("\n");
 
       const keyboard = new InlineKeyboard()

@@ -27,6 +27,10 @@ export interface IndexerSettings {
   maxSplitDepth: number;
   /** Pause before the single retry given to a transient RPC failure. */
   retryBackoffMs: number;
+  /** Hours of history the downward backfill walk aims to cover. 0 disables it. */
+  backfillWindowHours: number;
+  /** Ceiling on blocks the backfill may walk per tick. */
+  maxBackfillBlocksPerRun: number;
 }
 
 export function indexerSettings(): IndexerSettings {
@@ -40,5 +44,7 @@ export function indexerSettings(): IndexerSettings {
     maxAddressesPerFilter: config.INDEXER_MAX_ADDRESSES_PER_FILTER,
     maxSplitDepth: config.INDEXER_MAX_SPLIT_DEPTH,
     retryBackoffMs: config.INDEXER_RETRY_BACKOFF_MS,
+    backfillWindowHours: config.INDEXER_BACKFILL_WINDOW_HOURS,
+    maxBackfillBlocksPerRun: config.INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN,
   };
 }

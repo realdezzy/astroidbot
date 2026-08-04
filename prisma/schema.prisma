@@ -469,6 +469,23 @@ model IndexerCursor {
   // Separate cursor: pool discovery scans the factory, swap ingestion scans
   // pools, and they advance at different rates (discovery can lag safely).
   lastPoolBlock BigInt?
+
+  // Backfill walks *downward* from where the chain was first indexed, so the
+  // 24h columns are complete rather than showing a partial window for the
+  // first day of a chain's life. Two separate marks because it moves in the
+  // opposite direction to everything else: `backfillBlock` is the low-water
+  // mark reached so far, `backfillFloor` is where it stops.
+  //
+  // Null floor means "not yet computed" — it is derived from measured block
+  // time on first run, because a fixed block count means wildly different
+  // spans per chain (50k blocks is 7 days of Ethereum and 3 hours of a
+  // sub-second L2).
+  backfillBlock BigInt?
+  backfillFloor BigInt?
+  // Set when the walk reaches the floor. Distinguishes "done" from "not
+  // started", which otherwise look identical once backfillBlock == floor.
+  backfillDone  Boolean  @default(false)
+
   updatedAt     DateTime @updatedAt
 }
 

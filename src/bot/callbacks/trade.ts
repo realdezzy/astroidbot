@@ -9,7 +9,7 @@ import { activeChain } from "../chainContext.js";
 import { currentUser } from "../context.js";
 import type { CallbackRoutes } from "./registry.js";
 import { numericArg } from "./registry.js";
-import type { BotContext } from "../../types/bot.js";
+import { QUOTE_TTL_MS, type BotContext } from "../../types/bot.js";
 
 /** Trade wizard, quick-trade flow, and limit orders. */
 
@@ -57,6 +57,22 @@ export const tradeRoutes: CallbackRoutes = {
       const tokenOut = ctx.session.tradeTokenOut ?? chain.stableSymbol;
       const amount = numericAmount(ctx.session.tradeAmount);
       if (amount <= 0) return;
+
+      // The preview is a chat message: it stays tappable indefinitely, and
+      // this handler enqueues a trade that is re-quoted at execution time. So
+      // confirming a stale preview meant agreeing to a number that was no
+      // longer on offer — the user's only protection being their slippage
+      // setting, which is not what a displayed "you will receive X" implies.
+      //
+      // Re-quoting is the response rather than refusing, because the user's
+      // intent is unambiguous; only the price is out of date. They get the
+      // same screen with current numbers and confirm again.
+      const staleReason = quoteStaleness(ctx, tokenIn, tokenOut, amount);
+      if (staleReason) {
+        await ctx.answerCallbackQuery?.({ text: staleReason, show_alert: true }).catch(() => {});
+        await ctx.reply(`⏳ ${staleReason}\n\nFetching a fresh quote…`);
+        return tradeScreen(ctx, "confirm");
+      }
 
       const { QueueManager } = await import("../../services/queue.js");
       await QueueManager.getInstance().enqueueTrade({
@@ -217,6 +233,36 @@ function clearTradeSession(ctx: BotContext): void {
   delete ctx.session.tradeTokenOut;
   delete ctx.session.tradeAmount;
   delete ctx.session.tradeWalletId;
+  delete ctx.session.tradeQuote;
+}
+
+/**
+ * Why the stored quote can't be honoured, or null if it can.
+ *
+ * Checks the trade parameters as well as the age. The session is mutable — a
+ * user can go back, change the amount, and land on a preview still rendered
+ * from the previous quote — so an age check alone would happily confirm a
+ * fresh quote for the wrong trade.
+ */
+function quoteStaleness(
+  ctx: BotContext,
+  tokenIn: string,
+  tokenOut: string,
+  amount: number
+): string | null {
+  const quote = ctx.session.tradeQuote;
+  if (!quote) return "This quote is no longer available.";
+
+  if (Date.now() - quote.quotedAt > QUOTE_TTL_MS) {
+    const age = Math.round((Date.now() - quote.quotedAt) / 1000);
+    return `That quote is ${age}s old and prices have moved on.`;
+  }
+
+  if (quote.tokenIn !== tokenIn || quote.tokenOut !== tokenOut || quote.amountIn !== amount) {
+    return "The trade changed after this quote was taken.";
+  }
+
+  return null;
 }
 
 function numericAmount(raw: unknown): number {

@@ -160,7 +160,16 @@ export class UniswapV3Indexer implements ChainIndexer {
     if (!cursor) {
       const seed = defaultStart > 0n ? defaultStart - 1n : 0n;
       await db.prisma.indexerCursor.create({
-        data: { chainId: this.chainId, lastBlock: seed, lastPoolBlock: seed },
+        // backfillBlock is seeded here, not lazily on the first backfill tick.
+        // By then lastBlock has advanced to the head, and a walk starting from
+        // there would descend through blocks the forward pass already
+        // ingested — inflating additively-accumulated volume permanently.
+        data: {
+          chainId: this.chainId,
+          lastBlock: seed,
+          lastPoolBlock: seed,
+          backfillBlock: seed,
+        },
       });
     }
 
@@ -185,14 +194,130 @@ export class UniswapV3Indexer implements ChainIndexer {
     const poolsDiscovered = await this.discoverPools(poolFromBlock, toBlock);
     const { swapsIngested, bucketsWritten } = await this.ingestSwaps(fromBlock, toBlock);
 
+    // Backfill only once the forward pass has reached the head. Live data is
+    // what the product is for; history is a correctness nicety, and a chain
+    // catching up must not spend half its block budget walking backwards.
+    const backfilled =
+      toBlock >= safeHead ? await this.backfillStep(safeHead) : { swapsIngested: 0, bucketsWritten: 0 };
+
     return {
       chainId: this.chainId,
       poolsDiscovered,
-      swapsIngested,
-      bucketsWritten,
+      swapsIngested: swapsIngested + backfilled.swapsIngested,
+      bucketsWritten: bucketsWritten + backfilled.bucketsWritten,
       fromBlock,
       toBlock,
     };
+  }
+
+  // ─── Backfill ──────────────────────────────────────────────────────────────
+
+  /**
+   * Walks history downward so the 24H columns aren't computed from a partial
+   * window.
+   *
+   * A newly-indexed chain starts `initialLookbackBlocks` behind the head and
+   * never fills in anything earlier, so for the first day of its life every
+   * 24H figure is a fraction of the real one — and there is nothing on the
+   * page to say so. A token that traded steadily reads as one that is drying
+   * up, which is exactly backwards.
+   *
+   * Runs only when the forward pass is at the head, and takes at most
+   * `maxBackfillBlocksPerRun` per tick.
+   */
+  private async backfillStep(
+    safeHead: bigint
+  ): Promise<{ swapsIngested: number; bucketsWritten: number }> {
+    const none = { swapsIngested: 0, bucketsWritten: 0 };
+    if (this.settings.backfillWindowHours <= 0) return none;
+
+    const db = DatabaseService.getInstance();
+    const cursor = await db.prisma.indexerCursor.findUnique({
+      where: { chainId: this.chainId },
+    });
+    if (!cursor || cursor.backfillDone) return none;
+
+    let floor = cursor.backfillFloor;
+    if (floor == null) {
+      floor = await this.computeBackfillFloor(safeHead);
+      if (floor == null) return none;
+      await this.saveCursor({ backfillFloor: floor });
+    }
+
+    // Where the walk resumes. Absent only on a cursor that predates this
+    // feature, where the original ingestion start is unrecoverable — falling
+    // back to lastBlock would walk down through already-ingested blocks and
+    // double-count their volume, so those chains are finished rather than
+    // guessed at. The migration marks them done for the same reason.
+    const start = cursor.backfillBlock;
+    if (start == null) {
+      await this.saveCursor({ backfillDone: true });
+      return none;
+    }
+
+    if (start <= floor) {
+      await this.saveCursor({ backfillDone: true });
+      logger.info("[indexer] backfill complete", { chainId: this.chainId, floor: floor.toString() });
+      return none;
+    }
+
+    const toBlock = start - 1n;
+    const budget = BigInt(this.settings.maxBackfillBlocksPerRun);
+    const fromBlock = toBlock - budget > floor ? toBlock - budget : floor;
+
+    // Pools created after this range still have their swaps read here — a pool
+    // simply emits nothing before it existed, so filtering by creation block
+    // would only add a query for no saved work.
+    const result = await this.ingestSwaps(fromBlock, toBlock, "backfill");
+
+    logger.info("[indexer] backfilled", {
+      chainId: this.chainId,
+      blocks: `${fromBlock}-${toBlock}`,
+      remaining: (fromBlock > floor ? fromBlock - floor : 0n).toString(),
+      swaps: result.swapsIngested,
+    });
+
+    return result;
+  }
+
+  /**
+   * The block roughly `backfillWindowHours` before the head.
+   *
+   * Measured rather than assumed. A fixed block count means wildly different
+   * spans per chain — 50k blocks is a week of Ethereum and about three hours
+   * of a sub-second L2 — so a constant would leave exactly the fast chains,
+   * the ones with the most activity to miss, with the least history.
+   *
+   * Two block reads, once per chain, cached on the cursor row.
+   */
+  private async computeBackfillFloor(safeHead: bigint): Promise<bigint | null> {
+    try {
+      const SAMPLE_SPAN = 1_000n;
+      if (safeHead <= SAMPLE_SPAN) return 0n;
+
+      const [head, earlier] = await Promise.all([
+        this.rpc.getBlock({ blockNumber: safeHead }),
+        this.rpc.getBlock({ blockNumber: safeHead - SAMPLE_SPAN }),
+      ]);
+
+      const elapsed = Number(head.timestamp - earlier.timestamp);
+      if (!Number.isFinite(elapsed) || elapsed <= 0) return null;
+
+      const secondsPerBlock = elapsed / Number(SAMPLE_SPAN);
+      const wanted = (this.settings.backfillWindowHours * 3600) / secondsPerBlock;
+      if (!Number.isFinite(wanted) || wanted <= 0) return null;
+
+      const span = BigInt(Math.ceil(wanted));
+      return safeHead > span ? safeHead - span : 0n;
+    } catch (error) {
+      // Not fatal: the next tick tries again, and until then the chain simply
+      // has no backfill rather than no ingestion.
+      logger.warn("[indexer] could not measure block time for backfill", {
+        chainId: this.chainId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   // ─── Pool discovery ────────────────────────────────────────────────────────
@@ -305,15 +430,30 @@ export class UniswapV3Indexer implements ChainIndexer {
 
   // ─── Swap ingestion ────────────────────────────────────────────────────────
 
+  /**
+   * Ingests a block range into candles.
+   *
+   * `direction` decides which cursor the write advances, and nothing else.
+   * Forward moves `lastBlock` up; backfill moves `backfillBlock` down. They
+   * are separate marks because they meet in the middle from opposite ends —
+   * sharing one would make an unfinished backfill indistinguishable from
+   * having fallen behind the head, and the recovery for those is opposite.
+   */
   private async ingestSwaps(
     fromBlock: bigint,
-    toBlock: bigint
+    toBlock: bigint,
+    direction: "forward" | "backfill" = "forward"
   ): Promise<{ swapsIngested: number; bucketsWritten: number }> {
     const db = DatabaseService.getInstance();
     const pools = await this.trackedPools();
 
     if (pools.length === 0) {
-      await this.saveCursor({ lastBlock: toBlock });
+      // Nothing to read. Claim the range anyway: re-walking it next tick would
+      // find the same nothing, and on a chain with no tracked pools that loop
+      // never terminates.
+      await this.saveCursor(
+        direction === "forward" ? { lastBlock: toBlock } : { backfillBlock: fromBlock }
+      );
       return { swapsIngested: 0, bucketsWritten: 0 };
     }
 
@@ -418,25 +558,48 @@ export class UniswapV3Indexer implements ChainIndexer {
     // The write and the cursor advance are one transaction. Volume is
     // accumulated additively, so replaying a committed range would inflate it;
     // committing both together makes that state unreachable.
+    //
+    // Backfill claims from the *bottom* of the range: a partial read means the
+    // walk resumes above the gap and tries it again, mirroring how the forward
+    // pass holds its cursor below one.
+    const cursorMove =
+      direction === "forward"
+        ? { lastBlock: committedTo }
+        : { backfillBlock: failedAt != null ? failedAt + 1n : fromBlock };
+
+    // `lastPrice0`/`lastSwapAt` mean *latest*, and a backfill is reading older
+    // blocks than anything already recorded — writing them here would move a
+    // pool's current price backwards in time, and since the deepest pool sets
+    // a token's displayed price, that shows up as the quoted price randomly
+    // jumping to a stale one.
+    const poolStateWrites =
+      direction === "forward"
+        ? [...poolState.entries()].map(([poolId, state]) =>
+            db.prisma.indexedPool.update({
+              where: { id: poolId },
+              data: { lastPrice0: state.price, lastSwapAt: state.at },
+            })
+          )
+        : [];
+
     await db.prisma.$transaction([
       ...(buckets.length > 0 ? [db.prisma.$executeRaw(buildCandleUpsert(buckets))] : []),
-      ...[...poolState.entries()].map(([poolId, state]) =>
-        db.prisma.indexedPool.update({
-          where: { id: poolId },
-          data: { lastPrice0: state.price, lastSwapAt: state.at },
-        })
-      ),
+      ...poolStateWrites,
       db.prisma.indexerCursor.upsert({
         where: { chainId: this.chainId },
         create: { chainId: this.chainId, lastBlock: committedTo, lastPoolBlock: committedTo },
-        update: { lastBlock: committedTo },
+        update: cursorMove,
       }),
     ]);
 
     // Liquidity is refreshed only for pools that actually traded. It costs two
     // balance reads per pool, and a pool with no swaps this tick has neither
-    // moved nor become more interesting.
-    await this.refreshLiquidity([...poolState.keys()], byAddress, usd);
+    // moved nor become more interesting. Skipped entirely on backfill: the
+    // reads return *today's* balances, so attributing them to a pool because
+    // of a trade last week is both wrong and paid for in RPC calls.
+    if (direction === "forward") {
+      await this.refreshLiquidity([...poolState.keys()], byAddress, usd);
+    }
 
     return { swapsIngested, bucketsWritten: buckets.length };
   }
@@ -870,7 +1033,13 @@ export class UniswapV3Indexer implements ChainIndexer {
     return out;
   }
 
-  private async saveCursor(data: { lastBlock?: bigint; lastPoolBlock?: bigint }): Promise<void> {
+  private async saveCursor(data: {
+    lastBlock?: bigint;
+    lastPoolBlock?: bigint;
+    backfillBlock?: bigint;
+    backfillFloor?: bigint;
+    backfillDone?: boolean;
+  }): Promise<void> {
     const db = DatabaseService.getInstance();
     await db.prisma.indexerCursor.upsert({
       where: { chainId: this.chainId },
