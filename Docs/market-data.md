@@ -14,9 +14,47 @@ MARKET_DATA_PROVIDER="internal"
 
 The reason production doesn't use DexScreener is not that it's inaccurate — it's that it makes someone else's rate limit, uptime and chain coverage load-bearing for our own product surface. `auto` exists because a freshly-enabled chain's index starts empty and a page that's blank for a day looks broken; it is a migration aid, not an end state.
 
+## Where it runs
+
+The indexer is its own process, in its own container.
+
+```
+┌──────────────┐        ┌──────────────┐
+│     bot      │        │   indexer    │
+│ API·TG·trades│        │  ingestion   │
+└───────┬──────┘        └──────┬───────┘
+        │   ┌──────────────┐   │
+        └──►│ Postgres·Redis│◄──┘
+            └──────────────┘
+```
+
+They share a database and a Redis and nothing else. The indexer serves no API, holds no wallet keys, and runs no queue workers; the bot process does not read a single chain log.
+
+It began inside the bot process and was split out for three reasons:
+
+- **Blast radius.** Ingestion is the heaviest RPC consumer in the codebase and the most exposed to third-party failure. Sharing an event loop with trade execution means a provider having a bad day competes with signing a swap.
+- **Scale shape.** Indexing more chains is RPC- and CPU-bound. Serving more users is neither. Fused together, they can only be scaled by the larger of the two needs.
+- **Restart cost.** Adding a chain to the index restarts the indexer. It should not also drop every WebSocket connection and stop Telegram polling.
+
+`INDEXER_MODE` decides which process ingests, and **every process in a deployment must agree on it**:
+
+| Mode | Meaning |
+|---|---|
+| `standalone` | The dedicated indexer container ingests. The bot never does. What `docker compose` runs. |
+| `inline` | The bot ingests on its own trading tick. One process, one command — the right default for local development. |
+| `off` | Nobody ingests. Pair with `MARKET_DATA_PROVIDER="dexscreener"`, or the pages have no data. |
+
+The standalone process refuses to start under `inline` or `off` rather than starting and doing the wrong amount of work. Both mistakes are invisible at runtime: two ingesters look like one, and zero ingesters look like a chain where nobody is trading.
+
+**Mutual exclusion is now a cross-process problem.** Two runs of the same chain would read the same cursor, ingest the same blocks, and add the same volume — which accumulates additively, so the inflation is permanent and looks exactly like real trading. A per-chain Redis lock (`indexer:ingest:<chainId>`, TTL `INDEXER_LOCK_TTL_MS`) is what prevents it; the in-process guard it replaced could only see runs inside one process, which stopped being the interesting case the moment there were two.
+
+The indexer serves `GET /health` on `INDEXER_PORT` for the container healthcheck and nothing else. It reports unhealthy only after three *consecutive* failed passes — one failure is the normal response to an RPC endpoint hiccuping, and restarting on it converts a blip into a restart loop that never finishes a pass.
+
+Running it by hand: `npm run start:indexer` (or `npm run dev:indexer`).
+
 ## How the index works
 
-One pass per `runCycle()` tick. There is no second scheduler — the codebase has exactly one timer by design.
+One pass per tick — the trading cycle's in `inline` mode, the indexer's own `INDEXER_POLL_INTERVAL_SECONDS` timer in `standalone`.
 
 ```
 PoolCreated logs ──► IndexedPool ──┐
@@ -65,7 +103,10 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `MARKET_DATA_PROVIDER` | `internal` | `internal` \| `dexscreener` \| `auto` |
-| `INDEXER_ENABLED` | `true` | Off for workers that only execute trades |
+| `INDEXER_MODE` | `inline` | `standalone` \| `inline` \| `off` — which process ingests |
+| `INDEXER_POLL_INTERVAL_SECONDS` | `POLL_INTERVAL_SECONDS` | Standalone tick |
+| `INDEXER_PORT` | `8007` | Health endpoint for the standalone container |
+| `INDEXER_LOCK_TTL_MS` | `300000` | Per-chain ingestion lock; must outlast a normal pass |
 | `INDEXER_CONFIRMATIONS` | `12` | Blocks kept behind the head |
 | `INDEXER_BLOCK_CHUNK_SIZE` | `2000` | Blocks per `eth_getLogs` |
 | `INDEXER_MAX_BLOCKS_PER_RUN` | `20000` | Ceiling per tick, so catch-up can't stall a cycle |

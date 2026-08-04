@@ -1,20 +1,30 @@
 import { ChainAdapterRegistry } from "../chains/chainAdapterRegistry.js";
 import { ConfigManager } from "../../config.js";
+import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
 import { UniswapV3Indexer } from "./evm/uniswapV3Indexer.js";
+import { indexingEnabled } from "./mode.js";
 import { indexerSettings } from "./settings.js";
 import type { ChainIndexer, IndexRunResult } from "./types.js";
+
+/** Redis key for a chain's ingestion lock. */
+const lockKey = (chainId: string): string => `indexer:ingest:${chainId}`;
 
 /**
  * Drives per-chain ingestion.
  *
- * Runs off the existing `runCycle()` tick rather than a scheduler of its own —
- * the codebase has exactly one timer by design, and a second one is how you
- * end up with two components disagreeing about how often "every minute" is.
+ * A run is skipped rather than queued if another is already in flight for that
+ * chain. The tick interval and the time to ingest a range are unrelated
+ * numbers, and overlapping runs would both read the same cursor, both ingest
+ * the same blocks, and both add the resulting volume — which accumulates
+ * additively, so the inflation is permanent and invisible.
  *
- * A run is skipped rather than queued if the previous one is still going. The
- * cycle interval and the time to ingest a range are unrelated numbers, and
- * overlapping runs on the same chain would contend on the cursor row.
+ * That exclusion is enforced twice, deliberately. The in-process `running` set
+ * catches the common case without touching Redis. The Redis lock catches the
+ * case the in-process set cannot even see: ingestion now runs in its own
+ * container (INDEXER_MODE=standalone), so "another run" may be another
+ * *process* — a second replica, a deploy overlapping its predecessor, or an
+ * operator who left the API on INDEXER_MODE=inline.
  */
 export class IndexerService {
   private static instance: IndexerService;
@@ -61,9 +71,21 @@ export class IndexerService {
     logger.info("[indexer] initialised", { chains: [...this.indexers.keys()] });
   }
 
-  /** True when this deployment indexes at all. */
+  /** True when this deployment indexes at all, wherever it does so. */
   enabled(): boolean {
-    return ConfigManager.getInstance().config.INDEXER_ENABLED;
+    return indexingEnabled();
+  }
+
+  /**
+   * Chain ids this process would ingest, building the indexer set if it hasn't
+   * been built yet. Reported by the standalone process's health endpoint,
+   * where an empty list is the answer to "why is discovery empty" — every
+   * enabled chain lacks a factory address.
+   */
+  indexedChains(): string[] {
+    if (!this.enabled()) return [];
+    this.init();
+    return [...this.indexers.keys()];
   }
 
   /**
@@ -87,6 +109,18 @@ export class IndexerService {
   private async runOne(chainId: string, indexer: ChainIndexer): Promise<IndexRunResult | null> {
     if (this.running.has(chainId)) {
       logger.debug("[indexer] previous run still in flight, skipping", { chainId });
+      return null;
+    }
+
+    const redis = RedisService.getInstance();
+    const ttl = ConfigManager.getInstance().config.INDEXER_LOCK_TTL_MS;
+    const token = await redis.acquireLock(lockKey(chainId), ttl);
+
+    // Held by another process. Skipping is correct and not an error: whoever
+    // holds it is ingesting this chain right now, and the next tick will find
+    // the cursor already advanced.
+    if (!token) {
+      logger.debug("[indexer] chain locked by another process, skipping", { chainId });
       return null;
     }
 
@@ -116,6 +150,7 @@ export class IndexerService {
       return null;
     } finally {
       this.running.delete(chainId);
+      await redis.releaseLock(lockKey(chainId), token);
     }
   }
 

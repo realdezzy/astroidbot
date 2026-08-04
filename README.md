@@ -39,7 +39,7 @@ AstroidBot is an AI-powered automated trading bot and web dashboard for the Stac
 | Telegram | GrammY bot framework |
 | Frontend | React 19, Vite 6, Tailwind CSS v4, TradingView Lightweight Charts |
 | Blockchain | @stacks/transactions, ALEX SDK v2 |
-| Infra | Docker Compose (PostgreSQL, Redis, Bot) |
+| Infra | Docker Compose (PostgreSQL, Redis, Bot, Market-data indexer) |
 
 ## Getting Started
 
@@ -55,15 +55,19 @@ docker compose up --build -d
 # Bot available on http://localhost:8006
 ```
 
+This brings up four containers: `postgres`, `redis`, `bot` (API, Telegram, trading) and `indexer` (market-data ingestion). The last two run the same image with different entrypoints and share nothing but the database and Redis — see [Docs/market-data.md](Docs/market-data.md) for why ingestion is its own process.
+
 ### Local Development
 ```bash
 cp .env.example .env
 npm install
 npx prisma generate
-npx prisma db push
-npm run dev        # Backend on :8006
+npx prisma migrate deploy
+npm run dev            # Backend on :8006
 cd web && npm run dev  # Frontend on :5173
 ```
+
+`INDEXER_MODE` defaults to `inline`, so `npm run dev` alone indexes as well as trades — one process, one command. To mirror the Docker topology locally, set `INDEXER_MODE=standalone` and run `npm run dev:indexer` alongside it.
 
 ## API
 

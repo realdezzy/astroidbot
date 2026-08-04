@@ -69,13 +69,37 @@ const envSchema = z.object({
   //   auto        — internal, falling back per chain while an index warms up.
   MARKET_DATA_PROVIDER: z.enum(["internal", "dexscreener", "auto"]).default("internal"),
 
-  // The indexer is the heaviest RPC consumer in the process, so it can be
-  // turned off wholesale — e.g. on a worker that only executes trades.
-  // Enum-transformed for the same reason as every other flag here.
-  INDEXER_ENABLED: z
-    .enum(["true", "false", "1", "0"])
-    .transform((v) => v === "true" || v === "1")
-    .default("true"),
+  // Where market-data ingestion runs.
+  //
+  //   standalone — a dedicated indexer process (src/indexer.ts, its own
+  //                container) ingests; the API process never does. The
+  //                production topology: the indexer is the heaviest RPC
+  //                consumer in the codebase and its slow, bursty work has no
+  //                business sharing a event loop with trade execution.
+  //   inline     — the API process ingests on its own trading tick. Simpler
+  //                for local development and single-container deployments.
+  //   off        — nobody ingests. MARKET_DATA_PROVIDER should be
+  //                "dexscreener" or the discovery pages will have no data.
+  //
+  // Not a boolean, because "is the indexer enabled" and "does *this* process
+  // run it" are different questions and conflating them is how you end up with
+  // two processes ingesting the same chain.
+  INDEXER_MODE: z.enum(["off", "inline", "standalone"]).default("inline"),
+
+  // How often the standalone indexer ingests. Unset means "the same tick as
+  // everything else" — the trading cycle's interval — which is the right
+  // default: it is the cadence the numbers were designed around. Split from
+  // POLL_INTERVAL_SECONDS because the two processes have genuinely different
+  // cost profiles and a deployment may want the indexer slower.
+  INDEXER_POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().optional(),
+  // Health/metrics port for the standalone indexer. It serves nothing else —
+  // this exists so the container has something to health-check.
+  INDEXER_PORT: z.coerce.number().int().positive().default(8007),
+  // TTL on the per-chain ingestion lock. Sized well above a normal run: the
+  // lock is what stops two processes ingesting the same chain and
+  // double-counting additively-accumulated volume, and expiring it early would
+  // hand that guarantee away.
+  INDEXER_LOCK_TTL_MS: z.coerce.number().int().positive().default(300_000),
   // Blocks to stay behind the head. The cursor must never enter a range that
   // can still be reorged out, or ingested volume becomes unattributable.
   INDEXER_CONFIRMATIONS: z.coerce.number().int().min(0).default(12),

@@ -6,6 +6,8 @@
     "build": "tsc",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "start:indexer": "tsx src/indexer.ts",
+    "dev:indexer": "tsx watch src/indexer.ts",
     "test": "vitest run",
     "db:migrate": "npx prisma migrate dev",
     "db:generate": "npx prisma generate",

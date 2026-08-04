@@ -1,10 +1,7 @@
 import type { Server } from "node:http";
-import https from "node:https";
-import tls from "node:tls";
-import axios from "axios";
 import { ConfigManager } from "./config.js";
 import { logger } from "./utils/logger.js";
-import { DatabaseService } from "./services/db.js";
+import { hardenOutboundHttp, installProcessGuards, connectDatabase } from "./runtime.js";
 import { AlexDEXService } from "./services/dex/alex.js";
 import { BitflowDEXService } from "./services/dex/bitflow.js";
 import { VelarDEXService } from "./services/dex/velar.js";
@@ -19,69 +16,14 @@ import { BotStatus } from "./types.js";
 export async function bootstrap(): Promise<Server> {
   logger.info("AstroidBot initializing...");
 
-  // 1. Configure global Node.js TLS defaults to match modern browsers (prevents Cloudflare alert 40)
-  tls.DEFAULT_CIPHERS = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
-
-  // 2. Configure global Axios defaults
-  axios.defaults.httpsAgent = new https.Agent({
-    ciphers: tls.DEFAULT_CIPHERS,
-    honorCipherOrder: true,
-    minVersion: "TLSv1.2",
-  });
-  axios.defaults.headers.common["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-  // 3. Wrap native fetch to inject browser User-Agent
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = function (input, init) {
-    if (input instanceof Request) {
-      if (!input.headers.has("User-Agent")) {
-        try {
-          input.headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        } catch {
-          const newHeaders = new Headers(input.headers);
-          newHeaders.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-          const newRequest = new Request(input, { headers: newHeaders });
-          return originalFetch.call(this, newRequest, init);
-        }
-      }
-    } else {
-      const newInit = { ...init };
-      const headers = new Headers(newInit.headers);
-      if (!headers.has("User-Agent")) {
-        headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-      }
-      newInit.headers = headers;
-      return originalFetch.call(this, input, newInit);
-    }
-    return originalFetch.call(this, input, init);
-  };
-
-  // Catch unhandled promise rejections (e.g. from SDK lazy-init)
-  process.on("unhandledRejection", (reason) => {
-    if (reason instanceof Error && reason.message?.includes("HTTP error! status: 404")) {
-      logger.warn("Bitflow SDK initialization failed (404), continuing without Bitflow integration");
-      return;
-    }
-    logger.error("Unhandled rejection", { error: reason instanceof Error ? reason.message : String(reason) });
-  });
+  // Shared with src/indexer.ts — see runtime.ts for why these two steps are
+  // not optional for any process that makes an outbound request.
+  hardenOutboundHttp();
+  installProcessGuards();
 
   ConfigManager.load();
 
-  await DatabaseService.connect();
-  const db = DatabaseService.getInstance();
-  const healthy = await db.healthCheck();
-
-  if (!healthy) {
-    logger.error("Database health check failed. Exiting.");
-    logger.error("Prisma migration check: run 'npx prisma migrate dev' or 'npx prisma migrate deploy'");
-    process.exit(1);
-  }
-
-  try {
-    await db.prisma.$queryRaw`SELECT 1 FROM "User" LIMIT 1`;
-  } catch {
-    logger.warn("User table not found — may need migrations. Run: npx prisma migrate deploy");
-  }
+  await connectDatabase();
 
   await AlexDEXService.initialize();
   const alex = AlexDEXService.getInstance();

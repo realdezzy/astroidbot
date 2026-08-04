@@ -49,10 +49,14 @@ COPY --from=frontend-builder /app/web/dist ./web/dist
 
 RUN chown -R botuser:botgroup /app
 
+# One image, two entrypoints: the API/bot process and the market-data indexer
+# share every dependency and all of src/, and building them separately would
+# only create a way for the two to drift.
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+COPY docker-entrypoint-indexer.sh /docker-entrypoint-indexer.sh
+RUN chmod +x /docker-entrypoint.sh /docker-entrypoint-indexer.sh
 
-EXPOSE 8006
+EXPOSE 8006 8007
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:8006/api/health || exit 1
