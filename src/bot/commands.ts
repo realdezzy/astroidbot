@@ -18,6 +18,7 @@ import { tradeScreen } from "./screens/tradeScreen.js";
 import { tradesScreen } from "./screens/tradesScreen.js";
 import { agentsScreen, runAgent, toggleAgent, setAgentAiMode, deleteAgent } from "./screens/agentsScreen.js";
 import type { BotContext } from "../types/bot.js";
+import { tokenScreen } from "./screens/tokenScreen.js";
 
 /** Slash commands and `/reveal_N`-style text shortcuts. */
 export function registerCommands(bot: Bot<BotContext>): void {
@@ -44,6 +45,7 @@ export function registerCommands(bot: Bot<BotContext>): void {
       "",
       "/start — Main menu",
       "/trade — Quick token swap",
+      "/token <symbol|address> — Look up any token on any chain",
       "/portfolio — View holdings",
       "/wallets — Manage wallets",
       "/trades — Recent trade history",
@@ -164,6 +166,11 @@ export function registerCommands(bot: Bot<BotContext>): void {
   });
 
   bot.command("trade", rateLimiter, async (ctx) => { await tradeScreen(ctx, "pick_pair"); });
+  // Token lookup by symbol or contract address. The bot previously had no way
+  // to see anything about a token you didn't already hold.
+  bot.command("token", rateLimiter, async (ctx) => {
+    await tokenScreen(ctx, ctx.match ?? "");
+  });
   bot.command("portfolio", rateLimiter, async (ctx) => { await portfolioScreen(ctx); });
   bot.command("wallets", rateLimiter, async (ctx) => { await walletsScreen(ctx); });
   bot.command("trades", rateLimiter, async (ctx) => { await tradesScreen(ctx); });

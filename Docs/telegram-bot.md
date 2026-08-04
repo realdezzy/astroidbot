@@ -156,3 +156,25 @@ If you're an admin (configured via `TELEGRAM_ADMIN_IDS`), you also have:
 | `/ai` | AI assistant (opens agents) |
 | `/link_email` | Link email for web access |
 | `/cancel` | Abort any active input flow |
+
+
+## Token lookup
+
+`/token <symbol or contract address>` resolves anything the platform knows
+about and shows price, liquidity, chain and contract, with a Trade button that
+pre-fills the wizard.
+
+Resolution walks outward from most trustworthy to least — the DEX providers'
+curated lists, then the token catalogue, then what the indexer has seen
+trading, then a bare contract address on a known chain — and **every result
+says which of those it came from**. A ticker on its own is not evidence of
+anything, and an address anyone can paste is exactly where a token with a
+spoofed symbol lands, so provenance is shown as prominently as the price.
+
+A symbol matching on several chains is never resolved silently: `USDC` exists
+on five, and picking one for the user is how somebody buys the right ticker on
+the wrong network. The bot asks.
+
+The same resolver backs the trade wizard's "Enter Custom Token Symbol" step, so
+addresses and indexer-discovered tokens are now accepted there too. Both warn
+before the amount step when the token is not on a curated list.

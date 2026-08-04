@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { Search, ChevronDown } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Search, ChevronDown, Globe, AlertTriangle } from "lucide-react";
 import { classNames } from "../lib/utils";
+import { apiFetch } from "../lib/api";
 
 interface Token {
   contractId: string;
@@ -15,6 +17,19 @@ interface TokenSelectProps {
   onChange: (symbol: string) => void;
   placeholder?: string;
   className?: string;
+  /** Scopes the catalogue search. Without it, results span every chain. */
+  chainId?: string;
+}
+
+/** A discovery row, which carries more than the tradable list does. */
+interface DiscoveredToken {
+  chainId: string;
+  contractId: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  liquidityUsd: number | null;
+  isVerified: boolean;
 }
 
 const POPULAR_SYMBOLS = ["STX", "USDCx", "USDA", "ALEX", "WELSH"];
@@ -25,6 +40,7 @@ export function TokenSelect({
   onChange,
   placeholder = "Select token",
   className,
+  chainId,
 }: TokenSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -59,6 +75,31 @@ export function TokenSelect({
     if (isPopA && isPopB) return idxA - idxB;
     return a.symbol.localeCompare(b.symbol);
   });
+
+  /**
+   * Search the catalogue when the local list has nothing.
+   *
+   * The tradable list is the handful of tokens the DEX providers hardcode, so
+   * a token the indexer discovered — the entire long tail it exists to surface
+   * — could be looked at on /tokens and not selected here. Contract addresses
+   * had the same problem: nothing in a curated list matches one.
+   *
+   * Only queried on a miss, so the common case costs nothing.
+   */
+  const needsRemote = search.trim().length >= 2 && sortedFiltered.length === 0;
+
+  const { data: remote, isFetching: searching } = useQuery<{ items: DiscoveredToken[] }>({
+    queryKey: ["token-search", search, chainId],
+    queryFn: () =>
+      apiFetch(
+        `/tokens/discover?q=${encodeURIComponent(search.trim())}&pageSize=8` +
+          (chainId ? `&chainId=${encodeURIComponent(chainId)}` : "")
+      ),
+    enabled: needsRemote,
+    staleTime: 30_000,
+  });
+
+  const remoteResults = needsRemote ? (remote?.items ?? []) : [];
 
   const popularTokens = tokens.filter((t) => POPULAR_SYMBOLS.includes(t.symbol));
   const selectedToken = tokens.find((t) => t.symbol === value);
@@ -139,9 +180,49 @@ export function TokenSelect({
 
           {/* Tokens List */}
           <div className="max-h-64 overflow-y-auto divide-y divide-divider-color/20">
-            {sortedFiltered.length === 0 ? (
+            {sortedFiltered.length === 0 && remoteResults.length > 0 ? (
+              <>
+                <div className="px-4 pt-3 pb-1 flex items-center gap-1.5 text-xs text-muted-text">
+                  <Globe className="w-3 h-3" /> From the token catalogue
+                </div>
+                {remoteResults.map((t) => (
+                  <button
+                    key={`${t.chainId}:${t.contractId}`}
+                    onClick={() => {
+                      // The contract, not the symbol: a discovered token has no
+                      // entry in any provider list to look a symbol up in, and
+                      // an address is unambiguous about which token was meant.
+                      onChange(t.contractId);
+                      setOpen(false);
+                      setSearch("");
+                    }}
+                    className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-input-bg transition-colors text-left"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-title-text truncate">
+                        {t.symbol}
+                        {!t.isVerified && (
+                          <AlertTriangle
+                            className="inline w-3 h-3 ml-1.5 text-amber-400"
+                            aria-label="Not on a curated list — check the contract"
+                          />
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-text font-mono truncate">
+                        {t.chainId} · {t.contractId.slice(0, 10)}…
+                      </p>
+                    </div>
+                    {t.liquidityUsd !== null && (
+                      <span className="text-xs text-muted-text whitespace-nowrap">
+                        ${Math.round(t.liquidityUsd).toLocaleString()}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </>
+            ) : sortedFiltered.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-muted-text">
-                No tokens found
+                {searching ? "Searching every chain…" : "No tokens found"}
               </div>
             ) : (
               sortedFiltered.map((t) => (

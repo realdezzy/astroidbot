@@ -45,6 +45,16 @@ export interface SessionData {
   tradeTokenOut: string | undefined;
   /** Set when the preview is rendered, checked when Confirm is tapped. */
   tradeQuote: QuotedTrade | undefined;
+  /**
+   * Candidates from the last token lookup, referenced by index from callback
+   * data.
+   *
+   * Telegram caps callback data at 64 bytes and a Stacks contract id alone can
+   * exceed that, so the identity cannot travel in the button. Only the
+   * coordinates are kept — the detail screen re-resolves from them, so a stale
+   * session shows current prices rather than whatever was cached.
+   */
+  tokenMatches: { chainId: string; contractId: string }[] | undefined;
   limitPair: string | undefined;
   limitDir: string | undefined;
   limitAmount: number | string | undefined;

@@ -6,6 +6,8 @@ import { tradeScreen } from "../screens/tradeScreen.js";
 import { tradesScreen } from "../screens/tradesScreen.js";
 import { ordersScreen, limitCreateScreen } from "../screens/ordersScreen.js";
 import { activeChain } from "../chainContext.js";
+import { tokenDetailScreen, tokenRefAt } from "../screens/tokenScreen.js";
+import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
 import { currentUser } from "../context.js";
 import type { CallbackRoutes } from "./registry.js";
 import { numericArg } from "./registry.js";
@@ -182,6 +184,51 @@ export const tradeRoutes: CallbackRoutes = {
   },
 
   prefix: {
+    /**
+     * Token lookup results. The index refers to `session.tokenMatches` —
+     * Telegram caps callback data at 64 bytes and a contract id can exceed
+     * that alone, so identity cannot travel in the button.
+     */
+    "token_show:": async (ctx, args) => {
+      const index = numericArg(args);
+      if (index === null) return;
+      return tokenDetailScreen(ctx, index);
+    },
+
+    /**
+     * Hands a looked-up token to the trade wizard.
+     *
+     * The token becomes the *output* and the chain's stable the input, because
+     * "trade this" from a token page overwhelmingly means buying it. The chain
+     * comes from the token, not from whatever the session happened to be on —
+     * otherwise picking a Base token while browsing Stacks would build a trade
+     * that cannot route.
+     */
+    "token_trade:": async (ctx, args) => {
+      const index = numericArg(args);
+      if (index === null) return;
+
+      const ref = tokenRefAt(ctx, index);
+      if (!ref) {
+        await ctx.reply("❌ That list has expired. Send /token again.");
+        return;
+      }
+
+      const descriptor = ChainAdapterRegistry.getInstance().find(ref.chainId);
+      if (!descriptor) {
+        await ctx.reply(`❌ ${ref.chainId} is not enabled on this deployment.`);
+        return;
+      }
+
+      ctx.session.activeChainId = ref.chainId;
+      ctx.session.tradeTokenIn = descriptor.stableSymbol;
+      ctx.session.tradeTokenOut = ref.contractId;
+      delete ctx.session.tradeAmount;
+      delete ctx.session.tradeQuote;
+
+      return tradeScreen(ctx, "pick_wallet");
+    },
+
     "trade_wallet_select:": async (ctx, args) => {
       const walletId = numericArg(args);
       if (walletId === null) return tradeScreen(ctx, "pick_wallet");

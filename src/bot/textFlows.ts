@@ -11,9 +11,10 @@ import { limitCreateScreen } from "./screens/ordersScreen.js";
 import { walletsScreen } from "./screens/walletsScreen.js";
 import { promptStrategyField } from "./screens/agentsScreen.js";
 import { importWalletKey, saveImportedWallet } from "./callbacks/wallet.js";
-import { activeChain, activeChainTokens } from "./chainContext.js";
+import { activeChain } from "./chainContext.js";
 import { handleNLCommand } from "./nl.js";
 import type { BotContext } from "../types/bot.js";
+import { resolveTokenQuery, pickUnambiguous } from "../services/tokenResolver.js";
 
 /**
  * The `waitingFor` state machine.
@@ -23,6 +24,59 @@ import type { BotContext } from "../types/bot.js";
  * it shared a 1,382-line file with command registration, callback dispatch and
  * the natural-language handler.
  */
+/**
+ * What a user typed, turned into something the trade wizard can carry.
+ *
+ * This replaces an exact-match check against the active chain's DEX provider
+ * list. That check rejected two things it shouldn't have: contract addresses
+ * (an address is never equal to a symbol) and every token the indexer had
+ * discovered but no provider hardcodes — which was the entire long tail the
+ * indexer exists to surface.
+ *
+ * Returns the string to store: a symbol when one is known, otherwise the
+ * contract id. Providers resolve either, and an address carries no ambiguity
+ * about which token was meant.
+ */
+async function resolveTypedToken(
+  ctx: BotContext,
+  text: string
+): Promise<{ token: string } | { error: string }> {
+  const chain = await activeChain(ctx);
+  const matches = await resolveTokenQuery(text, chain.chainId);
+
+  if (matches.length === 0) {
+    return {
+      error:
+        `❌ *${escapeMd(text)}* isn't a token we can find on ${escapeMd(chain.displayName)}.\n\n` +
+        `Try its contract address, or \`/token ${escapeMd(text)}\` to search every chain.`,
+    };
+  }
+
+  const chosen = pickUnambiguous(matches);
+  if (!chosen) {
+    // Only reachable when the same symbol resolves on several chains, which
+    // the chain scope above should already have prevented — so this is a
+    // guard, not a flow.
+    return { error: `❌ *${escapeMd(text)}* is ambiguous here. Use \`/token ${escapeMd(text)}\` to pick one.` };
+  }
+
+  // An unlisted contract is exactly where a token with a spoofed symbol lands.
+  // The wizard's confirm screen shows the route and price impact, so the trade
+  // is still inspectable, but the warning belongs at the moment of typing.
+  if (chosen.source === "address" || chosen.source === "indexed") {
+    await ctx.reply(
+      `⚠️ *${escapeMd(chosen.symbol)}* is not on a curated list — it was ` +
+        (chosen.source === "address" ? "not recognised at all" : "seen trading on-chain") +
+        `.\nContract: \`${escapeMd(chosen.contractId)}\`\nCheck it before confirming.`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  // Symbols are what the provider lists route by; an address is used only when
+  // there is no symbol to prefer.
+  return { token: chosen.source === "provider" ? chosen.symbol : chosen.contractId };
+}
+
 export async function handleText(ctx: BotContext): Promise<unknown> {
     const tid = BigInt(ctx.from?.id ?? 0);
     if (!tid) return;
@@ -179,32 +233,17 @@ export async function handleText(ctx: BotContext): Promise<unknown> {
     }
 
     if (wf === "trade_token_in") {
-      const symbol = text.toUpperCase();
-      // Scoped to the active chain: unscoped, a Base token validates fine for a
-      // Stacks wallet and then fails at quote time with an opaque "no route".
-      const tokens = await activeChainTokens(ctx);
-      const chain = await activeChain(ctx);
-      const found = tokens.some((t) => t.symbol.toUpperCase() === symbol);
-      const isChainAsset =
-        symbol === chain.nativeSymbol.toUpperCase() || symbol === chain.stableSymbol.toUpperCase();
-      if (!found && !isChainAsset) {
-        return ctx.reply(`❌ Token *${escapeMd(symbol)}* is not recognized by any DEX provider. Please try another symbol:`, { parse_mode: "Markdown" });
-      }
-      ctx.session.tradeTokenIn = symbol;
+      const resolved = await resolveTypedToken(ctx, text);
+      if ("error" in resolved) return ctx.reply(resolved.error, { parse_mode: "Markdown" });
+      ctx.session.tradeTokenIn = resolved.token;
       ctx.session.waitingFor = null;
       return tradeScreen(ctx, "pick_token_out");
     }
 
     if (wf === "trade_token_out") {
-      const symbol = text.toUpperCase();
-      const tokens = await activeChainTokens(ctx);
-      const chain = await activeChain(ctx);
-      const found = tokens.some((t) => t.symbol.toUpperCase() === symbol);
-      const isChainAsset =
-        symbol === chain.nativeSymbol.toUpperCase() || symbol === chain.stableSymbol.toUpperCase();
-      if (!found && !isChainAsset) {
-        return ctx.reply(`❌ Token *${escapeMd(symbol)}* is not recognized by any DEX provider. Please try another symbol:`, { parse_mode: "Markdown" });
-      }
+      const resolved = await resolveTypedToken(ctx, text);
+      if ("error" in resolved) return ctx.reply(resolved.error, { parse_mode: "Markdown" });
+      const symbol = resolved.token;
       if (symbol === ctx.session.tradeTokenIn) {
         return ctx.reply("❌ Destination token cannot be the same as the source token. Try again:");
       }
