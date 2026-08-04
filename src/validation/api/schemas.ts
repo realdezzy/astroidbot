@@ -106,3 +106,16 @@ export type CreateSocialAccountInput = z.infer<typeof createSocialAccountSchema>
 export type UpdateSocialAccountInput = z.infer<typeof updateSocialAccountSchema>;
 export type ConfirmSocialCommandInput = z.infer<typeof confirmSocialCommandSchema>;
 
+
+/**
+ * The chain is validated against the registry in the controller rather than
+ * enumerated here: which chains exist is a deployment decision
+ * (`ENABLED_CHAINS`), and a hardcoded list would reject a newly-enabled chain
+ * with a validation error that mentions nothing about configuration.
+ */
+export const updateGasSponsorshipSchema = z.object({
+  chainId: z.string().min(1).max(64),
+  enabled: z.boolean(),
+});
+
+export type UpdateGasSponsorshipInput = z.infer<typeof updateGasSponsorshipSchema>;

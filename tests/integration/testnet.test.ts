@@ -72,11 +72,12 @@ describe("TransactionService Testnet Integration Test", () => {
     ConfigManager.load();
   });
 
-  it("should connect, estimate fees, sign, broadcast, and confirm a transaction to public Stacks Testnet", async () => {
-    if (!testnetPrivateKey || !testnetAddress) {
-      console.warn("TESTNET_PRIVATE_KEY or TESTNET_ADDRESS not set in env. Skipping Stacks Testnet integration test.");
-      return;
-    }
+  // Skipped *visibly* when the credentials are absent. It used to `return`
+  // early, which reported as a pass — so a suite that had never run once
+  // still contributed to the green count.
+  const withCredentials = testnetPrivateKey && testnetAddress ? it : it.skip;
+
+  withCredentials("should connect, estimate fees, sign, broadcast, and confirm a transaction to public Stacks Testnet", async () => {
 
     const txService = TransactionService.getInstance();
     

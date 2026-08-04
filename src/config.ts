@@ -60,6 +60,10 @@ const envSchema = z.object({
   // the supported path for an L2 whose router addresses we can't pin from
   // here. See descriptors/defineEvmChain.ts.
   CUSTOM_EVM_CHAINS: z.string().default(""),
+  // Jupiter's keyed tier. Without it the free lite-api host is used, which is
+  // rate-limited per IP — fine for a single deployment, not for one serving
+  // many users' quotes.
+  JUPITER_API_KEY: z.string().optional(),
 
   // ─── Market data ───────────────────────────────────────────────────────────
   // Where token prices, volume and transaction counts come from.

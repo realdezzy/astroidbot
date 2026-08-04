@@ -18,6 +18,7 @@ import {
   PortfolioAnalyticsService,
   type Timeframe,
 } from "../../services/portfolioAnalytics.js";
+import { sponsorshipAvailability } from "../../services/chains/gasSponsorship.js";
 import {
   NotFoundError,
   InternalError,
@@ -796,6 +797,93 @@ export class UserController {
       res.json(result);
     } catch (error) {
       logger.error("Failed to generate analytics", { error });
+      next(new InternalError());
+    }
+  }
+
+
+  /**
+   * Per-chain gas-sponsorship state.
+   *
+   * Reports every enabled chain, including the ones that can't sponsor —
+   * with the reason. Listing only the capable chains would leave a user
+   * wondering why Celo has no toggle, and "it uses EOA custody, which pays its
+   * own gas" is a better answer than an absent row.
+   */
+  static async getGasSponsorship(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const db = DatabaseService.getInstance();
+      const chains = ChainAdapterRegistry.getInstance().list();
+
+      const settings = await db.prisma.tradeSettings.findMany({
+        where: { userId: req.userId! },
+        select: { chain: true, sponsorGas: true },
+      });
+      const chosen = new Map(settings.map((s) => [s.chain, s.sponsorGas]));
+
+      res.json({
+        chains: chains.map((descriptor) => {
+          const { available, reason } = sponsorshipAvailability(descriptor);
+          return {
+            chainId: descriptor.chainId,
+            displayName: descriptor.displayName,
+            nativeSymbol: descriptor.nativeSymbol,
+            available,
+            reason,
+            // Defaults to on, matching how every 4337 wallet behaved before
+            // the toggle existed.
+            enabled: available && (chosen.get(descriptor.chainId) ?? true),
+          };
+        }),
+      });
+    } catch (error) {
+      logger.error("Failed to fetch gas sponsorship settings", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async updateGasSponsorship(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<Response | void> {
+    try {
+      const { chainId, enabled } = req.body as { chainId: string; enabled: boolean };
+
+      const registry = ChainAdapterRegistry.getInstance();
+      const descriptor = registry.find(chainId);
+      if (!descriptor) {
+        return next(new ValidationError(`Chain "${chainId}" is not enabled on this deployment`));
+      }
+
+      // Refused rather than stored-and-ignored. A setting that persists but
+      // does nothing is worse than an error: the user believes they turned
+      // sponsorship on and finds out otherwise when a swap reverts.
+      const { available, reason } = sponsorshipAvailability(descriptor);
+      if (!available) {
+        return next(new ValidationError(reason ?? "This chain cannot sponsor gas"));
+      }
+
+      const db = DatabaseService.getInstance();
+      const existing = await db.prisma.tradeSettings.findFirst({
+        where: { userId: req.userId!, chain: chainId },
+        select: { id: true },
+      });
+
+      if (existing) {
+        await db.prisma.tradeSettings.update({
+          where: { id: existing.id },
+          data: { sponsorGas: enabled },
+        });
+      } else {
+        await db.prisma.tradeSettings.create({
+          data: { userId: req.userId!, chain: chainId, sponsorGas: enabled },
+        });
+      }
+
+      res.json({ ok: true, chainId, enabled });
+    } catch (error) {
+      logger.error("Failed to update gas sponsorship", { error });
       next(new InternalError());
     }
   }

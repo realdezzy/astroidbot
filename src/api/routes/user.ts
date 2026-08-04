@@ -8,6 +8,7 @@ import {
   createSocialAccountSchema,
   updateSocialAccountSchema,
   confirmSocialCommandSchema,
+  updateGasSponsorshipSchema,
 } from "../../validation/api/schemas.js";
 import { UserController } from "../controllers/userController.js";
 
@@ -72,6 +73,14 @@ router.post("/me/wallets/:id/transfer", authenticate, validateBody(walletTransfe
 router.post("/me/trades/execute", authenticate, validateBody(executeTradeSchema), UserController.executeTrade);
 router.get("/me/trades/quote", authenticate, UserController.getTradeQuote);
 router.get("/me/analytics", authenticate, UserController.getAnalytics);
+
+router.get("/me/gas-sponsorship", authenticate, UserController.getGasSponsorship);
+router.put(
+  "/me/gas-sponsorship",
+  authenticate,
+  validateBody(updateGasSponsorshipSchema),
+  UserController.updateGasSponsorship
+);
 
 router.get("/me/social-accounts", authenticate, UserController.getSocialAccounts);
 router.post("/me/social-accounts", authenticate, validateBody(createSocialAccountSchema), UserController.createSocialAccount);

@@ -63,6 +63,11 @@ model TradeSettings {
   rebalanceThreshold Float    @default(2.0)
   useGasless         Boolean  @default(false)
   gaslessFeeToken    String   @default("USDC")
+  // ERC-4337 paymaster sponsorship, per chain (this row is already keyed by
+  // one). Default true preserves the behaviour every 4337 chain had before
+  // the toggle existed. Ignored on chains that can't sponsor at all — EOA
+  // custody has no paymaster to ask.
+  sponsorGas         Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, CheckCircle2, Zap, Share2, Trash2, Plus, ShieldCheck, AtSign, Loader2 } from "lucide-react";
+import { Save, AlertTriangle, CheckCircle2, Zap, Share2, Trash2, Plus, ShieldCheck, AtSign, Loader2, Fuel, Info } from "lucide-react";
 import { apiFetch } from "../lib/api";
 
 interface TradeSettings {
@@ -233,6 +233,9 @@ export function Settings() {
           </div>
         </div>
 
+        {/* Gas sponsorship, per chain */}
+        <GasSponsorshipSection />
+
         {/* Social Trading Accounts Section */}
         <SocialAccountsSection />
       </div>
@@ -298,6 +301,126 @@ interface SocialAccountItem {
   autoExecute: boolean;
   enabled: boolean;
   verifiedAt: string | null;
+}
+
+interface GasSponsorshipChain {
+  chainId: string;
+  displayName: string;
+  nativeSymbol: string;
+  available: boolean;
+  reason: string | null;
+  enabled: boolean;
+}
+
+/**
+ * Per-chain gas sponsorship.
+ *
+ * Every enabled chain is listed, including the ones that cannot sponsor —
+ * with the reason, and the toggle disabled. Hiding them would leave a user
+ * wondering why Celo has no switch; "this chain uses EOA custody, which pays
+ * its own gas" is a better answer than an absent row.
+ */
+function GasSponsorshipSection() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const { data, isLoading } = useQuery<{ chains: GasSponsorshipChain[] }>({
+    queryKey: ["gas-sponsorship"],
+    queryFn: () => apiFetch("/me/gas-sponsorship"),
+  });
+
+  const toggle = useMutation({
+    mutationFn: ({ chainId, enabled }: { chainId: string; enabled: boolean }) =>
+      apiFetch("/me/gas-sponsorship", {
+        method: "PUT",
+        body: JSON.stringify({ chainId, enabled }),
+      }),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["gas-sponsorship"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const chains = data?.chains ?? [];
+  const sponsorable = chains.filter((c) => c.available);
+
+  return (
+    <div className="bg-card-bg border border-card-border rounded-xl p-5 space-y-4">
+      <div className="flex items-start gap-3">
+        <Fuel className="w-5 h-5 text-accent flex-shrink-0 mt-0.5" />
+        <div>
+          <h3 className="text-sm font-medium text-title-text">Gas Sponsorship</h3>
+          <p className="text-sm text-body-text/70 mt-1">
+            When on, transaction fees on a chain are paid by a paymaster rather than
+            from your wallet&apos;s balance. Turn it off to pay your own gas in{" "}
+            {sponsorable.length === 1 ? sponsorable[0]!.nativeSymbol : "the chain's native asset"}.
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-400">
+          {error}
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-body-text/60">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading chains...
+        </div>
+      ) : chains.length === 0 ? (
+        <p className="text-sm text-body-text/60">No chains are enabled on this deployment.</p>
+      ) : (
+        <div className="space-y-2">
+          {chains.map((chain) => (
+            <div
+              key={chain.chainId}
+              className="flex items-center justify-between gap-4 bg-input-bg border border-card-border rounded-lg px-4 py-3"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-title-text truncate">
+                  {chain.displayName}
+                </p>
+                <p className="text-xs text-body-text/60 font-mono truncate">{chain.chainId}</p>
+                {!chain.available && chain.reason && (
+                  <p className="text-xs text-body-text/50 mt-1 flex items-start gap-1">
+                    <Info className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                    {chain.reason}
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={chain.enabled}
+                aria-label={`Gas sponsorship on ${chain.displayName}`}
+                disabled={!chain.available || toggle.isPending}
+                onClick={() =>
+                  toggle.mutate({ chainId: chain.chainId, enabled: !chain.enabled })
+                }
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                  chain.enabled ? "bg-accent" : "bg-card-border"
+                } ${!chain.available ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    chain.enabled ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-body-text/50">
+        Turning sponsorship off on a wallet holding no native asset will make its
+        transactions fail — fund it first.
+      </p>
+    </div>
+  );
 }
 
 function SocialAccountsSection() {

@@ -2,6 +2,7 @@ import { logger } from "../../../utils/logger.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
 import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
+import { ConfigManager } from "../../../config.js";
 import { requireSvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 import type { SwappableToken, TransactionPayload } from "../../../types.js";
 import type { DEXQuote } from "../../../types/dexProvider.js";
@@ -36,6 +37,7 @@ interface JupiterQuoteResponse {
 export class JupiterProvider extends BaseDEXProvider {
   readonly name: string;
   private readonly apiUrl: string;
+  private readonly apiKey: string | undefined;
 
   constructor(descriptor: ChainDescriptor) {
     super(descriptor);
@@ -43,7 +45,15 @@ export class JupiterProvider extends BaseDEXProvider {
     if (!svm.jupiterApiUrl) {
       throw new Error(`Chain ${descriptor.chainId} has no Jupiter API configured`);
     }
-    this.apiUrl = svm.jupiterApiUrl.replace(/\/$/, "");
+    // The keyed host is the same surface as the free one, so a key swaps the
+    // host rather than changing any call. Without it, lite-api rate-limits per
+    // IP — fine for one deployment, not for one quoting for many users.
+    const apiKey = ConfigManager.getInstance().config.JUPITER_API_KEY;
+    this.apiKey = apiKey;
+    this.apiUrl = (apiKey
+      ? svm.jupiterApiUrl.replace("lite-api.jup.ag", "api.jup.ag")
+      : svm.jupiterApiUrl
+    ).replace(/\/$/, "");
     // Per-chain name so the registry can hold providers for mainnet and any
     // other SVM network simultaneously — a shared name would silently drop one.
     this.name = `Jupiter-${descriptor.chainId}`;
@@ -116,11 +126,15 @@ export class JupiterProvider extends BaseDEXProvider {
     });
 
     const response = await this.breaker.execute(() =>
-      fetch(`${this.apiUrl}/quote?${params}`)
+      fetch(`${this.apiUrl}/quote?${params}`, { headers: this.headers() })
     );
 
     if (!response.ok) return null;
     return (await response.json()) as JupiterQuoteResponse;
+  }
+
+  private headers(): Record<string, string> {
+    return this.apiKey ? { "x-api-key": this.apiKey } : {};
   }
 
   /** Converts a decimal amount to the token's smallest unit without float error. */
@@ -235,7 +249,7 @@ export class JupiterProvider extends BaseDEXProvider {
       const response = await this.breaker.execute(() =>
         fetch(`${this.apiUrl}/swap`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...this.headers() },
           body: JSON.stringify({
             quoteResponse: quote,
             userPublicKey: senderAddress,

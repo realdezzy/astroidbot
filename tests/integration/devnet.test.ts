@@ -68,7 +68,7 @@ describe("TransactionService Devnet Integration Test", () => {
     ConfigManager.load();
   });
 
-  it("should connect, estimate fees, sign, broadcast, and confirm a transaction to local devnet", async () => {
+  it("should connect, estimate fees, sign, broadcast, and confirm a transaction to local devnet", async (ctx) => {
     const txService = TransactionService.getInstance();
     
     // We will test using a contract call to the Stacks system pox-4 contract on devnet.
@@ -98,9 +98,10 @@ describe("TransactionService Devnet Integration Test", () => {
       }
       console.log("Local Devnet is online! Proceeding with transaction broadcast...");
     } catch {
-      console.warn("Devnet node is NOT running locally. Skipping live broadcast validation.");
-      // Skip the test gracefully since devnet isn't running in CI/offline test environment
-      return;
+      // `ctx.skip()` rather than an early return: returning reported this as a
+      // pass, so a machine with no devnet showed a green test for a broadcast
+      // that never happened.
+      ctx.skip();
     }
 
     const result = await txService.execute(

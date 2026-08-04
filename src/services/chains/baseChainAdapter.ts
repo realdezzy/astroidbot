@@ -79,7 +79,7 @@ export abstract class BaseChainAdapter implements ChainAdapter {
    */
   protected async withWalletLock<T>(
     walletId: number,
-    fn: (privateKey: string, wallet: { id: number; address: string }) => Promise<T>
+    fn: (privateKey: string, wallet: { id: number; userId: number; address: string }) => Promise<T>
   ): Promise<T | { error: string }> {
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;

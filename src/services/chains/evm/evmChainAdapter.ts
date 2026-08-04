@@ -19,6 +19,7 @@ import { ConfigManager } from "../../../config.js";
 import { logger } from "../../../utils/logger.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseChainAdapter } from "../baseChainAdapter.js";
+import { sponsorGasFor, sponsorshipAvailability } from "../gasSponsorship.js";
 import { ERC20_ABI } from "./abis.js";
 import { requireEvmConfig, type ChainDescriptor, type EvmChainConfig } from "../../../types/chain.js";
 
@@ -161,14 +162,22 @@ export class EvmChainAdapter extends BaseChainAdapter {
     });
   }
 
-  private async smartAccountClientFor(ownerPrivateKeyHex: Hex) {
+  /**
+   * A smart-account client, with or without the paymaster.
+   *
+   * Omitting `paymaster` is the whole of "sponsorship off": the UserOperation
+   * is otherwise identical and the Safe pays for it from its own native
+   * balance. The bundler is still required either way — it is what submits the
+   * operation, sponsored or not.
+   */
+  private async smartAccountClientFor(ownerPrivateKeyHex: Hex, sponsorGas: boolean) {
     const smartAccount = await this.smartAccountFor(ownerPrivateKeyHex);
     const pimlico = this.pimlicoClient();
     return createSmartAccountClient({
       account: smartAccount,
       chain: this.chain(),
       bundlerTransport: http(this.pimlicoUrl()),
-      paymaster: pimlico,
+      ...(sponsorGas ? { paymaster: pimlico } : {}),
       userOperation: {
         estimateFeesPerGas: async () => (await pimlico.getUserOperationGasPrice()).fast,
       },
@@ -202,7 +211,7 @@ export class EvmChainAdapter extends BaseChainAdapter {
     walletId: number;
     senderAddress: string;
   }): Promise<{ txId: string } | { error: string }> {
-    return this.withWalletLock(params.walletId, async (privateKey) => {
+    return this.withWalletLock(params.walletId, async (privateKey, wallet) => {
       // Checked inside the lock, not before it: a dry run should still exercise
       // the same contention path as a real send, so DRY_RUN testing catches
       // lock bugs rather than bypassing them.
@@ -213,7 +222,15 @@ export class EvmChainAdapter extends BaseChainAdapter {
         return this.sendAsEoa(privateKey as Hex, params.calls, params.senderAddress);
       }
 
-      const client = await this.smartAccountClientFor(privateKey as Hex);
+      // Resolved here rather than passed in by callers. There are five
+      // trade-execution entrypoints and a per-call parameter would be a
+      // per-call opportunity to forget one — the same reasoning that put
+      // RiskManager behind a single dispatch point.
+      const sponsorGas =
+        sponsorshipAvailability(this.descriptor).available &&
+        (await sponsorGasFor(wallet.userId, this.descriptor.chainId));
+
+      const client = await this.smartAccountClientFor(privateKey as Hex, sponsorGas);
       const txHash = await client.sendTransaction({
         calls: params.calls.map((c) => ({
           to: c.to as Hex,
@@ -227,6 +244,9 @@ export class EvmChainAdapter extends BaseChainAdapter {
         txHash,
         sender: params.senderAddress,
         calls: params.calls.length,
+        // Logged because it changes who pays and therefore why a send can
+        // fail: unsponsored, an empty Safe reverts for want of native asset.
+        sponsored: sponsorGas,
       });
       return { txId: txHash };
     });
