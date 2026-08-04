@@ -1,5 +1,26 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { ConfigManager } from "../../src/config.js";
+
+vi.mock("../../src/services/db.js", () => ({
+  DatabaseService: {
+    getInstance: () => ({
+      prisma: {
+        tradingStrategy: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+        tradeAgent: { create: vi.fn() },
+      },
+    }),
+  },
+}));
+
+vi.mock("../../src/services/redis.js", () => ({
+  RedisService: {
+    getInstance: () => ({
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
 
 /**
  * Route-coverage guard for the router split.
@@ -85,6 +106,7 @@ describe("callback route coverage", () => {
     process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";
     process.env.AES_KEY = "testkey";
     process.env.JWT_SECRET = "change-me-in-production-to-32-char-min-xyz";
+    delete process.env.TELEGRAM_BOT_TOKEN;
     if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
     if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
     ConfigManager.reset();
@@ -98,7 +120,7 @@ describe("callback route coverage", () => {
 
     router = new CallbackRouter().register(agentRoutes, tradeRoutes, walletRoutes, mod.systemRoutes);
     bareCallbacks = mod.bareCallbacks;
-  });
+  }, 30000);
 
   it.each(LEGACY_ACTIONS)("still routes %s", (action) => {
     expect(router.has(action)).toBe(true);

@@ -45,6 +45,23 @@ export const ERC20_ABI = [
     inputs: [],
     outputs: [{ name: "", type: "uint8" }],
   },
+  // symbol/name are read by the indexer when it catalogues a token it has
+  // discovered on-chain. Both are optional in ERC-20 and some tokens return
+  // bytes32 instead of string, so callers must tolerate a failed read.
+  {
+    type: "function",
+    name: "symbol",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "function",
+    name: "name",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
 ] as const;
 
 // Uniswap V3 QuoterV2 — quoteExactInputSingle (view-simulated via staticCall).

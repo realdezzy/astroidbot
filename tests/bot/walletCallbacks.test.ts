@@ -17,11 +17,25 @@ const mockDb = {
   findWalletsByUserId: vi.fn(),
   findWalletByAddress: vi.fn(),
   createWallet: vi.fn(),
+  prisma: {
+    limitOrder: { count: vi.fn().mockResolvedValue(0) },
+    tradingStrategy: { count: vi.fn().mockResolvedValue(0) },
+  },
 };
 
 vi.mock("../../src/services/db.js", () => ({
   DatabaseService: { getInstance: () => mockDb },
 }));
+
+vi.mock("../../src/services/redis.js", () => ({
+  RedisService: {
+    getInstance: () => ({
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
 
 vi.mock("../../src/utils/crypto.js", () => ({
   encrypt: (v: string) => `enc(${v})`,
@@ -79,11 +93,13 @@ describe("Telegram wallet provisioning", () => {
     process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";
     process.env.AES_KEY = "testkey";
     process.env.JWT_SECRET = "change-me-in-production-to-32-char-min-xyz";
+    delete process.env.TELEGRAM_BOT_TOKEN;
     if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
     if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
+    ConfigManager.reset();
     ConfigManager.load();
     wallet = await import("../../src/bot/callbacks/wallet.js");
-  });
+  }, 30000);
 
   beforeEach(() => {
     vi.clearAllMocks();

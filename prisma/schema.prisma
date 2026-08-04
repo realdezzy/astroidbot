@@ -8,25 +8,25 @@ datasource db {
 }
 
 model User {
-  id           Int       @id @default(autoincrement())
-  telegramId   BigInt?   @unique
-  email        String?   @unique
-  passwordHash String?
-  username     String?
+  id            Int      @id @default(autoincrement())
+  telegramId    BigInt?  @unique
+  email         String?  @unique
+  passwordHash  String?
+  username      String?
   emailVerified Boolean  @default(false)
-  referralCode String    @unique @default(uuid())
-  referredBy   Int?
-  referrer     User?     @relation("Referrals", fields: [referredBy], references: [id])
-  referees     User[]    @relation("Referrals")
-  points       Int       @default(0)
-  isActive     Boolean   @default(true)
-  isAdmin      Boolean   @default(false)
-  createdAt    DateTime  @default(now())
+  referralCode  String   @unique @default(uuid())
+  referredBy    Int?
+  referrer      User?    @relation("Referrals", fields: [referredBy], references: [id])
+  referees      User[]   @relation("Referrals")
+  points        Int      @default(0)
+  isActive      Boolean  @default(true)
+  isAdmin       Boolean  @default(false)
+  createdAt     DateTime @default(now())
 
-  wallets       Wallet[]
-  tradeSettings TradeSettings[]
-  trades        Trade[]
-  perpPositions PerpPosition[]
+  wallets        Wallet[]
+  tradeSettings  TradeSettings[]
+  trades         Trade[]
+  perpPositions  PerpPosition[]
   socialAccounts SocialAccount[]
 }
 
@@ -51,7 +51,6 @@ model Wallet {
   @@index([userId, chain])
 }
 
-
 model TradeSettings {
   id                 Int      @id @default(autoincrement())
   userId             Int
@@ -69,42 +68,42 @@ model TradeSettings {
 }
 
 model Trade {
-  id           Int       @id @default(autoincrement())
-  walletId     Int
-  wallet       Wallet    @relation(fields: [walletId], references: [id])
-  userId       Int
-  user         User      @relation(fields: [userId], references: [id])
-  direction    String
-  tokenIn      String
-  tokenOut     String
-  amountIn     Float
-  amountOut    Float
-  feeAmount    Float     @default(0)
-  feeBps       Int       @default(30)
-  txId         String?
-  status       String    @default("PENDING")
-  errorMessage String?
+  id               Int       @id @default(autoincrement())
+  walletId         Int
+  wallet           Wallet    @relation(fields: [walletId], references: [id])
+  userId           Int
+  user             User      @relation(fields: [userId], references: [id])
+  direction        String
+  tokenIn          String
+  tokenOut         String
+  amountIn         Float
+  amountOut        Float
+  feeAmount        Float     @default(0)
+  feeBps           Int       @default(30)
+  txId             String?
+  status           String    @default("PENDING")
+  errorMessage     String?
   isGasless        Boolean   @default(false)
   relayerFeeAmount Float?
   relayerFeeToken  String?
   amountInUsd      Float?
   amountOutUsd     Float?
-  createdAt    DateTime  @default(now())
-  confirmedAt  DateTime?
+  createdAt        DateTime  @default(now())
+  confirmedAt      DateTime?
 
   @@index([userId, status, createdAt])
 }
 
 model MarketMakingGrid {
-  id         Int      @id @default(autoincrement())
-  userId     Int
-  walletId   Int
-  tokenPair  String
-  midPrice   Float
-  gridLevels Int      @default(5)
-  spreadBps  Int
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  walletId    Int
+  tokenPair   String
+  midPrice    Float
+  gridLevels  Int      @default(5)
+  spreadBps   Int
   lastUpdated DateTime @updatedAt
-  createdAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   @@unique([walletId, tokenPair])
 }
@@ -149,21 +148,21 @@ model EmailToken {
 }
 
 model LimitOrder {
-  id          Int       @id @default(autoincrement())
-  userId      Int
-  walletId    Int
-  tokenIn     String
-  tokenOut    String
-  direction   String
-  targetPrice Float
-  amountIn    Float
-  status      String    @default("ACTIVE")
-  forceAfter  DateTime?
-  expiresAt   DateTime?
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  walletId     Int
+  tokenIn      String
+  tokenOut     String
+  direction    String
+  targetPrice  Float
+  amountIn     Float
+  status       String    @default("ACTIVE")
+  forceAfter   DateTime?
+  expiresAt    DateTime?
   failureCount Int       @default(0)
-  createdAt   DateTime  @default(now())
-  filledAt    DateTime?
-  txId        String?
+  createdAt    DateTime  @default(now())
+  filledAt     DateTime?
+  txId         String?
 
   @@index([userId, walletId])
   @@index([status])
@@ -181,34 +180,34 @@ model BlockedToken {
 }
 
 model TradingStrategy {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  agentId   Int?
-  type      String
-  config    Json
-  state     Json     @default("{}")
-  isActive  Boolean  @default(true)
-  failureCount Int    @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  agentId      Int?
+  type         String
+  config       Json
+  state        Json     @default("{}")
+  isActive     Boolean  @default(true)
+  failureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
   @@index([agentId])
 }
 
 model TradeAgent {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  name      String
-  context   String    @default("custom")
-  aiMode    String    @default("off")
-  config    Json
-  state     Json      @default("{}")
-  model     String    @default("deepseek-v4-pro")
-  isActive  Boolean   @default(true)
-  failureCount Int     @default(0)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  name         String
+  context      String   @default("custom")
+  aiMode       String   @default("off")
+  config       Json
+  state        Json     @default("{}")
+  model        String   @default("deepseek-v4-pro")
+  isActive     Boolean  @default(true)
+  failureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
 }
@@ -219,15 +218,15 @@ model PerpPosition {
   user             User     @relation(fields: [userId], references: [id])
   walletId         Int
   wallet           Wallet   @relation(fields: [walletId], references: [id])
-  market           String   
-  direction        String   // "LONG" | "SHORT"
-  size             Float    
-  leverage         Float    
+  market           String
+  direction        String // "LONG" | "SHORT"
+  size             Float
+  leverage         Float
   entryPrice       Float
   liquidationPrice Float
-  margin           Float    
-  status           String   // "OPEN" | "CLOSED" | "LIQUIDATED"
-  txId             String?  
+  margin           Float
+  status           String // "OPEN" | "CLOSED" | "LIQUIDATED"
+  txId             String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -260,7 +259,7 @@ model Notification {
   userId    Int
   title     String
   message   String
-  type      String   // "INFO" | "WARNING" | "ERROR" | "SUCCESS"
+  type      String // "INFO" | "WARNING" | "ERROR" | "SUCCESS"
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 
@@ -274,7 +273,7 @@ model Candle {
   // different prices, and one would silently overwrite the other's candles.
   chainId   String   @default("stacks:mainnet")
   token     String
-  timeframe String   // "1m", "5m", "15m", "1h", "4h", "1d"
+  timeframe String // "1m", "5m", "15m", "1h", "4h", "1d"
   timestamp DateTime
   open      Float
   high      Float
@@ -293,16 +292,23 @@ model Candle {
 model Token {
   id             Int       @id @default(autoincrement())
   chainId        String
-  contractId     String    // address, principal, or mint depending on the chain
+  contractId     String // address, principal, or mint depending on the chain
   symbol         String
   name           String
   decimals       Int
   logoUrl        String?
+  dexId          String?
   priceUsd       Float?
+  priceChange5m  Float?
+  priceChange1h  Float?
+  priceChange6h  Float?
   priceChange24h Float?
   volume24h      Float?
   liquidityUsd   Float?
   marketCapUsd   Float?
+  txnsBuys24h    Int?
+  txnsSells24h   Int?
+  pairCreatedAt  DateTime?
   isVerified     Boolean   @default(false)
   lastSyncedAt   DateTime?
   createdAt      DateTime  @default(now())
@@ -311,6 +317,98 @@ model Token {
   @@unique([chainId, contractId])
   @@index([chainId, volume24h])
   @@index([symbol])
+}
+
+// ─── Internal market-data indexer ────────────────────────────────────────────
+// Everything below backs MARKET_DATA_PROVIDER="internal": our own swap-event
+// ingestion, so production doesn't depend on a third-party feed. DexScreener
+// stays available as a development provider for exercising the same interface.
+
+// A liquidity pool we ingest swaps from. Discovered from the DEX factory's
+// pool-creation events, never hand-listed — a chain's interesting pools are
+// mostly ones that didn't exist when the code shipped.
+model IndexedPool {
+  id            Int       @id @default(autoincrement())
+  chainId       String
+  dexId         String // "uniswap-v3", "jupiter", "alex", …
+  poolAddress   String
+  // Contract ids, ordered as the pool itself orders them. Kept denormalized
+  // rather than joined to Token: a pool is discovered before either side is
+  // necessarily in the catalogue, and the indexer must not block on that.
+  token0        String
+  token1        String
+  decimals0     Int
+  decimals1     Int
+  // Which side this pool is *about*. The quote side is the wrapped native or a
+  // stable — the leg we can price — and the base is the token traded against
+  // it. Stored rather than re-derived because the rollup must credit a pool's
+  // price to exactly one token: crediting both made WETH inherit the inverse
+  // of every memecoin it was paired with and report +469% in an hour.
+  baseToken     String?
+  quoteToken    String?
+  feeTier       Int?
+  // Block the pool was created in. Doubles as the backfill floor — there are
+  // no swaps before it, so a fresh pool never triggers a full-chain rescan.
+  createdBlock  BigInt?
+  pairCreatedAt DateTime?
+
+  // Latest observed state, refreshed by the rollup. Denormalized so the
+  // discovery query never has to aggregate candles at read time.
+  liquidityUsd Float?
+  lastSwapAt   DateTime?
+  lastPrice0   Float? // token0 priced in token1, from the last swap's sqrtPriceX96
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  candles PoolCandle[]
+
+  @@unique([chainId, poolAddress])
+  @@index([chainId, dexId])
+  // Rollups walk pools by the token they price.
+  @@index([chainId, baseToken])
+  @@index([chainId, token0])
+  @@index([chainId, token1])
+}
+
+// Five-minute OHLCV buckets — the aggregation primitive every window is
+// derived from. Raw swaps are deliberately *not* stored: a busy chain produces
+// millions a day, and no question the UI asks needs finer resolution than the
+// 5M column it renders. 288 rows/pool/day compacts ~4 orders of magnitude.
+model PoolCandle {
+  id          BigInt      @id @default(autoincrement())
+  poolId      Int
+  pool        IndexedPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  // Bucket start, floored to a 5-minute boundary in UTC.
+  bucketStart DateTime
+
+  open  Float
+  high  Float
+  low   Float
+  close Float
+
+  volumeUsd Float @default(0)
+  buys      Int   @default(0)
+  sells     Int   @default(0)
+
+  @@unique([poolId, bucketStart])
+  // Window rollups scan by time first, then narrow to pools.
+  @@index([bucketStart])
+  @@index([poolId, bucketStart])
+}
+
+// Per-chain ingestion cursor. One row per chain; the indexer resumes from
+// lastBlock every tick, so a restart costs one block range rather than a
+// rescan from genesis.
+model IndexerCursor {
+  chainId       String   @id
+  // Last block whose logs are fully ingested. Held `confirmations` behind the
+  // head so a reorg can't strand us ahead of canonical history.
+  lastBlock     BigInt
+  // Separate cursor: pool discovery scans the factory, swap ingestion scans
+  // pools, and they advance at different rates (discovery can lag safely).
+  lastPoolBlock BigInt?
+  updatedAt     DateTime @updatedAt
 }
 
 model PoolStatsHistory {
@@ -332,24 +430,24 @@ model PoolStatsHistory {
 // re-registrable, so trusting one would let anyone who acquires an abandoned
 // @name move another user's funds.
 model SocialAccount {
-  id             Int       @id @default(autoincrement())
-  userId         Int
-  user           User      @relation(fields: [userId], references: [id])
-  platform       String    // "x" | "farcaster"
-  platformUserId String    // immutable numeric/fid identifier
-  handle         String    // display only — never used for authorization
-  verifiedAt     DateTime?
+  id               Int       @id @default(autoincrement())
+  userId           Int
+  user             User      @relation(fields: [userId], references: [id])
+  platform         String // "x" | "farcaster"
+  platformUserId   String // immutable numeric/fid identifier
+  handle           String // display only — never used for authorization
+  verifiedAt       DateTime?
   // Caps enforced before execution and independently of RiskManager, so a
   // compromised social account cannot drain an account even if it passes
   // every trading-risk check.
-  perTradeLimitUsd Float   @default(50)
-  dailyLimitUsd    Float   @default(200)
+  perTradeLimitUsd Float     @default(50)
+  dailyLimitUsd    Float     @default(200)
   // Confirm-first by default: a reply with a signed link the user must open.
   // Auto-execute is strictly opt-in.
-  autoExecute    Boolean   @default(false)
-  enabled        Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  autoExecute      Boolean   @default(false)
+  enabled          Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   commands SocialCommand[]
 
@@ -363,20 +461,20 @@ model SocialAccount {
 // redeliver, webhooks retry, and a restart can replay a backlog. Without it
 // the same tweet could execute a trade more than once.
 model SocialCommand {
-  id              Int       @id @default(autoincrement())
-  socialAccountId Int?
-  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id])
-  platform        String
-  postId          String
-  authorId        String
-  rawText         String
-  parsedIntent    String?   // JSON of the validated intent, or null if unparseable
-  status          String    @default("RECEIVED") // RECEIVED|REJECTED|AWAITING_CONFIRMATION|EXECUTED|FAILED
-  rejectionReason String?
-  tradeId         Int?
-  confirmToken    String?   @unique
+  id               Int            @id @default(autoincrement())
+  socialAccountId  Int?
+  socialAccount    SocialAccount? @relation(fields: [socialAccountId], references: [id])
+  platform         String
+  postId           String
+  authorId         String
+  rawText          String
+  parsedIntent     String? // JSON of the validated intent, or null if unparseable
+  status           String         @default("RECEIVED") // RECEIVED|REJECTED|AWAITING_CONFIRMATION|EXECUTED|FAILED
+  rejectionReason  String?
+  tradeId          Int?
+  confirmToken     String?        @unique
   confirmExpiresAt DateTime?
-  createdAt       DateTime  @default(now())
+  createdAt        DateTime       @default(now())
 
   @@unique([platform, postId])
   @@index([socialAccountId, createdAt])

@@ -26,7 +26,7 @@ const envSchema = z.object({
   DUST_THRESHOLD_USD: z.coerce.number().positive().default(0.5),
   TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_BOT_USERNAME: z.string().default(""),
-  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
+  TELEGRAM_WEBHOOK_URL: z.preprocess((val) => (val === "" ? undefined : val), z.string().url().optional()),
   TELEGRAM_ADMIN_IDS: z.string().default(""),
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(14).default(12),
   SMTP_HOST: z.string().default(""),
@@ -57,9 +57,54 @@ const envSchema = z.object({
   // startup failure, never a silent skip.
   ENABLED_CHAINS: z.string().default("stacks:mainnet"),
   // JSON array of EvmChainSpec for networks not in the built-in catalogue —
-  // the supported path for chains like ARC or Robinhood Chain whose router
-  // deployments we can't pin from here. See descriptors/defineEvmChain.ts.
+  // the supported path for an L2 whose router addresses we can't pin from
+  // here. See descriptors/defineEvmChain.ts.
   CUSTOM_EVM_CHAINS: z.string().default(""),
+
+  // ─── Market data ───────────────────────────────────────────────────────────
+  // Where token prices, volume and transaction counts come from.
+  //   internal    — our own swap index. Production.
+  //   dexscreener — third-party API. Development only; it puts someone else's
+  //                 rate limit in our request path.
+  //   auto        — internal, falling back per chain while an index warms up.
+  MARKET_DATA_PROVIDER: z.enum(["internal", "dexscreener", "auto"]).default("internal"),
+
+  // The indexer is the heaviest RPC consumer in the process, so it can be
+  // turned off wholesale — e.g. on a worker that only executes trades.
+  // Enum-transformed for the same reason as every other flag here.
+  INDEXER_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("true"),
+  // Blocks to stay behind the head. The cursor must never enter a range that
+  // can still be reorged out, or ingested volume becomes unattributable.
+  INDEXER_CONFIRMATIONS: z.coerce.number().int().min(0).default(12),
+  // Blocks per eth_getLogs call. Most providers cap the range; 2000 is a
+  // widely-accepted ceiling.
+  INDEXER_BLOCK_CHUNK_SIZE: z.coerce.number().int().positive().default(2_000),
+  // Ceiling per tick, so a chain that has fallen behind catches up across
+  // several cycles instead of monopolising one.
+  INDEXER_MAX_BLOCKS_PER_RUN: z.coerce.number().int().positive().default(20_000),
+  // How far back a never-indexed chain starts. Deliberately not a full
+  // backfill: discovery pages want what is trading now.
+  INDEXER_INITIAL_LOOKBACK_BLOCKS: z.coerce.number().int().positive().default(50_000),
+  // Pools tracked per chain, most-recently-active first.
+  INDEXER_MAX_POOLS_PER_CHAIN: z.coerce.number().int().positive().default(300),
+  // Addresses per log filter; providers reject very large arrays.
+  INDEXER_MAX_ADDRESSES_PER_FILTER: z.coerce.number().int().positive().default(100),
+  // Times a failing log range may be halved before the indexer gives up on it.
+  // Providers cap by *result count*, not block range, so no fixed chunk size is
+  // safe and subdivision is the only reliable response.
+  INDEXER_MAX_SPLIT_DEPTH: z.coerce.number().int().min(0).default(12),
+  // Pause before the single retry a transient RPC failure gets. Transient
+  // failures are not retried recursively — that turns one slow endpoint into a
+  // request storm against an endpoint that is already struggling.
+  INDEXER_RETRY_BACKOFF_MS: z.coerce.number().int().min(0).default(1_000),
+  // Below this, a pool's quoted price is whatever the last trader decided, so
+  // activity is still counted but the price is not trusted.
+  INDEXER_MIN_POOL_LIQUIDITY_USD: z.coerce.number().min(0).default(1_000),
+  // Candles older than this are dropped — no window reads them.
+  INDEXER_CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   // Social trading. Off by default and deliberately so: this surface lets a
   // public post move real funds, and it should be a considered decision to
   // enable rather than something that arrives with an upgrade.
@@ -73,6 +118,11 @@ const envSchema = z.object({
   SOCIAL_BOT_HANDLES: z.string().default(""),
   X_BEARER_TOKEN: z.string().optional(),
   NEYNAR_API_KEY: z.string().optional(),
+  // The bot's own Farcaster account id. Numeric and permanent, unlike a
+  // username — mentions are polled against it.
+  FARCASTER_BOT_FID: z.string().optional(),
+  // Reading mentions needs only an API key; posting a reply needs a signer.
+  NEYNAR_SIGNER_UUID: z.string().optional(),
   VELAR_PERP_CONTRACT_ADDRESS: z.string().default("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE"),
   VELAR_PERP_CONTRACT_NAME: z.string().default("velar-artha-perp"),
 });
