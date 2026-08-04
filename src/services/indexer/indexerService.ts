@@ -4,8 +4,40 @@ import { ConfigManager } from "../../config.js";
 import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
 import { UniswapV3Indexer } from "./evm/uniswapV3Indexer.js";
-import { indexerSettings } from "./settings.js";
+import { StacksIndexer } from "./stacks/stacksIndexer.js";
+import { SolanaIndexer } from "./svm/solanaIndexer.js";
+import { indexerSettings, type IndexerSettings } from "./settings.js";
 import type { ChainIndexer, IndexRunResult } from "./types.js";
+import type { ChainDescriptor } from "../../types/chain.js";
+
+/**
+ * The indexer implementations, tried in order.
+ *
+ * One per *ingestion shape*, not per chain: every Uniswap-V3 fork emits
+ * byte-identical logs, so one implementation serves Ethereum, Base, Celo and
+ * Robinhood. Stacks and Solana are here because their shapes genuinely differ
+ * — a transaction-shaped API with Clarity prints, and per-account signature
+ * paging with balance deltas — not because they are different networks.
+ *
+ * A descriptor matching none of them is un-indexable, which is a normal state.
+ */
+const INDEXERS: {
+  canIndex(descriptor: ChainDescriptor): boolean;
+  create(descriptor: ChainDescriptor, settings: IndexerSettings): ChainIndexer;
+}[] = [
+  {
+    canIndex: (d) => UniswapV3Indexer.canIndex(d),
+    create: (d, s) => new UniswapV3Indexer(d, s),
+  },
+  {
+    canIndex: (d) => StacksIndexer.canIndex(d),
+    create: (d, s) => new StacksIndexer(d, s),
+  },
+  {
+    canIndex: (d) => SolanaIndexer.canIndex(d),
+    create: (d, s) => new SolanaIndexer(d, s),
+  },
+];
 
 /** Redis key for a chain's ingestion lock. */
 const lockKey = (chainId: string): string => `indexer:ingest:${chainId}`;
@@ -53,7 +85,9 @@ export class IndexerService {
     const settings = indexerSettings();
 
     for (const descriptor of ChainAdapterRegistry.getInstance().list()) {
-      if (!UniswapV3Indexer.canIndex(descriptor)) {
+      const build = INDEXERS.find((candidate) => candidate.canIndex(descriptor));
+
+      if (!build) {
         logger.debug("[indexer] chain not indexable, skipping", {
           chainId: descriptor.chainId,
         });
@@ -61,7 +95,7 @@ export class IndexerService {
       }
 
       try {
-        this.indexers.set(descriptor.chainId, new UniswapV3Indexer(descriptor, settings));
+        this.indexers.set(descriptor.chainId, build.create(descriptor, settings));
       } catch (error) {
         logger.warn("[indexer] failed to build indexer", {
           chainId: descriptor.chainId,

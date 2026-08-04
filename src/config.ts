@@ -104,6 +104,11 @@ const envSchema = z.object({
   // How far back a never-indexed chain starts. Deliberately not a full
   // backfill: discovery pages want what is trading now.
   INDEXER_INITIAL_LOOKBACK_BLOCKS: z.coerce.number().int().positive().default(50_000),
+  // Swap-bearing transactions inspected per tick on transaction-shaped chains
+  // (Stacks). The EVM cap is in blocks, which is the wrong unit here: Stacks
+  // ingestion costs one request per swap, so the thing worth bounding is
+  // swaps, not the range they fall in.
+  INDEXER_MAX_TX_PER_RUN: z.coerce.number().int().positive().default(300),
   // Pools tracked per chain, most-recently-active first.
   INDEXER_MAX_POOLS_PER_CHAIN: z.coerce.number().int().positive().default(300),
   // Addresses per log filter; providers reject very large arrays.

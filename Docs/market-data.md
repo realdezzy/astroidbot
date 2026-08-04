@@ -127,6 +127,7 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | `INDEXER_MAX_BLOCKS_PER_RUN` | `20000` | Ceiling per tick, so catch-up can't stall a cycle |
 | `INDEXER_INITIAL_LOOKBACK_BLOCKS` | `50000` | Where a fresh chain starts — not a full backfill |
 | `INDEXER_MAX_POOLS_PER_CHAIN` | `300` | Tracked pools, most-recently-active first |
+| `INDEXER_MAX_TX_PER_RUN` | `300` | Per-tick cap on transaction-shaped chains, where cost scales with swaps rather than blocks |
 | `INDEXER_MAX_ADDRESSES_PER_FILTER` | `100` | Providers reject very large address arrays |
 | `INDEXER_MAX_SPLIT_DEPTH` | `12` | Halvings before a range is abandoned |
 | `INDEXER_RETRY_BACKOFF_MS` | `1000` | Pause before the single transient retry |
@@ -136,6 +137,28 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | `INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN` | `10000` | Backfill's per-tick budget, kept below the forward pass's |
 
 The indexer is by far the heaviest RPC consumer in the process. Point each chain at a paid endpoint via the per-chain override — `RPC_URL_ETHEREUM_MAINNET`, `RPC_URL_BASE_MAINNET`, and so on. Public endpoints rate-limit hard, and Ethereum mainnet in particular is not practical to index through one.
+
+## The three ingestion shapes
+
+One `ChainIndexer` per *shape*, not per chain. Every Uniswap-V3 fork emits byte-identical logs, so one implementation serves four EVM chains; Stacks and Solana are separate because their shapes genuinely differ, not because they are different networks.
+
+| Family | Discovery | Amounts | Cursor |
+|---|---|---|---|
+| EVM | `PoolCreated` from the factory | `Swap` log fields | block number |
+| Stacks | the swap prints themselves | `dx`/`dy` in the print | block height |
+| Solana | Jupiter's `routePlan` ammKeys | pool-vault balance deltas | per-pool signature |
+
+**Stacks** has no factory and no per-pair contract: an AMM holds every pool in one contract and names the pair in each swap `print`, so a pool appears the first time it trades — which is also the first moment it is interesting. The API is transaction-shaped rather than log-shaped, so the walk is "transactions touching this contract, newest first, until the cursor", and cost is proportional to *swaps*, not to blocks. A quiet hour costs one request.
+
+The two protocols share no field names. ALEX prints `(action "swap-x-for-y") (dx …) (dy …)` over a canonical pair; Velar prints `(op "swap") (amt-in …) (amt-out …)` relative to the *swap*, so its amounts have to be assigned to the pair by comparing `token-in` — reading them positionally inverts every sell, and produces a plausible-looking price, which is the worst kind of wrong. That knowledge is code (`printDecoder.ts`); the descriptor only lists which contracts to watch.
+
+**Solana** has no pool factory to enumerate — `getProgramAccounts` over Raydium or Orca returns hundreds of thousands of accounts with no pagination. Pools instead come from the router already in use: a Jupiter quote's `routePlan` names the `ammKey` of every pool it would route through, which scopes discovery to pairs the product can actually trade.
+
+Amounts come from the transaction's own `preTokenBalances`/`postTokenBalances` rather than from a decoder per AMM program. The runtime reports every touched token account's balance before and after, so diffing gives exact amounts for any program — including ones that don't exist yet.
+
+**The deltas must be scoped to accounts the pool owns.** Summed across every account in the transaction, each mint nets to exactly zero: a swap conserves tokens, so whatever the trader loses the pool gains. The first version did that and read nothing from mainnet while its unit tests — written from a trader's-eye view — passed. Filtering on `owner` also credits a pool with only its own leg of a multi-hop route rather than the whole route.
+
+Some AMMs hold vaults under a shared program authority rather than under the pool, and those decode to nothing this way. Discovery probes a pool's recent history once and skips it if unreadable, so an unsupported venue is a pool that was never tracked rather than one that is followed forever while contributing nothing.
 
 ## Which chains are indexed
 
@@ -151,13 +174,19 @@ A chain is indexable when it is EVM-family **and** its `dex` block carries a `fa
 
 Each was read back off its own chain rather than copied from a listing — `QuoterV2.factory()` on that chain returns the address above.
 
-The remaining chains are not indexed and it isn't a misconfiguration: `arc:testnet` has no DEX at all, and `stacks:*` / `solana:*` are different families needing different ingestion.
+Plus `stacks:mainnet` (ALEX and Velar) and `solana:mainnet` (whatever Jupiter routes through).
+
+`arc:testnet` is not indexed and it isn't a misconfiguration — it has no DEX at all. Neither is `stacks:testnet`, whose AMM deployments aren't stable enough to pin, or `solana:devnet`, which has no Jupiter deployment and therefore no pools to discover.
 
 ## Adding a chain to the index
 
-Add `factory` to the chain's `dex` block in its descriptor. That's the whole change — `UniswapV3Indexer` serves every V3-family deployment, because they all emit byte-identical `PoolCreated` and `Swap` logs. A chain without a factory is skipped quietly; being un-indexable is a normal state, not a misconfiguration.
+For an EVM chain: add `factory` to its `dex` block. That is the whole change.
 
-Solana and Stacks need genuinely different ingestion and would each add a `ChainIndexer` implementation. The interface is in `src/services/indexer/types.ts`.
+For a Stacks-like chain: add the AMM contract to `stacks.swapContracts` — and, if it is a protocol not already known, a dialect in `printDecoder.ts`. `canDecodeStacksDex` refuses a contract with no dialect rather than polling it forever for nothing.
+
+For a Solana-like chain: a `jupiterApiUrl` is enough, since pools come from the router.
+
+A chain matching none of the shapes is skipped quietly; being un-indexable is a normal state.
 
 ## Trading a discovered token
 

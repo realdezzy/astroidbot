@@ -18,6 +18,8 @@ export interface IndexerSettings {
   initialLookbackBlocks: number;
   /** Pools tracked per chain, most-recently-active first. */
   maxPools: number;
+  /** Swap-bearing transactions inspected per tick on transaction-shaped chains. */
+  maxTxPerRun: number;
   /** Addresses per log filter; providers reject very large arrays. */
   maxAddressesPerFilter: number;
   /**
@@ -41,6 +43,7 @@ export function indexerSettings(): IndexerSettings {
     maxBlocksPerRun: config.INDEXER_MAX_BLOCKS_PER_RUN,
     initialLookbackBlocks: config.INDEXER_INITIAL_LOOKBACK_BLOCKS,
     maxPools: config.INDEXER_MAX_POOLS_PER_CHAIN,
+    maxTxPerRun: config.INDEXER_MAX_TX_PER_RUN,
     maxAddressesPerFilter: config.INDEXER_MAX_ADDRESSES_PER_FILTER,
     maxSplitDepth: config.INDEXER_MAX_SPLIT_DEPTH,
     retryBackoffMs: config.INDEXER_RETRY_BACKOFF_MS,

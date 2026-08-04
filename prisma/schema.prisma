@@ -427,6 +427,15 @@ model IndexedPool {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Per-pool ingestion cursor, used only by Solana.
+  //
+  // `getSignaturesForAddress` is per account and pages backwards from newest,
+  // taking an `until` signature — there is no "give me this slot range" for an
+  // account. A chain-wide cursor cannot express "pool A is caught up, pool B
+  // is not", which is the normal state when pools are discovered at different
+  // times.
+  lastSignature String?
+
   candles PoolCandle[]
 
   @@unique([chainId, poolAddress])

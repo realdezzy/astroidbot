@@ -92,6 +92,39 @@ export interface SvmChainConfig {
  * that is the test of whether the abstraction is carrying its weight. See
  * Docs/chains.md.
  */
+/**
+ * Per-chain Stacks configuration. Consumed only by the indexer.
+ *
+ * Stacks needs no RPC block here — TransactionService and PortfolioManager
+ * read the API URL from config, as they did before descriptors existed. What
+ * *is* per-chain is which AMM contracts to watch, and there is no factory to
+ * enumerate them from: Stacks DEXs deploy a pool contract per protocol, not
+ * per pair, and emit a `print` naming the pair on every swap. So the pools are
+ * discovered from the swap events themselves and only the protocol contracts
+ * need listing.
+ */
+export interface StacksChainConfig {
+  /** Base URL of the Hiro-compatible API used for event ingestion. */
+  apiUrl: string;
+  /** AMM contracts whose swap prints are ingested. */
+  swapContracts: StacksSwapContract[];
+}
+
+export interface StacksSwapContract {
+  /** Fully-qualified `SP….contract-name`. */
+  contractId: string;
+  /**
+   * Which protocol this is. Selects the print dialect in printDecoder.ts and
+   * is recorded on the pool row.
+   *
+   * Only the contract list lives here. *How* to read a protocol's prints is
+   * code, because the dialects differ in more than field names — ALEX gives a
+   * directional action over a canonical pair, Velar gives explicit in/out
+   * tokens — and no config shape expresses both without becoming a parser.
+   */
+  dexId: string;
+}
+
 export interface ChainDescriptor {
   chainId: ChainId;
   family: ChainFamily;
@@ -121,6 +154,14 @@ export interface ChainDescriptor {
   explorerAddressUrl(address: string): string;
   evm?: EvmChainConfig;
   svm?: SvmChainConfig;
+  stacks?: StacksChainConfig;
+}
+
+export function requireStacksConfig(d: ChainDescriptor): StacksChainConfig {
+  if (d.family !== "stacks" || !d.stacks) {
+    throw new Error(`Chain ${d.chainId} has no Stacks indexer configuration`);
+  }
+  return d.stacks;
 }
 
 /** Narrowing helpers — keep the `!` assertions out of adapter code. */

@@ -457,8 +457,8 @@ Added because §10.4 needed a real answer, not a label. Delivered in `73fcb1d`; 
 Not done, and worth knowing:
 
 - [x] **P8.7b** Chain reachability suite. A chain whose DEX endpoint has been retired registers, lists tokens, and answers "no route" to everything — which is what `solana:mainnet` did until `9a1ec6b`, because Jupiter had shut down `quote-api.jup.ag/v6`. No unit test can catch it; `chainReachability` asks live endpoints.
-- [ ] **P8.8** Stacks and Solana ingestion. Both need genuinely different `ChainIndexer` implementations; today their catalogue rows carry only what the DEX providers report.
-- [ ] **P8.9** Backfill. A newly-indexed chain starts `INDEXER_INITIAL_LOOKBACK_BLOCKS` back and never fills in history before that, so 24h columns are incomplete for the first day of a chain's life.
+- [x] **P8.8** Stacks and Solana ingestion. *Two more `ChainIndexer` implementations: Stacks decodes ALEX and Velar swap prints over a transaction-shaped API; Solana discovers pools from Jupiter's routePlan and derives amounts from pool-vault balance deltas, which is program-agnostic.*
+- [~] **P8.9** Backfill. *Shipped for EVM in `ae53327`: the walk covers `INDEXER_BACKFILL_WINDOW_HOURS` (24h by default), which is what the columns need. Two gaps remain — it does not reconstruct a chain's full history, and Stacks and Solana have no equivalent walk, so their first day is still partial.*
 
 ---
 
@@ -503,6 +503,5 @@ This is 26–34 engineer-days sequentially. P2/P3/P4/P5 parallelise across 2–3
 
 What remains is genuinely new work rather than debt:
 
-- **Stacks and Solana ingestion** (P8.8) — two more `ChainIndexer` implementations against entirely different data sources.
 - **Full history backfill** (P8.9) — the walk covers 24h, which is what the columns need; it does not reconstruct a chain's whole past.
 - **Running the rollout** (P7.6) — `Docs/rollout.md` is the procedure.
