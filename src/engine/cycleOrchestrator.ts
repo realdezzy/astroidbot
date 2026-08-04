@@ -11,6 +11,8 @@ import { executeLimitOrderCycle } from "./limitOrderCycle.js";
 import { StrategyEngine } from "../services/strategyEngine.js";
 import { AgentService } from "../services/agentService.js";
 import { TokenDiscoveryService } from "../services/tokenDiscovery.js";
+import { pollSocialMentions } from "../services/social/socialRegistry.js";
+import { runMarketDataIngestion } from "../services/indexer/ingestionCycle.js";
 
 
 export async function runCycle(): Promise<void> {
@@ -37,6 +39,20 @@ export async function runCycle(): Promise<void> {
     TokenDiscoveryService.getInstance()
       .syncAll()
       .catch((err) => logger.warn("Token discovery sync failed", { error: err }));
+
+    // Social mentions ride the same tick. Fire-and-forget for the same reason
+    // as discovery: an inbound-command failure must never delay or fail a
+    // trading cycle.
+    pollSocialMentions().catch((err) =>
+      logger.warn("Social mention poll failed", { error: err })
+    );
+
+    // Swap-event ingestion and the metric rollup that feeds the discovery
+    // pages. Same tick, same fire-and-forget contract: the indexer talks to
+    // external RPC endpoints and must never be able to stall a trading cycle.
+    runMarketDataIngestion().catch((err) =>
+      logger.warn("Market data ingestion failed", { error: err })
+    );
 
     const tokens = await registry.getSwappableTokens();
     if (tokens.length === 0) {

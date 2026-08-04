@@ -13,6 +13,7 @@ import { resolveChainId } from "../../services/chains/executeSwap.js";
 import { executeSwapPayload } from "../../services/chains/executeSwap.js";
 import { logger } from "../../utils/logger.js";
 import { encrypt } from "../../utils/crypto.js";
+import { QueueManager } from "../../services/queue.js";
 import {
   PortfolioAnalyticsService,
   type Timeframe,
@@ -797,4 +798,223 @@ export class UserController {
       next(new InternalError());
     }
   }
+
+  static async getSocialAccounts(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const db = DatabaseService.getInstance();
+      const accounts = await db.prisma.socialAccount.findMany({
+        where: { userId: req.userId! },
+        orderBy: { createdAt: "asc" },
+      });
+
+      res.json(accounts);
+    } catch (error) {
+      logger.error("Failed to fetch social accounts", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async createSocialAccount(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const db = DatabaseService.getInstance();
+      const { platform, handle, platformUserId, perTradeLimitUsd, dailyLimitUsd, autoExecute } = req.body as {
+        platform: "x" | "farcaster";
+        handle: string;
+        platformUserId: string;
+        perTradeLimitUsd?: number;
+        dailyLimitUsd?: number;
+        autoExecute?: boolean;
+      };
+
+      const existing = await db.prisma.socialAccount.findUnique({
+        where: { platform_platformUserId: { platform, platformUserId } },
+      });
+      if (existing) {
+        return next(new ConflictError(`This ${platform} account is already linked.`));
+      }
+
+      const account = await db.prisma.socialAccount.create({
+        data: {
+          userId: req.userId!,
+          platform,
+          handle,
+          platformUserId,
+          perTradeLimitUsd: perTradeLimitUsd ?? 100,
+          dailyLimitUsd: dailyLimitUsd ?? 500,
+          autoExecute: autoExecute ?? false,
+          verifiedAt: new Date(),
+        },
+      });
+
+      res.status(201).json(account);
+    } catch (error) {
+      logger.error("Failed to create social account", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async updateSocialAccount(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = parseInt(String(req.params.id ?? "0"), 10);
+      if (!id) return next(new ValidationError("Invalid account id"));
+
+      const db = DatabaseService.getInstance();
+      const account = await db.prisma.socialAccount.findUnique({ where: { id } });
+      if (!account) return next(new NotFoundError("Social account"));
+      if (account.userId !== req.userId!) return next(new ForbiddenError());
+
+      const data = req.body as {
+        perTradeLimitUsd?: number;
+        dailyLimitUsd?: number;
+        autoExecute?: boolean;
+        enabled?: boolean;
+      };
+
+      const updated = await db.prisma.socialAccount.update({
+        where: { id },
+        data: {
+          ...(data.perTradeLimitUsd !== undefined && { perTradeLimitUsd: data.perTradeLimitUsd }),
+          ...(data.dailyLimitUsd !== undefined && { dailyLimitUsd: data.dailyLimitUsd }),
+          ...(data.autoExecute !== undefined && { autoExecute: data.autoExecute }),
+          ...(data.enabled !== undefined && { enabled: data.enabled }),
+        },
+      });
+
+      res.json(updated);
+    } catch (error) {
+      logger.error("Failed to update social account", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async deleteSocialAccount(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = parseInt(String(req.params.id ?? "0"), 10);
+      if (!id) return next(new ValidationError("Invalid account id"));
+
+      const db = DatabaseService.getInstance();
+      const account = await db.prisma.socialAccount.findUnique({ where: { id } });
+      if (!account) return next(new NotFoundError("Social account"));
+      if (account.userId !== req.userId!) return next(new ForbiddenError());
+
+      await db.prisma.socialAccount.delete({ where: { id } });
+      res.json({ ok: true });
+    } catch (error) {
+      logger.error("Failed to delete social account", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async getPendingSocialCommand(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const token = String(req.query.token ?? "");
+      if (!token) return next(new ValidationError("Confirmation token is required"));
+
+      const db = DatabaseService.getInstance();
+      const command = await db.prisma.socialCommand.findUnique({
+        where: { confirmToken: token },
+        include: { socialAccount: true },
+      });
+
+      if (!command || command.status !== "AWAITING_CONFIRMATION") {
+        return next(new NotFoundError("Pending trade confirmation not found or already processed"));
+      }
+
+      if (command.confirmExpiresAt && command.confirmExpiresAt < new Date()) {
+        return next(new ValidationError("Confirmation link has expired (5 minute TTL)"));
+      }
+
+      let parsedIntent = null;
+      if (command.parsedIntent) {
+        try {
+          parsedIntent = JSON.parse(command.parsedIntent);
+        } catch {
+          parsedIntent = null;
+        }
+      }
+
+      res.json({
+        ok: true,
+        command: {
+          id: command.id,
+          platform: command.platform,
+          postId: command.postId,
+          authorId: command.authorId,
+          rawText: command.rawText,
+          parsedIntent,
+          confirmExpiresAt: command.confirmExpiresAt,
+          status: command.status,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to fetch pending social command", { error });
+      next(new InternalError());
+    }
+  }
+
+  static async confirmSocialCommand(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const { token } = req.body as { token: string };
+      if (!token) return next(new ValidationError("Token is required"));
+
+      const db = DatabaseService.getInstance();
+      const command = await db.prisma.socialCommand.findUnique({
+        where: { confirmToken: token },
+        include: { socialAccount: true },
+      });
+
+      if (!command || command.status !== "AWAITING_CONFIRMATION") {
+        return next(new NotFoundError("Pending social command not found or already processed"));
+      }
+
+      if (command.confirmExpiresAt && command.confirmExpiresAt < new Date()) {
+        return next(new ValidationError("Confirmation link has expired"));
+      }
+
+      if (!command.socialAccount || command.socialAccount.userId !== req.userId!) {
+        return next(new ForbiddenError("You are not authorized to confirm this trade"));
+      }
+
+      if (!command.parsedIntent) {
+        return next(new ValidationError("Command has no valid parsed intent"));
+      }
+
+      const intent = JSON.parse(command.parsedIntent) as {
+        action: "buy" | "sell";
+        amount: number;
+        denomination: "usd" | "token";
+        token: string;
+        chainHint?: string;
+      };
+
+      const wallets = await db.findWalletsByUserId(req.userId!);
+      if (wallets.length === 0) {
+        return next(new ValidationError("No wallet found to execute trade"));
+      }
+
+      const defaultWallet = await db.findDefaultWalletByUserId(req.userId!) ?? wallets[0]!;
+
+      await QueueManager.getInstance().enqueueTrade({
+        walletId: defaultWallet.id,
+        userId: req.userId!,
+        senderAddress: defaultWallet.address,
+        tokenIn: intent.action === "buy" ? "USDC" : intent.token,
+        tokenOut: intent.action === "buy" ? intent.token : "USDC",
+        amountIn: intent.amount,
+        direction: intent.action === "buy" ? "BUY" : "SELL",
+        reason: `Social command confirmed via web (${command.platform})`,
+      });
+
+      await db.prisma.socialCommand.update({
+        where: { id: command.id },
+        data: { status: "EXECUTED" },
+      });
+
+      res.json({ ok: true, message: "Social trade confirmed and enqueued successfully" });
+    } catch (error) {
+      logger.error("Failed to confirm social command", { error });
+      next(new InternalError());
+    }
+  }
 }
+

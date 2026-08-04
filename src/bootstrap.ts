@@ -10,6 +10,7 @@ import { BitflowDEXService } from "./services/dex/bitflow.js";
 import { VelarDEXService } from "./services/dex/velar.js";
 import { DEXRegistry } from "./services/dex/dexRegistry.js";
 import { registerEnabledChains } from "./services/chains/registerChains.js";
+import { registerSocialProviders } from "./services/social/socialRegistry.js";
 import { TelegramService } from "./services/telegram.js";
 import { createServer } from "./api/server.js";
 import { BotStatus } from "./types.js";
@@ -114,6 +115,11 @@ export async function bootstrap(): Promise<Server> {
   // as before. Misconfiguration throws here rather than surfacing later as a
   // chain that mysteriously isn't enabled.
   registerEnabledChains();
+
+  // Social platforms are registered only when SOCIAL_TRADING_ENABLED is set
+  // *and* credentials exist — a stray API key must not be enough to start
+  // acting on public posts.
+  registerSocialProviders();
 
   const httpServer = createServer();
 
