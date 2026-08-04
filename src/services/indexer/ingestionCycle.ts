@@ -1,6 +1,7 @@
 import { logger } from "../../utils/logger.js";
 import { IndexerService } from "./indexerService.js";
 import { RollupService } from "./rollupService.js";
+import { pruneOldSwaps } from "./swapStore.js";
 
 /**
  * One market-data pass: ingest, then roll up, then occasionally prune.
@@ -33,9 +34,15 @@ export async function runMarketDataIngestion(): Promise<void> {
   }
 
   if (++runCount % PRUNE_EVERY_N_RUNS === 0) {
-    await RollupService.getInstance()
-      .pruneOldCandles()
-      .catch((err) => logger.warn("[marketData] prune failed", { error: err }));
+    await Promise.all([
+      RollupService.getInstance()
+        .pruneOldCandles()
+        .catch((err) => logger.warn("[marketData] candle prune failed", { error: err })),
+      // Raw swaps go sooner than the candles derived from them: they exist so
+      // a bucket can be recomputed, and a bucket nothing will rewrite no
+      // longer needs its inputs kept.
+      pruneOldSwaps().catch((err) => logger.warn("[marketData] swap prune failed", { error: err })),
+    ]);
   }
 }
 

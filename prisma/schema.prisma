@@ -427,6 +427,8 @@ model IndexedPool {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  swaps   IndexedSwap[]
+
   // Per-pool ingestion cursor, used only by Solana.
   //
   // `getSignaturesForAddress` is per account and pages backwards from newest,
@@ -449,6 +451,55 @@ model IndexedPool {
 // Five-minute OHLCV buckets — the aggregation primitive every window is
 // derived from. Raw swaps are deliberately *not* stored: a busy chain produces
 // millions a day, and no question the UI asks needs finer resolution than the
+// One row per swap we ingested, keyed by the swap's own identity on its chain.
+//
+// This table is what makes ingestion idempotent, and its absence is what made
+// the rest of the indexer so defensive. Candle volume used to accumulate
+// additively (`volume = volume + new`), so processing a range twice inflated
+// it permanently and undetectably — and *that* is why there is a cross-process
+// lock, a transaction-wrapped cursor, a rule against stepping over gaps, and a
+// migration that marks pre-existing chains' backfill complete. Every one of
+// those exists to enforce "never process a range twice".
+//
+// With raw swaps stored under a unique key, re-processing inserts nothing and
+// candles are *recomputed* from what is stored rather than added to. Replays
+// become free, and a reorg can be repaired by deleting the affected swaps and
+// recomputing — which was previously impossible, since addition has no inverse.
+//
+// Retention is deliberately shorter than the candles derived from it
+// (INDEXER_SWAP_RETENTION_DAYS): raw rows earn their keep only while a bucket
+// might still be rewritten.
+model IndexedSwap {
+  id     Int         @id @default(autoincrement())
+  poolId Int
+  pool   IndexedPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+
+  // The swap's identity on its own chain, which is what makes the insert
+  // idempotent: `txHash:logIndex` on EVM, `txId:eventIndex` on Stacks, the
+  // signature on Solana.
+  txKey String
+
+  // Ordering within a bucket, for open/close. Block number is the slot on
+  // Solana and the block height on Stacks.
+  blockNumber BigInt
+  logIndex    Int    @default(0)
+
+  bucketStart DateTime
+  // Zero means "we saw this trade but could not price it" — distinct from a
+  // trade at a price of zero, which is why the recompute filters it out of
+  // OHLC rather than letting it drag the low to nothing.
+  priceUsd    Float
+  volumeUsd   Float
+  isBuy       Boolean
+
+  createdAt DateTime @default(now())
+
+  @@unique([poolId, txKey])
+  // The recompute reads exactly this shape: one pool's swaps in one bucket.
+  @@index([poolId, bucketStart])
+  @@index([bucketStart])
+}
+
 // 5M column it renders. 288 rows/pool/day compacts ~4 orders of magnitude.
 model PoolCandle {
   id          BigInt      @id @default(autoincrement())

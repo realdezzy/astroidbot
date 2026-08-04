@@ -124,6 +124,10 @@ const envSchema = z.object({
   // Below this, a pool's quoted price is whatever the last trader decided, so
   // activity is still counted but the price is not trusted.
   INDEXER_MIN_POOL_LIQUIDITY_USD: z.coerce.number().min(0).default(1_000),
+  // Raw swaps older than this are dropped. Shorter than the candle retention
+  // by design: a raw row exists so a bucket can be *recomputed*, and a bucket
+  // old enough to never be rewritten no longer needs its inputs kept.
+  INDEXER_SWAP_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   // Candles older than this are dropped — no window reads them.
   INDEXER_CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   // How much history the backfill walks back to cover, in hours. Defaults to

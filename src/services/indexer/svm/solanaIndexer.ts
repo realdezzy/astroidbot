@@ -1,6 +1,6 @@
 import { DatabaseService } from "../../db.js";
 import { logger } from "../../../utils/logger.js";
-import { CandleAccumulator, buildCandleUpsert } from "../candleStore.js";
+import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { bucketStartOf } from "../types.js";
 import {
   decodeSolanaSwap,
@@ -80,6 +80,44 @@ export class SolanaIndexer implements ChainIndexer {
   private get rpcUrl(): string {
     const key = `RPC_URL_${this.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
     return process.env[key] || this.svm.defaultRpcUrl;
+  }
+
+  /**
+   * Several RPC calls in one HTTP round trip.
+   *
+   * `getTransaction` is per signature, so a pool with fifty new swaps meant
+   * fifty requests — which is how the first version of this indexer would have
+   * exhausted a public endpoint's rate limit within a tick. JSON-RPC batching
+   * keeps the same targeted queries and collapses the round trips.
+   *
+   * Block-based ingestion is the usual alternative and is the wrong trade here:
+   * following a few hundred named pools, `getSignaturesForAddress` asks for
+   * exactly what we want, while scanning blocks would pull every transaction on
+   * Solana and filter client-side.
+   */
+  private async rpcBatch<T>(calls: { method: string; params: unknown[] }[]): Promise<(T | null)[]> {
+    if (calls.length === 0) return [];
+
+    const response = await fetch(this.rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        calls.map((call, id) => ({ jsonrpc: "2.0", id, method: call.method, params: call.params }))
+      ),
+    });
+
+    if (!response.ok) throw new Error(`Solana RPC ${response.status} for batch`);
+
+    const body = (await response.json()) as { id: number; result?: T; error?: unknown }[];
+
+    // Responses may come back in any order, so they are placed by id rather
+    // than assumed to line up with the request array.
+    const out: (T | null)[] = new Array(calls.length).fill(null);
+    for (const entry of Array.isArray(body) ? body : []) {
+      if (entry.error || entry.result === undefined) continue;
+      out[entry.id] = entry.result as T;
+    }
+    return out;
   }
 
   private async rpc<T>(method: string, params: unknown[]): Promise<T> {
@@ -364,13 +402,13 @@ export class SolanaIndexer implements ChainIndexer {
     const db = DatabaseService.getInstance();
     const usd = await this.usdPrices(pools);
 
-    const accumulator = new CandleAccumulator();
+    const rawSwaps: RawSwap[] = [];
     const poolState = new Map<number, { price: number; at: Date; signature: string }>();
     let swapsIngested = 0;
 
     for (const pool of pools) {
       try {
-        const result = await this.ingestPool(pool, usd, accumulator);
+        const result = await this.ingestPool(pool, usd, rawSwaps);
         swapsIngested += result.swaps;
         if (result.newest) {
           poolState.set(pool.id, result.newest);
@@ -384,10 +422,9 @@ export class SolanaIndexer implements ChainIndexer {
       }
     }
 
-    const buckets = accumulator.values();
+    const bucketsWritten = await persistSwaps(rawSwaps);
 
     await db.prisma.$transaction([
-      ...(buckets.length > 0 ? [db.prisma.$executeRaw(buildCandleUpsert(buckets))] : []),
       ...[...poolState.entries()].map(([poolId, state]) =>
         db.prisma.indexedPool.update({
           where: { id: poolId },
@@ -405,13 +442,13 @@ export class SolanaIndexer implements ChainIndexer {
       }),
     ]);
 
-    return { swapsIngested, bucketsWritten: buckets.length };
+    return { swapsIngested, bucketsWritten };
   }
 
   private async ingestPool(
     pool: SolanaPool,
     usd: Map<string, number>,
-    accumulator: CandleAccumulator
+    rawSwaps: RawSwap[]
   ): Promise<{ swaps: number; newest: { price: number; at: Date; signature: string } | null }> {
     const db = DatabaseService.getInstance();
 
@@ -432,18 +469,19 @@ export class SolanaIndexer implements ChainIndexer {
 
     // Newest first from the RPC; applied oldest-first so a bucket's `open` is
     // the first trade in it rather than the last.
-    const ordered = [...signatures].reverse();
+    const ordered = [...signatures].reverse().filter((info) => !info.err);
     let swaps = 0;
     let newest: { price: number; at: Date; signature: string } | null = null;
 
-    for (const info of ordered) {
-      if (info.err) continue;
+    const transactions = await this.rpcBatch<{ meta?: SolanaTransactionMeta; blockTime?: number }>(
+      ordered.map((info) => ({
+        method: "getTransaction",
+        params: [info.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }],
+      }))
+    );
 
-      const tx = await this.rpc<{ meta?: SolanaTransactionMeta; blockTime?: number } | null>(
-        "getTransaction",
-        [info.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]
-      );
-
+    for (const [index, info] of ordered.entries()) {
+      const tx = transactions[index];
       if (!tx?.meta) continue;
 
       const decoded = decodeSolanaSwap(tx.meta, pool.poolAddress, pool.token0, pool.token1);
@@ -461,13 +499,18 @@ export class SolanaIndexer implements ChainIndexer {
       const timestampMs = (info.blockTime ?? tx.blockTime ?? 0) * 1000;
       if (timestampMs <= 0) continue;
 
-      accumulator.add(
-        pool.id,
-        bucketStartOf(timestampMs),
+      rawSwaps.push({
+        poolId: pool.id,
+        // The signature is the swap's identity, so a replayed window inserts
+        // nothing rather than double-counting it.
+        txKey: info.signature,
+        blockNumber: BigInt(info.slot),
+        logIndex: 0,
+        bucketStart: bucketStartOf(timestampMs),
         priceUsd,
         volumeUsd,
-        !decoded.zeroForOne
-      );
+        isBuy: !decoded.zeroForOne,
+      });
       swaps++;
 
       if (priceUsd > 0) {

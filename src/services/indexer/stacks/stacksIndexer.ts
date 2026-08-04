@@ -1,7 +1,7 @@
 import { DatabaseService } from "../../db.js";
 import { ConfigManager } from "../../../config.js";
 import { logger } from "../../../utils/logger.js";
-import { CandleAccumulator, buildCandleUpsert } from "../candleStore.js";
+import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { bucketStartOf } from "../types.js";
 import { decodeStacksSwapPrint, canDecodeStacksDex } from "./printDecoder.js";
 import type { ChainIndexer, IndexRunResult } from "../types.js";
@@ -32,6 +32,13 @@ import { requireStacksConfig } from "../../../types/chain.js";
  * accumulation, and the rule that the write and the cursor move commit
  * together. RollupService then treats these pools exactly like any others.
  */
+
+/**
+ * Transactions per `/extended/v1/tx/multiple` request. The endpoint takes a
+ * repeated query parameter, so this is bounded by URL length rather than by
+ * anything the API documents.
+ */
+const TX_BATCH_SIZE = 50;
 
 interface StacksTx {
   tx_id: string;
@@ -198,6 +205,7 @@ export class StacksIndexer implements ChainIndexer {
     fromBlock: bigint
   ): Promise<DecodedSwapAt[]> {
     const found: DecodedSwapAt[] = [];
+    const pending: StacksTx[] = [];
     const pageSize = 50;
     let offset = 0;
     let inspected = 0;
@@ -226,47 +234,66 @@ export class StacksIndexer implements ChainIndexer {
         inspected++;
         if (tx.tx_status !== "success") continue;
 
-        found.push(...(await this.swapsInTx(tx, contract)));
+        pending.push(tx);
       }
 
       if (reachedCursor || rows.length < pageSize) break;
       offset += pageSize;
     }
 
+    if (pending.length > 0) found.push(...(await this.swapsInTxs(pending, contract)));
+
     return found;
   }
 
   /**
-   * The swap prints inside one transaction.
+   * The swap prints inside a batch of transactions.
    *
-   * A second request per transaction, because the list endpoint returns an
-   * empty `events` array — the detail endpoint is the only place the print
-   * payload appears. That cost is proportional to swaps rather than to blocks,
-   * so a quiet period costs nothing.
+   * The transaction list returns an empty `events` array, so the payloads have
+   * to be fetched separately — but `/extended/v1/tx/multiple` takes many ids at
+   * once, which is the difference between one request per swap and one per
+   * fifty. The first version did the former, and against a busy contract that
+   * is hundreds of round trips a tick against an API that rate-limits hard.
    */
-  private async swapsInTx(tx: StacksTx, contract: StacksSwapContract): Promise<DecodedSwapAt[]> {
-    const detail = await this.fetchJson<{ events?: StacksEvent[] }>(
-      `/extended/v1/tx/${tx.tx_id}?event_limit=100`
-    );
-
+  private async swapsInTxs(
+    txs: StacksTx[],
+    contract: StacksSwapContract
+  ): Promise<DecodedSwapAt[]> {
     const out: DecodedSwapAt[] = [];
 
-    for (const [index, event] of (detail.events ?? []).entries()) {
-      if (event.event_type !== "smart_contract_log") continue;
-      if (event.contract_log?.contract_id !== contract.contractId) continue;
+    for (let i = 0; i < txs.length; i += TX_BATCH_SIZE) {
+      const batch = txs.slice(i, i + TX_BATCH_SIZE);
+      const query = batch.map((tx) => `tx_id=${tx.tx_id}`).join("&");
 
-      const decoded = decodeStacksSwapPrint(event.contract_log?.value?.repr ?? "", contract.dexId);
-      if (!decoded) continue;
+      const detail = await this.fetchJson<
+        Record<string, { found?: boolean; result?: { events?: StacksEvent[] } }>
+      >(`/extended/v1/tx/multiple?${query}&event_limit=100`);
 
-      out.push({
-        ...decoded,
-        dexId: contract.dexId,
-        contractId: contract.contractId,
-        blockHeight: tx.block_height,
-        // Stacks reports seconds; every bucket boundary here is milliseconds.
-        timestampMs: tx.block_time * 1000,
-        eventIndex: index,
-      });
+      for (const tx of batch) {
+        const events = detail[tx.tx_id]?.result?.events ?? [];
+
+        for (const [index, event] of events.entries()) {
+          if (event.event_type !== "smart_contract_log") continue;
+          if (event.contract_log?.contract_id !== contract.contractId) continue;
+
+          const decoded = decodeStacksSwapPrint(
+            event.contract_log?.value?.repr ?? "",
+            contract.dexId
+          );
+          if (!decoded) continue;
+
+          out.push({
+            ...decoded,
+            dexId: contract.dexId,
+            contractId: contract.contractId,
+            txId: tx.tx_id,
+            blockHeight: tx.block_height,
+            // Stacks reports seconds; bucket boundaries are milliseconds.
+            timestampMs: tx.block_time * 1000,
+            eventIndex: index,
+          });
+        }
+      }
     }
 
     return out;
@@ -284,7 +311,7 @@ export class StacksIndexer implements ChainIndexer {
     const { pools, discovered } = await this.resolvePools(swaps);
     const usd = await this.usdPrices(pools, swaps);
 
-    const accumulator = new CandleAccumulator();
+    const rawSwaps: RawSwap[] = [];
     const poolState = new Map<number, { price: number; at: Date }>();
 
     for (const swap of swaps) {
@@ -313,15 +340,25 @@ export class StacksIndexer implements ChainIndexer {
           : 0;
 
       const at = new Date(swap.timestampMs);
-      accumulator.add(pool.id, bucketStartOf(swap.timestampMs), priceUsd, volumeUsd, !swap.zeroForOne);
+      rawSwaps.push({
+        poolId: pool.id,
+        // Identity on chain: the same print re-read produces the same key, so
+        // a replayed range inserts nothing.
+        txKey: `${swap.txId}:${swap.eventIndex}`,
+        blockNumber: BigInt(swap.blockHeight),
+        logIndex: swap.eventIndex,
+        bucketStart: bucketStartOf(swap.timestampMs),
+        priceUsd,
+        volumeUsd,
+        isBuy: !swap.zeroForOne,
+      });
 
       if (priceUsd > 0) poolState.set(pool.id, { price: priceUsd, at });
     }
 
-    const buckets = accumulator.values();
+    const bucketsWritten = await persistSwaps(rawSwaps);
 
     await db.prisma.$transaction([
-      ...(buckets.length > 0 ? [db.prisma.$executeRaw(buildCandleUpsert(buckets))] : []),
       ...[...poolState.entries()].map(([poolId, state]) =>
         db.prisma.indexedPool.update({
           where: { id: poolId },
@@ -337,7 +374,7 @@ export class StacksIndexer implements ChainIndexer {
 
     await this.refreshLiquidity(pools, swaps, usd);
 
-    return { bucketsWritten: buckets.length, poolsDiscovered: discovered };
+    return { bucketsWritten, poolsDiscovered: discovered };
   }
 
   /** `contract#poolKey` — unique per pool and stable across restarts. */
@@ -638,6 +675,7 @@ interface DecodedSwapAt {
   reserve1: bigint | null;
   dexId: string;
   contractId: string;
+  txId: string;
   blockHeight: number;
   timestampMs: number;
   eventIndex: number;

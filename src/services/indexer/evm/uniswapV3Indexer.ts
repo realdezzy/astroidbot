@@ -5,7 +5,7 @@ import { ERC20_ABI } from "../../chains/evm/abis.js";
 import { logger } from "../../../utils/logger.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 import { priceFromSqrtX96, toHuman } from "../priceMath.js";
-import { CandleAccumulator, buildCandleUpsert } from "../candleStore.js";
+import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { BlockTimeOracle } from "../blockTimeOracle.js";
 import { resolveNativeUsd } from "../nativePricing.js";
 import { bucketStartOf, type ChainIndexer, type IndexRunResult, type TrackedPool } from "../types.js";
@@ -459,7 +459,7 @@ export class UniswapV3Indexer implements ChainIndexer {
 
     const byAddress = new Map(pools.map((p) => [p.poolAddress.toLowerCase(), p]));
     const usd = await this.usdPrices(pools);
-    const accumulator = new CandleAccumulator();
+    const rawSwaps: RawSwap[] = [];
     const poolState = new Map<number, { price: number; at: Date }>();
 
     // Primed once for the whole range: a bounded number of samples, rather
@@ -533,13 +533,28 @@ export class UniswapV3Indexer implements ChainIndexer {
 
         const { volumeUsd, isBuy, priceUsd } = this.valueSwap(pool, amount0, amount1, price0In1, usd);
 
-        accumulator.add(pool.id, bucketStartOf(timestamp), priceUsd, volumeUsd, isBuy);
+        rawSwaps.push({
+          poolId: pool.id,
+          // The log's own identity on chain, so re-reading this range inserts
+          // nothing rather than double-counting it.
+          txKey: `${log.transactionHash}:${log.logIndex ?? 0}`,
+          blockNumber: log.blockNumber ?? 0n,
+          logIndex: log.logIndex ?? 0,
+          bucketStart: bucketStartOf(timestamp),
+          priceUsd,
+          volumeUsd,
+          isBuy,
+        });
         poolState.set(pool.id, { price: price0In1, at: new Date(timestamp) });
         swapsIngested++;
       }
     }
 
-    const buckets = accumulator.values();
+    // Swaps are stored and the buckets they touch are recomputed from
+    // storage. The cursor move below no longer has to share a transaction with
+    // this for correctness — a replay is a no-op — but it still commits with
+    // the pool-state writes, which are last-write-wins.
+    const bucketsWritten = await persistSwaps(rawSwaps);
 
     // Commit only as far as we actually read. If a chunk was unreadable the
     // cursor stops at the block before it, so the gap is re-attempted rather
@@ -583,7 +598,6 @@ export class UniswapV3Indexer implements ChainIndexer {
         : [];
 
     await db.prisma.$transaction([
-      ...(buckets.length > 0 ? [db.prisma.$executeRaw(buildCandleUpsert(buckets))] : []),
       ...poolStateWrites,
       db.prisma.indexerCursor.upsert({
         where: { chainId: this.chainId },
@@ -601,7 +615,7 @@ export class UniswapV3Indexer implements ChainIndexer {
       await this.refreshLiquidity([...poolState.keys()], byAddress, usd);
     }
 
-    return { swapsIngested, bucketsWritten: buckets.length };
+    return { swapsIngested, bucketsWritten };
   }
 
   /**

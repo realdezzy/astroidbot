@@ -82,7 +82,13 @@ Discovery also catalogues the traded side of each new pool. Without that the cat
 
 ## Properties worth knowing
 
-**Exactly-once.** Candle writes and the cursor advance commit in one transaction. Volume accumulates additively, so a range applied twice would inflate it — the transaction makes that state unreachable.
+**Idempotent, not exactly-once.** Swaps are stored in `IndexedSwap` under their own on-chain identity (`txHash:logIndex`, `txId:eventIndex`, or the signature), and candles are *recomputed* from them with `SET` rather than added to. The same range applied ten times produces the same numbers as applying it once.
+
+This inverts the original design, in which volume accumulated additively. That one choice was what forced everything else to be defensive: the cross-process lock, the transaction-wrapped cursor, the refusal to step over an unreadable gap, the careful backfill seeding all existed to enforce "never process a range twice". They remain — they still save real work — but none of them is load-bearing for correctness now.
+
+It also makes reorg repair possible for the first time. Deleting the affected swaps and recomputing their buckets restores the truth; addition has no inverse, so previously the only remedy was discarding a pool's candles entirely. `rollbackFrom()` in `swapStore.ts` is that operation.
+
+Raw swaps are pruned on a shorter horizon than the candles derived from them (`INDEXER_SWAP_RETENTION_DAYS`, default 7): a raw row exists so a bucket can be recomputed, and a bucket nothing will rewrite no longer needs its inputs kept.
 
 **Reorg-safe.** Ingestion stops `INDEXER_CONFIRMATIONS` blocks behind the head, so the cursor never advances past history that can still be rewritten.
 
@@ -128,6 +134,7 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | `INDEXER_INITIAL_LOOKBACK_BLOCKS` | `50000` | Where a fresh chain starts — not a full backfill |
 | `INDEXER_MAX_POOLS_PER_CHAIN` | `300` | Tracked pools, most-recently-active first |
 | `INDEXER_MAX_TX_PER_RUN` | `300` | Per-tick cap on transaction-shaped chains, where cost scales with swaps rather than blocks |
+| `INDEXER_SWAP_RETENTION_DAYS` | `7` | Raw swaps kept for recomputation; shorter than candle retention |
 | `INDEXER_MAX_ADDRESSES_PER_FILTER` | `100` | Providers reject very large address arrays |
 | `INDEXER_MAX_SPLIT_DEPTH` | `12` | Halvings before a range is abandoned |
 | `INDEXER_RETRY_BACKOFF_MS` | `1000` | Pause before the single transient retry |
@@ -147,6 +154,10 @@ One `ChainIndexer` per *shape*, not per chain. Every Uniswap-V3 fork emits byte-
 | EVM | `PoolCreated` from the factory | `Swap` log fields | block number |
 | Stacks | the swap prints themselves | `dx`/`dy` in the print | block height |
 | Solana | Jupiter's `routePlan` ammKeys | pool-vault balance deltas | per-pool signature |
+
+Both non-EVM indexers batch their fan-out. Stacks fetches event payloads through `/extended/v1/tx/multiple` (fifty transactions per request rather than one), and Solana batches its `getTransaction` calls into a single JSON-RPC array. Per-request fan-out was the first shape of both, and against a busy contract or a pool with fifty new swaps it is hundreds of round trips a tick — enough to exhaust a public endpoint's rate limit inside one pass.
+
+Solana keeps `getSignaturesForAddress` rather than scanning blocks. Following a few hundred named pools, that asks for exactly what is wanted; block scanning would pull every transaction on Solana and filter client-side.
 
 **Stacks** has no factory and no per-pair contract: an AMM holds every pool in one contract and names the pair in each swap `print`, so a pool appears the first time it trades — which is also the first moment it is interesting. The API is transaction-shaped rather than log-shaped, so the walk is "transactions touching this contract, newest first, until the cursor", and cost is proportional to *swaps*, not to blocks. A quiet hour costs one request.
 
