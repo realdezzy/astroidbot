@@ -741,7 +741,13 @@ export class UserController {
 
   static async getTradeQuote(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { tokenIn, tokenOut, amountIn } = req.query as { tokenIn?: string; tokenOut?: string; amountIn?: string };
+      const { tokenIn, tokenOut, amountIn, walletId, chainId } = req.query as {
+        tokenIn?: string;
+        tokenOut?: string;
+        amountIn?: string;
+        walletId?: string;
+        chainId?: string;
+      };
       if (!tokenIn || !tokenOut || !amountIn) {
         return res.status(400).json({ error: "tokenIn, tokenOut, and amountIn are required" });
       }
@@ -751,16 +757,39 @@ export class UserController {
         return res.status(400).json({ error: "amountIn must be a positive number" });
       }
 
+      // Scoped to one chain, which this endpoint previously wasn't: it asked
+      // every provider on every chain and returned whichever answered. That is
+      // the exact hazard CLAUDE.md calls out — a Base wallet quoted by a Celo
+      // router — and it only looked correct because one chain usually happens
+      // to be the only one that can route a given pair.
+      //
+      // The wallet is the better source than a bare chainId: it is what the
+      // trade will actually execute from, so a quote for a different chain is
+      // a quote for a trade that cannot happen.
+      let scope: string | undefined = chainId;
+
+      if (walletId) {
+        const wallet = await DatabaseService.getInstance().findWalletById(Number(walletId));
+        if (!wallet || wallet.userId !== req.userId!) {
+          return next(new NotFoundError("Wallet"));
+        }
+        scope = walletChainId(wallet);
+      }
+
       const registry = DEXRegistry.getInstance();
-      const quotes = await registry.getAllQuotes(tokenIn, tokenOut, amt);
+      const quotes = await registry.getAllQuotes(tokenIn, tokenOut, amt, scope);
       if (quotes.length === 0) {
-        return res.status(400).json({ error: "No swap route found for this pair on any DEX" });
+        return res.status(400).json({
+          error: scope
+            ? `No swap route found for this pair on ${scope}`
+            : "No swap route found for this pair on any DEX",
+        });
       }
 
       const best = quotes[0]!;
 
       res.json({
-        tokenIn, tokenOut, amountIn: amt,
+        tokenIn, tokenOut, amountIn: amt, chainId: scope ?? null,
         amountOut: best.quote.amountOut,
         priceImpact: best.quote.priceImpact,
         feeBps: best.quote.feeBps,

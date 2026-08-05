@@ -290,9 +290,15 @@ export class UniswapV3Provider extends BaseDEXProvider {
         this.getTokenPrice(tokenOut),
       ]);
       let priceImpact = 0;
-      if (priceIn > 0 && priceOut > 0 && amountOut > 0) {
+      if (priceIn > 0 && priceOut > 0 && amountOut > 0 && amountIn > 0) {
+        // Both prices are "tokenOut per tokenIn". The execution side was
+        // inverted — amountIn/amountOut — which made the ratio to spot
+        // vanishingly small and drove the result to |1 - ~0| = 100% on every
+        // healthy quote. A pair with a real 100% impact is untradeable, so the
+        // number was alarming and constant, which is the worst combination:
+        // users learn to ignore the one field that would warn them.
         const spotPrice = priceIn / priceOut;
-        const executionPrice = amountIn / amountOut;
+        const executionPrice = amountOut / amountIn;
         priceImpact = Math.abs(1 - executionPrice / spotPrice) * 100;
       }
 
