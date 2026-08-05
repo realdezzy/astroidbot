@@ -5,6 +5,7 @@ import { TokenDiscoveryService } from "../../services/tokenDiscovery.js";
 import { CandleService } from "../../services/quant/candleService.js";
 import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
 import { logger } from "../../utils/logger.js";
+import { serialiseToken } from "../controllers/tokenController.js";
 
 const router = Router();
 
@@ -28,6 +29,7 @@ const discoveryLimiter = rateLimit({
 
 router.use(discoveryLimiter);
 
+const VALID_CATEGORIES = new Set(["trending", "gainers", "new", "all"]);
 const VALID_SORTS = new Set(["volume", "change", "liquidity", "symbol"]);
 const VALID_TIMEFRAMES = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
 
@@ -38,15 +40,25 @@ router.get("/tokens/discover", async (req: Request, res: Response) => {
     const result = await TokenDiscoveryService.getInstance().discover({
       chainId: req.query.chainId ? String(req.query.chainId) : undefined,
       query: req.query.q ? String(req.query.q) : undefined,
+      // Trending / Gainers / New. The service has supported these since
+      // discovery shipped; the route was dropping them, so the tabs a
+      // DexScreener-style page is built around could not be wired up.
+      category: VALID_CATEGORIES.has(String(req.query.category ?? ""))
+        ? (String(req.query.category) as "trending")
+        : undefined,
       sort: VALID_SORTS.has(sortParam) ? (sortParam as "volume") : "volume",
       page: req.query.page ? parseInt(String(req.query.page), 10) : 1,
       pageSize: req.query.pageSize ? parseInt(String(req.query.pageSize), 10) : 25,
     });
 
-    // Prices here are derived from DEX quotes, not a market-data provider.
-    // Stated in the payload so a consumer can label them honestly rather than
-    // presenting them as an authoritative mark.
-    res.json({ ...result, priceSource: "dex" });
+    // Serialised through the same function as the detail endpoint. Returning
+    // raw Prisma rows here meant the list and the detail view of the same
+    // token had different field names and different nesting.
+    res.json({
+      ...result,
+      items: result.items.map(serialiseToken),
+      priceSource: "dex",
+    });
   } catch (error) {
     logger.error("Token discovery failed", { error });
     res.status(500).json({ error: "Failed to load tokens" });

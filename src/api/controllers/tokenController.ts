@@ -45,7 +45,15 @@ function explorerUrlFor(chainId: string, contractId: string): string | null {
  * no volume data for and one that genuinely traded nothing render identically,
  * and both sort into the same place.
  */
-function serialiseToken(row: {
+/**
+ * The wire shape for one token row.
+ *
+ * Exported because the discovery *list* endpoint returned raw Prisma rows
+ * while the *detail* endpoint returned this — two different contracts for the
+ * same entity, so a client had to know which one it was talking to. The list
+ * now uses it too.
+ */
+export function serialiseToken(row: {
   chainId: string;
   contractId: string;
   symbol: string;
