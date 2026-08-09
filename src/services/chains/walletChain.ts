@@ -47,6 +47,21 @@ export function walletStableSymbol(wallet: ChainBearing): string {
   return walletDescriptor(wallet).stableSymbol;
 }
 
+/**
+ * Explorer link for a transaction on a named chain, or null if we don't run it.
+ *
+ * Exists so no surface composes one by hand. Four of them did — the trades
+ * table, the strategy detail modal, the agent chat and the perp row — each
+ * hardcoding a Hiro URL, so every trade on any other chain linked to an
+ * explorer that has never heard of it. Returning null rather than a guess lets
+ * a caller render plain text instead of a link that 404s.
+ */
+export function explorerTxUrlFor(chainId: string, txId: string | null): string | null {
+  if (!txId) return null;
+  const descriptor = findDescriptor(chainId);
+  return descriptor ? descriptor.explorerTxUrl(txId) : null;
+}
+
 /** Groups rows by ChainId — used wherever balances or quotes must be fetched per chain. */
 export function groupByChainId<T extends ChainBearing>(rows: T[]): Map<ChainId, T[]> {
   const out = new Map<ChainId, T[]>();

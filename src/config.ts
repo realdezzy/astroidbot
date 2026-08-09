@@ -50,12 +50,35 @@ const envSchema = z.object({
   BASE_NETWORK: z.enum(["mainnet", "sepolia"]).default("sepolia"),
   BASE_RPC_URL: z.string().url().optional(),
   PIMLICO_API_KEY: z.string().optional(),
-  // Comma-separated ChainIds this deployment transacts on, e.g.
-  // "stacks:mainnet,base:mainnet,solana:mainnet". The default keeps existing
-  // deployments byte-for-byte identical: Stacks only. A chain named here that
-  // isn't in the descriptor catalogue (or lacks its required credentials) is a
-  // startup failure, never a silent skip.
-  ENABLED_CHAINS: z.string().default("stacks:mainnet"),
+  // Comma-separated ChainIds this deployment transacts on.
+  //
+  // **Multichain by default.** One chain per execution family — a Clarity
+  // chain, an EVM chain, and an SVM chain — because that is what this product
+  // is, and because a single-chain default made every multichain surface
+  // impossible to see: pickers rendered one option, the aggregation bugs that
+  // only appear with two chains stayed hidden, and "does the wallet flow work
+  // on Solana" could not be answered by running the app.
+  //
+  // Every chain here works with no credentials beyond a database and Redis.
+  // Base prefers ERC-4337 but falls back to EOA custody without
+  // PIMLICO_API_KEY, so this list never blocks a first boot.
+  //
+  // Two EVM chains, not one: Base for the depth, and Robinhood Chain because
+  // it is what this platform is aimed at — an Arbitrum Orbit L2 for tokenized
+  // equities and RWAs, with its own Uniswap V3 deployment and no bundler, so
+  // it runs EOA custody natively. Having two also keeps the case that used to
+  // break honest: a family-keyed registry silently dropped the second EVM
+  // chain, and a default with only one would never show it.
+  //
+  // Deliberately *not* included: Ethereum mainnet, which is fine to trade but
+  // is not practical to index through a public RPC (see Docs/market-data.md),
+  // and the testnets. Add either with one env var.
+  //
+  // A chain named here that isn't in the descriptor catalogue is a startup
+  // failure, never a silent skip.
+  ENABLED_CHAINS: z
+    .string()
+    .default("stacks:mainnet,base:mainnet,robinhood:mainnet,solana:mainnet"),
   // JSON array of EvmChainSpec for networks not in the built-in catalogue —
   // the supported path for an L2 whose router addresses we can't pin from
   // here. See descriptors/defineEvmChain.ts.
@@ -139,6 +162,20 @@ const envSchema = z.object({
   // INDEXER_MAX_BLOCKS_PER_RUN so backfill can be given a smaller share:
   // history is worth having, but never at the cost of falling behind the head.
   INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN: z.coerce.number().int().positive().default(10_000),
+  // Sources a transaction-shaped chain backfills per tick — Stacks contracts,
+  // Solana pools. The EVM budget is in blocks, which is the wrong unit for a
+  // family whose history is walked one account at a time: a chain tracking 300
+  // pools would otherwise triple its tick cost the moment backfill started.
+  INDEXER_MAX_BACKFILL_SOURCES_PER_RUN: z.coerce.number().int().positive().default(10),
+  // Walk *all* of history rather than INDEXER_BACKFILL_WINDOW_HOURS of it.
+  // Off by default: the columns the UI renders stop at 24H, so beyond that
+  // this buys chart depth at a cost measured in RPC calls, and on a chain
+  // millions of blocks deep it is days of walking. Enum-transformed rather
+  // than z.coerce.boolean() for the reason given on SOCIAL_TRADING_ENABLED.
+  INDEXER_BACKFILL_FULL_HISTORY: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("false"),
   // Social trading. Off by default and deliberately so: this surface lets a
   // public post move real funds, and it should be a considered decision to
   // enable rather than something that arrives with an upgrade.

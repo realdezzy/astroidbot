@@ -9,9 +9,16 @@ import { defineEvmChain } from "./defineEvmChain.js";
  * used here. A wrong router on an EVM chain fails closed ("no route") with
  * nothing in the logs, so verifying the wiring is cheaper than debugging it.
  *
- * rUSDC is Robinhood's bridged dollar and it has **18 decimals**, not the 6
- * that USDC carries nearly everywhere else. Assuming 6 here would misprice
- * every quote by a factor of 10^12 while looking perfectly reasonable.
+ * The chain's dollar is **USDG** (Paxos' Global Dollar, 6 decimals) — what you
+ * receive when you bridge USDC in, and what every pool here quotes against.
+ *
+ * This said `rUSDC` for a while, and that was worse than a wrong address
+ * because it was a *real* token: 0x05fB…CBa3 exists, answers symbol() with
+ * "rUSDC", and has 18 decimals — so it verified fine in isolation. It simply
+ * has no pool at any fee tier, which meant every price on this chain resolved
+ * to 0 and every limit order sat until forceAfter fired it. Checking that a
+ * contract exists is not the same as checking it is the one being traded; the
+ * factory's PoolCreated logs are what settle that.
  */
 export const ROBINHOOD_MAINNET = defineEvmChain({
   chainId: "robinhood:mainnet",
@@ -19,7 +26,7 @@ export const ROBINHOOD_MAINNET = defineEvmChain({
   id: 4663,
   rpcUrl: "https://rpc.mainnet.chain.robinhood.com",
   nativeSymbol: "ETH",
-  stableSymbol: "rUSDC",
+  stableSymbol: "USDG",
   explorerBaseUrl: "https://robinhoodchain.blockscout.com",
   // No bundler serves chain 4663, so EOA is the only workable custody here.
   custody: "eoa",
@@ -39,10 +46,12 @@ export const ROBINHOOD_MAINNET = defineEvmChain({
       decimals: 18,
       name: "Wrapped Ether",
     },
-    rUSDC: {
-      address: "0x05fB7316d600edC32c184e6987563faD153fCBa3",
-      decimals: 18,
-      name: "Robinhood USDC",
+    // Verified on chain 4663: symbol() "USDG", name() "Global Dollar",
+    // decimals() 6, and WETH/USDG pools exist at all four fee tiers.
+    USDG: {
+      address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+      decimals: 6,
+      name: "Global Dollar",
     },
   },
 });

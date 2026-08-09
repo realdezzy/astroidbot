@@ -22,8 +22,15 @@ export interface SponsorshipAvailability {
  * by construction), a bundler that serves the chain, and a paymaster key.
  */
 export function sponsorshipAvailability(descriptor: ChainDescriptor): SponsorshipAvailability {
+  if (descriptor.family === "stacks") {
+    const config = ConfigManager.getInstance().config;
+    if (config.VELUMX_API_KEY) {
+      return { available: true, reason: null };
+    }
+    return { available: false, reason: "VELUMX_API_KEY is not set on this deployment" };
+  }
   if (descriptor.family !== "evm") {
-    return { available: false, reason: "Gas sponsorship is an ERC-4337 feature" };
+    return { available: false, reason: "Gas sponsorship is an ERC-4337 or VelumX feature" };
   }
   if (descriptor.evm?.custody !== "erc4337") {
     return { available: false, reason: "This chain uses EOA custody, which pays its own gas" };
@@ -50,11 +57,11 @@ export function sponsorshipAvailability(descriptor: ChainDescriptor): Sponsorshi
  */
 export async function sponsorGasFor(userId: number, chainId: string): Promise<boolean> {
   try {
-    const settings = await DatabaseService.getInstance().prisma.tradeSettings.findFirst({
-      where: { userId, chain: chainId },
-      select: { sponsorGas: true },
-    });
-    return settings?.sponsorGas ?? true;
+    // ChainPreference, not TradeSettings. Reading it from the account table by
+    // (userId, chain) is what used to create a duplicate settings row and hand
+    // RiskManager a different set of limits than the user had configured.
+    const preference = await DatabaseService.getInstance().findChainPreference(userId, chainId);
+    return preference?.sponsorGas ?? true;
   } catch (error) {
     logger.warn("[gas] could not read sponsorship preference, defaulting to sponsored", {
       userId,

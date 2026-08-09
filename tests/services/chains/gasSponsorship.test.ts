@@ -12,10 +12,14 @@ import type { ChainDescriptor } from "../../../src/types/chain.js";
  * reverted for want of gas.
  */
 
-const findFirst = vi.fn();
+// The preference lives in ChainPreference, reached through the db helper.
+// It used to be read off TradeSettings by (userId, chain), which is what
+// created duplicate account-settings rows and left RiskManager reading
+// whichever one the planner returned.
+const findChainPreference = vi.fn();
 vi.mock("../../../src/services/db.js", () => ({
   DatabaseService: {
-    getInstance: () => ({ prisma: { tradeSettings: { findFirst } } }),
+    getInstance: () => ({ findChainPreference }),
   },
 }));
 
@@ -69,10 +73,13 @@ describe("gas sponsorship availability", () => {
     expect(reason).toMatch(/EOA/i);
   });
 
-  it("is unavailable off the EVM entirely", () => {
+  it("is available on Stacks when VELUMX_API_KEY is configured", () => {
+    process.env.VELUMX_API_KEY = "mock_velumx_key";
+    ConfigManager.reset();
+    ConfigManager.load();
     const { available, reason } = sponsorshipAvailability(stacksChain);
-    expect(available).toBe(false);
-    expect(reason).toMatch(/ERC-4337/);
+    expect(available).toBe(true);
+    expect(reason).toBeNull();
   });
 
   it("is unavailable without a paymaster key, however the chain is configured", () => {
@@ -92,7 +99,7 @@ describe("sponsorGasFor", () => {
   });
 
   it("honours an explicit opt-out", async () => {
-    findFirst.mockResolvedValue({ sponsorGas: false });
+    findChainPreference.mockResolvedValue({ sponsorGas: false });
     expect(await sponsorGasFor(1, "base:mainnet")).toBe(false);
   });
 
@@ -100,21 +107,26 @@ describe("sponsorGasFor", () => {
     // Every 4337 wallet created before this toggle existed was funded on the
     // assumption gas was paid for it. Defaulting to off would strand exactly
     // those wallets: holding tokens they can't sell for want of native asset.
-    findFirst.mockResolvedValue(null);
+    findChainPreference.mockResolvedValue(null);
     expect(await sponsorGasFor(1, "base:mainnet")).toBe(true);
   });
 
   it("defaults to sponsored when the lookup fails", async () => {
     // A database blip must not turn into "your swap reverted for want of gas".
-    findFirst.mockRejectedValue(new Error("db down"));
+    findChainPreference.mockRejectedValue(new Error("db down"));
     expect(await sponsorGasFor(1, "base:mainnet")).toBe(true);
   });
 
   it("reads the preference for the chain it was asked about", async () => {
-    findFirst.mockResolvedValue({ sponsorGas: true });
+    findChainPreference.mockResolvedValue({ sponsorGas: true });
     await sponsorGasFor(42, "celo:mainnet");
-    expect(findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: 42, chain: "celo:mainnet" } })
-    );
+    expect(findChainPreference).toHaveBeenCalledWith(42, "celo:mainnet");
+  });
+
+  it("inherits when the chain has a row but no opinion on sponsorship", async () => {
+    // A row can exist purely to hold a slippage override. Null means inherit,
+    // and the inherited answer is sponsored — not "the user said no".
+    findChainPreference.mockResolvedValue({ sponsorGas: null, slippageBps: 250 });
+    expect(await sponsorGasFor(1, "base:mainnet")).toBe(true);
   });
 });

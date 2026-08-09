@@ -53,12 +53,48 @@ function registerProviderFor(descriptor: ChainDescriptor): void {
 }
 
 /**
+ * The custody mode a chain will actually run in, given what this deployment
+ * has configured.
+ *
+ * A descriptor's `custody` states a *preference*, not a hard requirement.
+ * ERC-4337 buys atomic batching and sponsorable gas, and it needs a paymaster
+ * key to do either; without one, the same chain runs perfectly well as a plain
+ * EOA — the adapter has supported both modes from the start precisely so that
+ * "EVM support" would not collapse into "support for the chains Pimlico
+ * serves".
+ *
+ * Treating a missing key as fatal made that principle untrue in practice: it
+ * meant Base could not be enabled at all without a Pimlico account, which is
+ * an unreasonable thing to require of someone starting the platform up for the
+ * first time. Degrading is loud, not silent — the warning names the
+ * consequence, and `sponsorshipAvailability()` already surfaces the same fact
+ * in Settings, where each chain that cannot sponsor says why.
+ */
+function effectiveDescriptor(descriptor: ChainDescriptor, hasPaymasterKey: boolean): ChainDescriptor {
+  if (descriptor.evm?.custody !== "erc4337" || hasPaymasterKey) return descriptor;
+
+  logger.warn(
+    `[chains] ${descriptor.chainId} prefers ERC-4337 custody but PIMLICO_API_KEY is not set — ` +
+    `running it with EOA custody instead. Wallets on this chain pay their own gas in ` +
+    `${descriptor.nativeSymbol}, and calls are submitted sequentially rather than atomically. ` +
+    `Set PIMLICO_API_KEY to enable sponsorship.`,
+    { chainId: descriptor.chainId }
+  );
+
+  return { ...descriptor, evm: { ...descriptor.evm, custody: "eoa" } };
+}
+
+/**
  * Registers every chain named in ENABLED_CHAINS.
  *
  * Failures are fatal, deliberately. A chain that fails to register is
  * indistinguishable from one that was never configured — the user just sees
  * "chain not enabled" and no error anywhere — and that is precisely the class
  * of invisible failure the family-keyed registry used to produce.
+ *
+ * Missing *sponsorship* credentials are the one exception, and not a weakening
+ * of that rule: the chain still registers, still trades, and announces the
+ * difference. See `effectiveDescriptor`.
  */
 export function registerEnabledChains(): void {
   const config = ConfigManager.getInstance().config;
@@ -89,17 +125,13 @@ export function registerEnabledChains(): void {
       );
     }
 
-    // Fail here rather than at first trade: a 4337 chain with no key would
-    // otherwise register fine and then throw on every swap.
-    if (descriptor.evm?.custody === "erc4337" && !config.PIMLICO_API_KEY) {
-      throw new Error(
-        `Chain "${chainId}" uses ERC-4337 custody but PIMLICO_API_KEY is not set. ` +
-        `Set the key, or configure the chain with custody "eoa".`
-      );
-    }
+    // A 4337 chain with no paymaster key runs as an EOA rather than refusing
+    // to boot. The old behaviour made Base unreachable without a Pimlico
+    // account, which is not a reasonable prerequisite for enabling a chain.
+    const effective = effectiveDescriptor(descriptor, Boolean(config.PIMLICO_API_KEY));
 
-    registry.register(adapterFor(descriptor));
-    registerProviderFor(descriptor);
+    registry.register(adapterFor(effective));
+    registerProviderFor(effective);
   }
 
   logger.info("[chains] Enabled", {

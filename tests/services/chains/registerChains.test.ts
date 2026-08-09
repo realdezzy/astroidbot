@@ -41,11 +41,54 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     process.env = { ...baseEnv };
   });
 
-  it("defaults to Stacks only, leaving existing deployments unchanged", async () => {
+  it("defaults to a multichain deployment", async () => {
+    // Was Stacks-only, to keep pre-multichain deployments byte-identical. That
+    // debt is paid: the product is multichain, so configuring nothing gets you
+    // a multichain deployment rather than one chain and a lot of dead UI.
     await loadWith({});
     registerEnabledChains();
     expect(ChainAdapterRegistry.getInstance().list().map((d) => d.chainId))
-      .toEqual(["stacks:mainnet"]);
+      .toEqual(["stacks:mainnet", "base:mainnet", "robinhood:mainnet", "solana:mainnet"]);
+  });
+
+  it("ships two EVM chains by default, not one", async () => {
+    // The family-keyed registry used to drop the second EVM chain silently. A
+    // default with only one EVM chain would never exercise that, and the
+    // product is aimed at Robinhood Chain specifically.
+    await loadWith({});
+    registerEnabledChains();
+
+    const evm = ChainAdapterRegistry.getInstance()
+      .list()
+      .filter((d) => d.family === "evm")
+      .map((d) => d.chainId);
+    expect(evm).toEqual(["base:mainnet", "robinhood:mainnet"]);
+  });
+
+  it("names each chain's actually-traded stablecoin", async () => {
+    // Verified against the chains themselves, not from memory. The failure
+    // this guards is subtle: a *real* token that simply isn't the one being
+    // traded passes every existence check while making every price 0.
+    //   robinhood — USDG (Global Dollar), not the poolless rUSDC
+    //   celo      — USDm, since Mento renamed cUSD
+    await loadWith({});
+    registerEnabledChains();
+
+    const registry = ChainAdapterRegistry.getInstance();
+    expect(registry.get("robinhood:mainnet").descriptor.stableSymbol).toBe("USDG");
+    expect(registry.get("base:mainnet").descriptor.stableSymbol).toBe("USDC");
+  });
+
+  it("declares a token entry for every chain's stablecoin", async () => {
+    // A stableSymbol with no matching token entry resolves to nothing, and
+    // getTokenPrice returns 0 for the whole chain without erroring.
+    await loadWith({ ENABLED_CHAINS: "base:mainnet,robinhood:mainnet,celo:mainnet" });
+    registerEnabledChains();
+
+    for (const d of ChainAdapterRegistry.getInstance().list()) {
+      if (d.family !== "evm") continue;
+      expect(Object.keys(d.evm?.tokens ?? {})).toContain(d.stableSymbol);
+    }
   });
 
   it("registers two EVM chains side by side", async () => {
@@ -55,7 +98,8 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     const registry = ChainAdapterRegistry.getInstance();
     expect(registry.has("stacks:mainnet")).toBe(true);
     expect(registry.has("celo:mainnet")).toBe(true);
-    expect(registry.get("celo:mainnet").stableSymbol).toBe("cUSD");
+    // USDm, not cUSD — Mento renamed it, same contract.
+    expect(registry.get("celo:mainnet").stableSymbol).toBe("USDm");
   });
 
   it("fails loudly on an unknown chain, listing what it does know", async () => {
@@ -63,16 +107,63 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     expect(() => registerEnabledChains()).toThrow(/unknown chain "nonsense:mainnet"/);
   });
 
-  it("fails when an ERC-4337 chain is enabled without a bundler key", async () => {
-    // Registering it anyway would defer the failure to every future swap.
+  it("runs an ERC-4337 chain as an EOA when there is no paymaster key", async () => {
+    // Sponsorship is an enhancement, not a prerequisite for the chain
+    // existing. Refusing to boot meant Base could not be enabled at all
+    // without a Pimlico account — an unreasonable thing to require of a first
+    // start, and untrue to the adapter, which has always supported both modes
+    // so that "EVM support" would not mean "the chains Pimlico serves".
     await loadWith({ ENABLED_CHAINS: "base:mainnet" });
-    expect(() => registerEnabledChains()).toThrow(/PIMLICO_API_KEY is not set/);
+    registerEnabledChains();
+
+    const registry = ChainAdapterRegistry.getInstance();
+    expect(registry.has("base:mainnet")).toBe(true);
+    expect(registry.get("base:mainnet").descriptor.evm?.custody).toBe("eoa");
   });
 
-  it("registers an ERC-4337 chain once its key is present", async () => {
+  it("uses ERC-4337 custody once the key is present", async () => {
     await loadWith({ ENABLED_CHAINS: "base:mainnet", PIMLICO_API_KEY: "pim_test" });
     registerEnabledChains();
-    expect(ChainAdapterRegistry.getInstance().has("base:mainnet")).toBe(true);
+
+    const registry = ChainAdapterRegistry.getInstance();
+    expect(registry.has("base:mainnet")).toBe(true);
+    expect(registry.get("base:mainnet").descriptor.evm?.custody).toBe("erc4337");
+  });
+
+  it("does not mutate the shared descriptor when it downgrades custody", async () => {
+    // The catalogue is module-level and shared. Editing it in place would
+    // leave Base stuck on EOA for the rest of the process — including after a
+    // key was added — and the symptom would be unsponsored gas with nothing
+    // in the config to explain it.
+    await loadWith({ ENABLED_CHAINS: "base:mainnet" });
+    registerEnabledChains();
+
+    const { BUILT_IN_DESCRIPTORS } = await import(
+      "../../../src/services/chains/descriptors/index.js"
+    );
+    const base = BUILT_IN_DESCRIPTORS.find((d) => d.chainId === "base:mainnet");
+    expect(base?.evm?.custody).toBe("erc4337");
+  });
+
+  it("is multichain by default — one chain per execution family", async () => {
+    // The platform is multichain, so a deployment that configures nothing gets
+    // a multichain deployment. A single-chain default hid every surface that
+    // only exists with more than one: pickers rendered one option, and the
+    // cross-chain aggregation bugs could not appear at all.
+    await loadWith({});
+    registerEnabledChains();
+
+    const families = new Set(
+      ChainAdapterRegistry.getInstance().list().map((d) => d.family)
+    );
+    expect(families).toEqual(new Set(["stacks", "evm", "svm"]));
+  });
+
+  it("boots with no credentials configured at all", async () => {
+    // The default list must never require a key. If it does, the first thing
+    // a new operator sees is a crash loop.
+    await loadWith({});
+    expect(() => registerEnabledChains()).not.toThrow();
   });
 
   it("rejects an empty chain list", async () => {

@@ -17,7 +17,12 @@ export const CELO_MAINNET: ChainDescriptor = {
   nativeSymbol: "CELO",
   nativeDecimals: 18,
   // cUSD is Celo's native-issued dollar and the deepest stable pair on-chain.
-  stableSymbol: "cUSD",
+  // Mento renamed its stablecoins: cUSD → USDm, cEUR → EURm. Same contracts,
+  // new symbols. The addresses below were always right; the symbols went stale
+  // and nothing noticed, because routing resolves by address while *users*
+  // read the symbol — and the indexer catalogues by the on-chain symbol, so
+  // one token was about to appear twice under both names.
+  stableSymbol: "USDm",
   isTestnet: false,
   tradable: true,
   explorerTxUrl: (txId) => `https://celoscan.io/tx/${txId}`,
@@ -40,8 +45,8 @@ export const CELO_MAINNET: ChainDescriptor = {
     },
     tokens: {
       CELO: { address: "0x471EcE3750Da237f93B8E339c536989b8978a438", decimals: 18, name: "Celo" },
-      cUSD: { address: "0x765DE816845861e75A25fCA122bb6898B8B1282a", decimals: 18, name: "Celo Dollar" },
-      cEUR: { address: "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73", decimals: 18, name: "Celo Euro" },
+      USDm: { address: "0x765DE816845861e75A25fCA122bb6898B8B1282a", decimals: 18, name: "Mento Dollar" },
+      EURm: { address: "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73", decimals: 18, name: "Mento Euro" },
       USDC: { address: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C", decimals: 6, name: "USD Coin" },
     },
   },
