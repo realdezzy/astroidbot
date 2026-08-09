@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { AIOrchestrator } from "../../src/services/ai.js";
 import { ConfigManager } from "../../src/config.js";
-import { RedisService } from "../../src/services/redis.js";
-import { DatabaseService } from "../../src/services/db.js";
 import OpenAI from "openai";
 
 vi.mock("openai", () => {
@@ -88,7 +86,7 @@ describe("AIOrchestrator Service Unit Tests", () => {
           }),
         },
       },
-    } as any));
+    } as unknown as OpenAI));
     mockGet.mockResolvedValue(null);
     mockSet.mockResolvedValue("OK");
     mockCreateLog.mockResolvedValue({});
@@ -129,7 +127,8 @@ describe("AIOrchestrator Service Unit Tests", () => {
 
   it("should audit proposed signal and return confidence multiplier", async () => {
     const orchestrator = AIOrchestrator.getInstance();
-    (orchestrator as any).openaiClient.chat.completions.create = vi.fn().mockResolvedValue({
+    (orchestrator as unknown as { openaiClient: OpenAI }).openaiClient.chat.completions.create =
+      vi.fn().mockResolvedValue({
       choices: [{ message: { content: '{"confidenceMultiplier": 0.75, "rationale": "High RSI warrants caution"}' } }],
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     });

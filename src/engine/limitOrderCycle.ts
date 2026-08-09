@@ -7,6 +7,8 @@ interface WalletRef {
   id: number;
   userId: number;
   address: string;
+  chainFamily?: string;
+  chain?: string;
 }
 
 export async function executeLimitOrderCycle(

@@ -1,5 +1,16 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { BitflowDEXService } from "../src/services/dex/bitflow.js";
+
+/**
+ * The two private helpers these tests drive directly. Both decide whether a
+ * user's token string finds the right pool, and both have a silent failure
+ * mode — the wrong token, not an error.
+ */
+interface BitflowSeam {
+  matchesToken(contract: string | null, symbol: string, target: string): boolean;
+  resolveTokenId(contractOrSymbol: string): string | null;
+  pools: unknown[];
+}
 
 describe("BitflowDEXService Token Resolution and Matching", () => {
   let bitflowService: BitflowDEXService;
@@ -17,7 +28,8 @@ describe("BitflowDEXService Token Resolution and Matching", () => {
   describe("matchesToken", () => {
     it("should match STX correctly with various STX aliases", () => {
       // Accessing private method matchesToken
-      const matchesToken = (bitflowService as any).matchesToken.bind(bitflowService);
+      const matchesToken = (bitflowService as unknown as BitflowSeam)
+        .matchesToken.bind(bitflowService);
 
       // Matches STX to STX
       expect(matchesToken("null", "STX", "STX")).toBe(true);
@@ -31,7 +43,8 @@ describe("BitflowDEXService Token Resolution and Matching", () => {
     });
 
     it("should match regular tokens correctly by symbol and contract", () => {
-      const matchesToken = (bitflowService as any).matchesToken.bind(bitflowService);
+      const matchesToken = (bitflowService as unknown as BitflowSeam)
+        .matchesToken.bind(bitflowService);
 
       expect(matchesToken("SP2XD7417HGPRTREMKF748VNEQPDRR0RMANB7X1NK.token-susdt", "sUSDT", "sUSDT")).toBe(true);
       expect(matchesToken("SP2XD7417HGPRTREMKF748VNEQPDRR0RMANB7X1NK.token-susdt", "sUSDT", "SP2XD7417HGPRTREMKF748VNEQPDRR0RMANB7X1NK.token-susdt")).toBe(true);
@@ -41,7 +54,8 @@ describe("BitflowDEXService Token Resolution and Matching", () => {
 
   describe("resolveTokenId", () => {
     it("should resolve any STX contract or symbol to token-stx directly", () => {
-      const resolveTokenId = (bitflowService as any).resolveTokenId.bind(bitflowService);
+      const resolveTokenId = (bitflowService as unknown as BitflowSeam)
+        .resolveTokenId.bind(bitflowService);
 
       expect(resolveTokenId("STX")).toBe("token-stx");
       expect(resolveTokenId("wstx")).toBe("token-stx");
@@ -50,10 +64,11 @@ describe("BitflowDEXService Token Resolution and Matching", () => {
     });
 
     it("should resolve pool tokens correctly", () => {
-      const resolveTokenId = (bitflowService as any).resolveTokenId.bind(bitflowService);
+      const resolveTokenId = (bitflowService as unknown as BitflowSeam)
+        .resolveTokenId.bind(bitflowService);
 
       // Seed a mock pool
-      (bitflowService as any).pools = [
+      (bitflowService as unknown as { pools: unknown[] }).pools = [
         {
           tokenXId: "token-susdt",
           tokenYId: "token-stx",

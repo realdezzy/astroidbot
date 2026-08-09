@@ -1,6 +1,5 @@
 import { CandleService, type CandleData } from "./candleService.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
-import { logger } from "../../utils/logger.js";
 
 export interface Features {
   // Multi-timeframe returns (fraction, not %)

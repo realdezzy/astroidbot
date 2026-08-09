@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import { createServer } from "../../../src/api/server.js";
-import { DatabaseService } from "../../../src/services/db.js";
 import { ConfigManager } from "../../../src/config.js";
 import type { Server } from "node:http";
 

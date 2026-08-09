@@ -2,18 +2,37 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../middleware/auth.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
-import { updateSettingsSchema, tradeQuerySchema } from "../../validation/api/schemas.js";
+import {
+  updateSettingsSchema,
+  tradeQuerySchema,
+  startSocialVerificationSchema,
+  updateSocialAccountSchema,
+  confirmSocialCommandSchema,
+  updateGasSponsorshipSchema,
+} from "../../validation/api/schemas.js";
 import { UserController } from "../controllers/userController.js";
 
 const router = Router();
 
+// chainId/chainFamily are validated against ChainAdapterRegistry in the controller
+// rather than a hardcoded enum here, so a deployment without PIMLICO_API_KEY
+// rejects "evm" with a clear message and adding a chain needs no schema edit.
+const chainFamilySchema = z.string().min(1).max(32).optional();
+// "base:mainnet" — the real chain identifier; chainFamily remains accepted for
+// clients written before multi-EVM.
+const chainIdSchema = z.string().min(1).max(64).optional();
+
 const generateWalletSchema = z.object({
   name: z.string().min(1).max(64).optional(),
+  chainFamily: chainFamilySchema,
+  chainId: chainIdSchema,
 });
 
 const importWalletSchema = z.object({
   privateKey: z.string().min(32).max(128),
   name: z.string().min(1).max(64).optional(),
+  chainFamily: chainFamilySchema,
+  chainId: chainIdSchema,
 });
 
 const revealKeySchema = z.object({
@@ -54,5 +73,27 @@ router.post("/me/wallets/:id/transfer", authenticate, validateBody(walletTransfe
 router.post("/me/trades/execute", authenticate, validateBody(executeTradeSchema), UserController.executeTrade);
 router.get("/me/trades/quote", authenticate, UserController.getTradeQuote);
 router.get("/me/analytics", authenticate, UserController.getAnalytics);
+
+router.get("/me/gas-sponsorship", authenticate, UserController.getGasSponsorship);
+router.put(
+  "/me/gas-sponsorship",
+  authenticate,
+  validateBody(updateGasSponsorshipSchema),
+  UserController.updateGasSponsorship
+);
+
+router.get("/me/social-accounts", authenticate, UserController.getSocialAccounts);
+router.post(
+  "/me/social-accounts/verify",
+  authenticate,
+  validateBody(startSocialVerificationSchema),
+  UserController.startSocialVerification
+);
+router.get("/me/social-accounts/verify", authenticate, UserController.getSocialVerification);
+router.put("/me/social-accounts/:id", authenticate, validateBody(updateSocialAccountSchema), UserController.updateSocialAccount);
+router.delete("/me/social-accounts/:id", authenticate, UserController.deleteSocialAccount);
+
+router.get("/me/social-commands/confirm", authenticate, UserController.getPendingSocialCommand);
+router.post("/me/social-commands/confirm", authenticate, validateBody(confirmSocialCommandSchema), UserController.confirmSocialCommand);
 
 export default router;

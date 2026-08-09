@@ -249,7 +249,7 @@ export async function runAgent(ctx: BotContext, agentId: number): Promise<void> 
       ? `✅ Agent *${escapeMd(agent.name)}* ran ${result.strategiesExecuted} strategies · ${result.actions} actions`
       : `✅ Agent *${escapeMd(agent.name)}* ran. ${result.reason ?? "No actions"}`;
     await ctx.reply(msg, { parse_mode: "Markdown" });
-  } catch (err) {
+  } catch {
     await ctx.reply("❌ Failed to run agent.");
   }
 }

@@ -4,7 +4,7 @@ import { ValidationError } from "../errors.js";
 import { logger } from "../../utils/logger.js";
 
 export class PerpController {
-  static async getPositions(req: Request, res: Response, next: NextFunction): Promise<void> {
+  static async getPositions(req: Request, res: Response, _next: NextFunction): Promise<void> {
     try {
       const service = PerpService.getInstance();
       const positions = await service.getUserPositions(req.userId!);
@@ -15,7 +15,7 @@ export class PerpController {
     }
   }
 
-  static async openPosition(req: Request, res: Response, next: NextFunction): Promise<void> {
+  static async openPosition(req: Request, res: Response, _next: NextFunction): Promise<void> {
     try {
       const { walletId, market, direction, margin, leverage } = req.body as {
         walletId: number;

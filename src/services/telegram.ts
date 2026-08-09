@@ -45,6 +45,8 @@ export class TelegramService {
           tempAddress: undefined as string | undefined,
           tempAgentName: undefined as string | undefined,
           tempAgentContext: undefined as string | undefined,
+          importChainId: undefined as string | undefined,
+          activeChainId: undefined as string | undefined,
         }),
       })
     );

@@ -85,7 +85,7 @@ router.get("/", async (_req: Request, res: Response) => {
     });
 
     res.json(docsList);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: "Failed to load documents list" });
   }
 });
@@ -147,7 +147,7 @@ router.get("/search", async (req: Request, res: Response) => {
     }
 
     res.json(results);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: "Search failed" });
   }
 });
@@ -188,7 +188,7 @@ router.get("/:slug", async (req: Request, res: Response) => {
     };
 
     res.json(doc);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: "Failed to load document content" });
   }
 });

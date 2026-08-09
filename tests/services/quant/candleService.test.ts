@@ -12,7 +12,7 @@ vi.mock("../../../src/services/db.js", () => {
     DatabaseService: {
       getInstance: () => ({
         prisma: {
-          $transaction: (cb: any) => cb({
+          $transaction: (cb: (tx: unknown) => unknown) => cb({
             candle: {
               findFirst: mockFindFirst,
               update: mockUpdate,

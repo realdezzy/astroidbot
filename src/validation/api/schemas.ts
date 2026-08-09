@@ -51,8 +51,15 @@ export const refreshTokenSchema = z.object({
 
 export const updateSettingsSchema = z.object({
   context: z.enum(["personal", "market_making"]).optional(),
-  chain: z.string().optional(),
-  slippageBps: z.number().int().min(1).max(10000).optional(),
+  // Present means "store this as an override for that chain" rather than as
+  // the account default. This validator strips unknown keys, so a field the
+  // controller reads but the schema omits silently becomes undefined — which
+  // is how a per-chain slippage write ended up overwriting the account-wide
+  // value instead, with no error to show for it.
+  chainId: z.string().optional(),
+  // Nullable on purpose: null clears a chain's override so it goes back to
+  // inheriting, which is a different operation from leaving it unchanged.
+  slippageBps: z.number().int().min(1).max(10000).nullable().optional(),
   maxPositionPct: z.number().min(0).max(100).optional(),
   dailyLossLimit: z.number().min(0).max(100).optional(),
   rebalanceThreshold: z.number().min(0).max(100).optional(),
@@ -81,3 +88,44 @@ export type EmailLoginInput = z.infer<typeof emailLoginSchema>;
 export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 export type TradeQueryInput = z.infer<typeof tradeQuerySchema>;
+
+/**
+ * Starting verification takes the platform and nothing else.
+ *
+ * Notably absent: `platformUserId` and `handle`. Both used to be accepted here
+ * and written straight to the account row, which made "verified" mean "the
+ * user typed their own id". They are now read off the post the user publishes,
+ * so there is nothing for a client to supply and nothing to validate.
+ */
+export const startSocialVerificationSchema = z.object({
+  platform: z.enum(["x", "farcaster"]),
+});
+
+export const updateSocialAccountSchema = z.object({
+  perTradeLimitUsd: z.number().positive().optional(),
+  dailyLimitUsd: z.number().positive().optional(),
+  autoExecute: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+});
+
+export const confirmSocialCommandSchema = z.object({
+  token: z.string().min(1),
+});
+
+export type StartSocialVerificationInput = z.infer<typeof startSocialVerificationSchema>;
+export type UpdateSocialAccountInput = z.infer<typeof updateSocialAccountSchema>;
+export type ConfirmSocialCommandInput = z.infer<typeof confirmSocialCommandSchema>;
+
+
+/**
+ * The chain is validated against the registry in the controller rather than
+ * enumerated here: which chains exist is a deployment decision
+ * (`ENABLED_CHAINS`), and a hardcoded list would reject a newly-enabled chain
+ * with a validation error that mentions nothing about configuration.
+ */
+export const updateGasSponsorshipSchema = z.object({
+  chainId: z.string().min(1).max(64),
+  enabled: z.boolean(),
+});
+
+export type UpdateGasSponsorshipInput = z.infer<typeof updateGasSponsorshipSchema>;

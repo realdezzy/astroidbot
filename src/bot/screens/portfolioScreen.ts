@@ -3,6 +3,8 @@ import type { BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { PortfolioManager } from "../../services/portfolio.js";
+import { walletChainId, walletDescriptor, groupByChainId } from "../../services/chains/walletChain.js";
+import { chainIcon } from "../keyboards/builders.js";
 import { RiskManager } from "../../services/riskManager.js";
 import { escapeMd, shortenAddress } from "../utils.js";
 
@@ -27,14 +29,25 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
   }
 
   const pm = PortfolioManager.getInstance();
-  const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+  // Balances are fetched per chain: a wallet must be priced against its own
+  // chain's token universe, not the union of every provider's.
+  const registry = DEXRegistry.getInstance();
+  const tokensByChain = new Map<string, Awaited<ReturnType<typeof registry.getSwappableTokens>>>();
+  for (const chainId of groupByChainId(wallets).keys()) {
+    tokensByChain.set(chainId, await registry.getSwappableTokens(false, chainId));
+  }
 
   let allLines = ["📊 *Portfolio*\n"];
   let grandTotal = 0;
   let totalPnl = 0;
 
   for (const wallet of wallets) {
-    const balances = await pm.fetchBalances(wallet.address, tokens, user.id);
+    const chain = walletDescriptor(wallet);
+    const balances = await pm.fetchBalances(
+      wallet.address,
+      tokensByChain.get(walletChainId(wallet)) ?? [],
+      user.id
+    );
     const total = balances.reduce((s, b) => s + b.usdValue, 0);
     grandTotal += total;
 
@@ -42,7 +55,9 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
       totalPnl += await RiskManager.getInstance().getDailyPnl(user.id);
     } catch { }
 
-    allLines.push(`*${escapeMd(wallet.name)}*`);
+    // Chain shown per wallet: the same ticker exists on several chains, so a
+    // balance list without it is ambiguous once a user holds more than one.
+    allLines.push(`${chainIcon(chain)} *${escapeMd(wallet.name)}* · ${escapeMd(chain.displayName)}`);
     allLines.push(`\`${shortenAddress(wallet.address)}\``);
 
     if (balances.length === 0) {

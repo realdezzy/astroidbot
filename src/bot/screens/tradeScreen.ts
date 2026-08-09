@@ -1,8 +1,26 @@
 import { InlineKeyboard } from "grammy";
-import type { BotContext } from "../../types/bot.js";
+import { activeChain, activeChainTokens } from "../chainContext.js";
+import { breadcrumb } from "../keyboards/builders.js";
+import { walletDescriptor } from "../../services/chains/walletChain.js";
+import { QUOTE_TTL_MS, type BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { escapeMd } from "../utils.js";
+
+/**
+ * Symbols offered as one-tap buttons: the chain's native and stable assets
+ * first (always tradable, always meaningful), then its most common tokens.
+ * Capped at six so the keyboard stays readable on a phone.
+ */
+async function pickerSymbols(ctx: BotContext): Promise<string[]> {
+  const chain = await activeChain(ctx);
+  const tokens = await activeChainTokens(ctx);
+  const preferred = [chain.nativeSymbol, chain.stableSymbol];
+  const rest = tokens
+    .map((t) => t.symbol)
+    .filter((sym) => !preferred.includes(sym));
+  return [...new Set([...preferred, ...rest])].slice(0, 6);
+}
 
 export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void> {
   const telegramId = ctx.from?.id;
@@ -41,18 +59,21 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
   }
 
   if (stage === "pick_token_in") {
-    const keyboard = new InlineKeyboard()
-      .text("STX", "action:trade_token_in_select:STX")
-      .text("USDCx", "action:trade_token_in_select:USDCx")
-      .row()
-      .text("ALEX", "action:trade_token_in_select:ALEX")
-      .text("WELSH", "action:trade_token_in_select:WELSH")
-      .row()
+    // Built from the active chain's own token list rather than a hardcoded
+    // Stacks set, so the picker shows tokens the wallet can actually trade.
+    const chain = await activeChain(ctx);
+    const keyboard = new InlineKeyboard();
+    for (const [i, symbol] of (await pickerSymbols(ctx)).entries()) {
+      keyboard.text(symbol, `action:trade_token_in_select:${symbol}`);
+      if ((i + 1) % 2 === 0) keyboard.row();
+    }
+    keyboard.row()
       .text("🔍 Enter Custom Token Symbol", "action:trade_token_in_custom")
       .row()
       .text("🏠 Home", "home");
 
-    const text = "🛒 *Quick Trade - Step 2/5*\n\nSelect the token you want to *SPEND* (Token In):";
+    const text =
+      `${breadcrumb(chain)}🛒 *Quick Trade - Step 2/5*\n\nSelect the token you want to *SPEND* (Token In):`;
     try {
       await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
     } catch {
@@ -62,19 +83,21 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
   }
 
   if (stage === "pick_token_out") {
-    const tokenIn = ctx.session.tradeTokenIn ?? "STX";
+    const chain = await activeChain(ctx);
+    const tokenIn = ctx.session.tradeTokenIn ?? chain.nativeSymbol;
     const keyboard = new InlineKeyboard();
 
-    if (tokenIn !== "STX") keyboard.text("STX", "action:trade_token_out_select:STX");
-    if (tokenIn !== "USDCx") keyboard.text("USDCx", "action:trade_token_out_select:USDCx");
-    keyboard.row();
-    if (tokenIn !== "ALEX") keyboard.text("ALEX", "action:trade_token_out_select:ALEX");
-    if (tokenIn !== "WELSH") keyboard.text("WELSH", "action:trade_token_out_select:WELSH");
+    let placed = 0;
+    for (const symbol of await pickerSymbols(ctx)) {
+      if (symbol === tokenIn) continue;
+      keyboard.text(symbol, `action:trade_token_out_select:${symbol}`);
+      if (++placed % 2 === 0) keyboard.row();
+    }
     keyboard.row();
     keyboard.text("🔍 Enter Custom Token Symbol", "action:trade_token_out_custom").row()
       .text("🏠 Home", "home");
 
-    const text = `🛒 *Quick Trade - Step 3/5*\n\nToken In: *${escapeMd(tokenIn)}*\n\nSelect the token you want to *RECEIVE* (Token Out):`;
+    const text = `${breadcrumb(chain)}🛒 *Quick Trade - Step 3/5*\n\nToken In: *${escapeMd(tokenIn)}*\n\nSelect the token you want to *RECEIVE* (Token Out):`;
     try {
       await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
     } catch {
@@ -85,8 +108,9 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
 
   if (stage === "enter_amount") {
     ctx.session.waitingFor = "trade_amount_custom";
-    const tokenIn = ctx.session.tradeTokenIn ?? "STX";
-    const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
+    const chain = await activeChain(ctx);
+    const tokenIn = ctx.session.tradeTokenIn ?? chain.nativeSymbol;
+    const tokenOut = ctx.session.tradeTokenOut ?? chain.stableSymbol;
 
     const text = `🛒 *Quick Trade - Step 4/5*\n\nSwap: *${escapeMd(tokenIn)}* → *${escapeMd(tokenOut)}*\n\nEnter the amount of *${escapeMd(tokenIn)}* to spend:\n\nType /cancel to abort.`;
     const keyboard = new InlineKeyboard().text("❌ Cancel", "action:cancel_session");
@@ -98,8 +122,9 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0]!;
     const walletId = ctx.session.tradeWalletId ?? defaultWallet.id;
     const wallet = wallets.find((w) => w.id === walletId) ?? defaultWallet;
-    const tokenIn = ctx.session.tradeTokenIn ?? "STX";
-    const tokenOut = ctx.session.tradeTokenOut ?? "USDCx";
+    const walletChain = walletDescriptor(wallet);
+    const tokenIn = ctx.session.tradeTokenIn ?? walletChain.nativeSymbol;
+    const tokenOut = ctx.session.tradeTokenOut ?? walletChain.stableSymbol;
     const rawAmount = ctx.session.tradeAmount;
     const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));
 
@@ -124,6 +149,18 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
       const { providerName, quote: est } = bestQuoteResult;
       const rate = est.amountOut / amount;
 
+      // Stamped now and re-checked on Confirm. A preview is a chat message and
+      // will still be tappable tomorrow; without this the button was a
+      // standing order to trade at an unknown future price.
+      ctx.session.tradeQuote = {
+        quotedAt: Date.now(),
+        provider: providerName,
+        tokenIn,
+        tokenOut,
+        amountIn: amount,
+        amountOut: est.amountOut,
+      };
+
       const text = [
         `🛒 *Confirm Trade - Step 5/5*`,
         `═════════════════════════`,
@@ -137,6 +174,8 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
         `• Exchange Rate: \`1 ${tokenIn} = ${rate.toFixed(4)} ${tokenOut}\``,
         `• Price Impact: \`${est.priceImpact.toFixed(2)}%\``,
         `• DEX Fee: \`${est.feeAmount.toFixed(4)} ${escapeMd(tokenIn)}\` (${est.feeBps} bps)`,
+        ``,
+        `⏳ *Quote valid for ${Math.round(QUOTE_TTL_MS / 1000)}s.* After that, confirming re-quotes at the current price and shows you this screen again.`,
       ].join("\n");
 
       const keyboard = new InlineKeyboard()
@@ -146,11 +185,12 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
         .text("🏠 Home", "home");
 
       await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch (err: any) {
+    } catch (err) {
       if (ctx.chat) {
         try { await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id); } catch { }
       }
-      await ctx.reply(`❌ Quote calculation failed: ${err.message || "Unknown error"}.`);
+      const reason = err instanceof Error ? err.message : "Unknown error";
+      await ctx.reply(`❌ Quote calculation failed: ${reason}.`);
       return tradeScreen(ctx, "pick_wallet");
     }
     return;

@@ -59,6 +59,13 @@ export class Logger {
     return base;
   }
 
+  /*
+   * This class *is* the console boundary the rest of the codebase is kept
+   * away from — every other no-console violation is a caller who should be
+   * calling this instead. Scoped to the four sinks rather than the file so a
+   * stray console.log elsewhere in here would still be caught.
+   */
+  /* eslint-disable no-console */
   debug(message: string, data?: Record<string, unknown>): void {
     if (Logger.level <= LogLevel.DEBUG) {
       console.debug(this.format("DEBUG", message, data));
@@ -82,6 +89,7 @@ export class Logger {
       console.error(this.format("ERROR", message, data));
     }
   }
+  /* eslint-enable no-console */
 }
 
 export const logger = new Logger();

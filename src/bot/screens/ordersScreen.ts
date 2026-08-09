@@ -4,6 +4,8 @@ import { DatabaseService } from "../../services/db.js";
 import { LimitOrderService } from "../../services/limitOrder.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { escapeMd } from "../utils.js";
+import { activeChain } from "../chainContext.js";
+import { walletChainId } from "../../services/chains/walletChain.js";
 
 export async function ordersScreen(ctx: BotContext, cancelId?: string): Promise<void> {
   ctx.session.backScreen = "main";
@@ -68,20 +70,34 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
     return;
   }
 
-  const pair = (ctx.session.limitPair as string) ?? "STX/USDCx";
+  // Default pair comes from the active chain, not a Stacks literal — a Base
+  // user's limit order defaulting to STX/USDCx has no route at all.
+  const chain = await activeChain(ctx);
+
+  // The wallet the order will actually be placed from — the default one, on
+  // the active chain. The confirmation screen used to name `wallets[0]` while
+  // the callback that places the order picked the default, so a user with more
+  // than one wallet could confirm against a name that wasn't charged.
+  const chainWallets = wallets.filter((w) => walletChainId(w) === chain.chainId);
+  const orderWallet =
+    chainWallets.find((w) => w.isDefault) ?? chainWallets[0] ?? wallets[0]!;
+
+  const pair =
+    (ctx.session.limitPair as string) ?? `${chain.nativeSymbol}/${chain.stableSymbol}`;
   const [tknIn, tknOut] = pair.split("/");
-  const tokenIn = tknIn ?? "STX";
-  const tokenOut = tknOut ?? "USDCx";
+  const tokenIn = tknIn ?? chain.nativeSymbol;
+  const tokenOut = tknOut ?? chain.stableSymbol;
   const dir = (ctx.session.limitDir as string) ?? "BUY";
   const rawAmount = ctx.session.limitAmount;
   const amount = typeof rawAmount === "number" ? rawAmount : parseFloat(String(rawAmount ?? "0"));
 
   const payToken = dir === "BUY" ? tokenIn : tokenOut;
-  const receiveToken = dir === "BUY" ? tokenOut : tokenIn;
 
   // Stage 1: Pick token
   if (!stage || stage === "pick_pair") {
-    const tokens = registry.getCachedTokens();
+    // Scoped to the active chain: an unscoped list mixes every chain's tokens
+    // into one picker, so a Stacks wallet can be handed a Base contract.
+    const tokens = registry.getCachedTokens(chain.chainId);
     const top16 = tokens.slice(0, 16);
     const keyboard = new InlineKeyboard();
     for (let i = 0; i < top16.length; i += 2) {
@@ -139,7 +155,8 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
       `${dir === "BUY" ? "🟢 BUY" : "🔴 SELL"} ${escapeMd(tokenOut)}`,
       `Amount:   ${amount} ${escapeMd(payToken)}`,
       `Price:    $${targetPrice.toFixed(4)}`,
-      `Wallet:   ${escapeMd(wallets[0]!.name)}`,
+      `Chain:    ${escapeMd(chain.displayName)}`,
+      `Wallet:   ${escapeMd(orderWallet.name)}`,
     ].join("\n");
 
     const keyboard = new InlineKeyboard()

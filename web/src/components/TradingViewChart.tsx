@@ -1,165 +1,138 @@
-import { useEffect, useRef, useCallback } from "react";
-import {
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  type DeepPartial,
-  type ChartOptions,
-  type Time,
-  AreaSeries,
-  HistogramSeries,
-  LineSeries,
-  type AreaData,
-  type HistogramData,
-  type LineData,
-} from "lightweight-charts";
+import { useEffect, useRef } from "react";
+import { createChart, ColorType, CandlestickSeries, HistogramSeries } from "lightweight-charts";
 
-type ChartType = "area" | "histogram" | "line";
-
-interface ChartData {
-  time: string | number;
-  value: number;
+export interface CandleData {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp: string | number;
 }
 
-interface Props {
-  type: ChartType;
-  data: ChartData[];
-  height?: number;
-  color?: string;
-  title?: string;
+interface TradingViewChartProps {
+  candles: CandleData[];
+  timeframe?: string;
+  theme?: "dark" | "light";
 }
 
-function isLight(): boolean {
-  return document.documentElement.classList.contains("light");
-}
-
-function getTheme(): DeepPartial<ChartOptions> {
-  const light = isLight();
-  return {
-    layout: {
-      background: { color: light ? "#f3f4f6" : "#030712" },
-      textColor: light ? "#6b7280" : "#9ca3af",
-    },
-    grid: {
-      vertLines: { color: light ? "rgba(229,231,235,0.8)" : "rgba(31,41,55,0.5)" },
-      horzLines: { color: light ? "rgba(229,231,235,0.8)" : "rgba(31,41,55,0.5)" },
-    },
-    crosshair: {
-      vertLine: {
-        color: "#4f46e5",
-        labelBackgroundColor: "#4f46e5",
-      },
-      horzLine: {
-        color: "#4f46e5",
-        labelBackgroundColor: "#4f46e5",
-      },
-    },
-    timeScale: {
-      borderColor: light ? "rgba(229,231,235,0.8)" : "rgba(31,41,55,0.5)",
-      timeVisible: true,
-    },
-    rightPriceScale: {
-      borderColor: light ? "rgba(229,231,235,0.8)" : "rgba(31,41,55,0.5)",
-    },
-  };
-}
-
-export function TradingViewChart({ type, data, height = 300, color = "#4f46e5", title }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<"Area" | "Histogram" | "Line"> | null>(null);
-
-  const createSeries = useCallback((chart: IChartApi): ISeriesApi<"Area" | "Histogram" | "Line"> => {
-    switch (type) {
-      case "area": {
-        const s = chart.addSeries(AreaSeries, {
-          lineColor: color,
-          topColor: `${color}30`,
-          bottomColor: `${color}00`,
-          lineWidth: 2,
-        });
-        return s as unknown as ISeriesApi<"Area" | "Histogram" | "Line">;
-      }
-      case "histogram":
-        return chart.addSeries(HistogramSeries, {
-          color,
-          base: 0,
-        }) as unknown as ISeriesApi<"Area" | "Histogram" | "Line">;
-      case "line":
-        return chart.addSeries(LineSeries, {
-          color,
-          lineWidth: 2,
-        }) as unknown as ISeriesApi<"Area" | "Histogram" | "Line">;
-    }
-  }, [type, color]);
+export function TradingViewChart({ candles, timeframe = "5m", theme = "dark" }: TradingViewChartProps) {
+  const chartContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!chartContainerRef.current) return;
 
-    const chart = createChart(containerRef.current, {
-      ...getTheme(),
-      width: containerRef.current.clientWidth,
-      height,
-      handleScroll: false,
-      handleScale: false,
+    const isDark = theme === "dark";
+    const backgroundColor = "transparent";
+    const textColor = isDark ? "#94a3b8" : "#475569";
+    const gridColor = isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.05)";
+
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: backgroundColor },
+        textColor: textColor,
+        fontSize: 11,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      },
+      grid: {
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
+      },
+      crosshair: {
+        mode: 1,
+      },
+      rightPriceScale: {
+        borderColor: gridColor,
+        autoScale: true,
+      },
+      timeScale: {
+        borderColor: gridColor,
+        timeVisible: true,
+        secondsVisible: timeframe === "1s" || timeframe === "1m",
+      },
+      width: chartContainerRef.current.clientWidth,
+      height: chartContainerRef.current.clientHeight || 420,
     });
 
-    chartRef.current = chart;
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: "#10b981",
+      downColor: "#ef4444",
+      borderVisible: false,
+      wickUpColor: "#10b981",
+      wickDownColor: "#ef4444",
+    });
 
-    const series = createSeries(chart);
-    seriesRef.current = series;
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: "#3b82f6",
+      priceFormat: {
+        type: "volume",
+      },
+      priceScaleId: "",
+    });
 
-    const mapped: Array<AreaData | HistogramData | LineData> = data.map((d) => ({
-      time: d.time as Time,
-      value: d.value,
-    }));
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+    });
 
-    series.setData(mapped as any);
-    chart.timeScale().fitContent();
+    // Format candle data for lightweight-charts
+    const formattedCandles = candles.map((c) => {
+      const timeInSec =
+        typeof c.timestamp === "number"
+          ? Math.floor(c.timestamp > 1e11 ? c.timestamp / 1000 : c.timestamp)
+          : Math.floor(new Date(c.timestamp).getTime() / 1000);
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current) {
-        chart.applyOptions({ width: containerRef.current.clientWidth });
+      return {
+        time: timeInSec as any,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      };
+    });
+
+    const formattedVolume = candles.map((c) => {
+      const timeInSec =
+        typeof c.timestamp === "number"
+          ? Math.floor(c.timestamp > 1e11 ? c.timestamp / 1000 : c.timestamp)
+          : Math.floor(new Date(c.timestamp).getTime() / 1000);
+
+      return {
+        time: timeInSec as any,
+        value: c.volume,
+        color: c.close >= c.open ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
+      };
+    });
+
+    if (formattedCandles.length > 0) {
+      // Sort by time ascending
+      formattedCandles.sort((a, b) => (a.time as number) - (b.time as number));
+      formattedVolume.sort((a, b) => (a.time as number) - (b.time as number));
+
+      candleSeries.setData(formattedCandles);
+      volumeSeries.setData(formattedVolume);
+      chart.timeScale().fitContent();
+    }
+
+    const handleResize = () => {
+      if (chartContainerRef.current) {
+        chart.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+          height: chartContainerRef.current.clientHeight,
+        });
       }
-    });
-    ro.observe(containerRef.current);
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(chartContainerRef.current);
 
     return () => {
-      ro.disconnect();
+      resizeObserver.disconnect();
       chart.remove();
-      chartRef.current = null;
-      seriesRef.current = null;
     };
-  }, []);
+  }, [candles, timeframe, theme]);
 
-  // Update data when it changes
-  useEffect(() => {
-    if (!seriesRef.current || data.length === 0) return;
-    const mapped: Array<AreaData | HistogramData | LineData> = data.map((d) => ({
-      time: d.time as Time,
-      value: d.value,
-    }));
-    seriesRef.current.setData(mapped as any);
-    chartRef.current?.timeScale().fitContent();
-  }, [data]);
-
-  // React to theme changes
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      if (chartRef.current) {
-        chartRef.current.applyOptions(getTheme());
-      }
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <div className="w-full">
-      {title && (
-        <h3 className="text-sm font-bold text-title-text uppercase tracking-wider mb-4">{title}</h3>
-      )}
-      <div ref={containerRef} className="w-full rounded-lg overflow-hidden" style={{ height }} />
-    </div>
-  );
+  return <div ref={chartContainerRef} className="w-full h-full min-h-[380px]" />;
 }

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { PerpService } from "../src/services/perp/perpService.js";
 import { ConfigManager } from "../src/config.js";
-import { DatabaseService } from "../src/services/db.js";
 import { TransactionService } from "../src/services/transaction.js";
 
 vi.mock("@velarprotocol/velar-sdk", () => {

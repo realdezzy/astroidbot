@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RiskManager } from "../../src/services/riskManager.js";
-import { DatabaseService } from "../../src/services/db.js";
 import type { RebalanceAction, TokenBalance } from "../../src/types.js";
 
 const mockGetDailyTradesSince = vi.fn();

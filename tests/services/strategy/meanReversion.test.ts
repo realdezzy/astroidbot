@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MeanReversionStrategy } from "../../../src/services/strategy/meanReversion.js";
-import { PriceHistoryService } from "../../../src/services/priceHistory.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockGetHistory = vi.fn();

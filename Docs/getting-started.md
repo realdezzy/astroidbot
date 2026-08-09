@@ -74,8 +74,8 @@ Before trading, review your risk settings:
 
 **Via Telegram:**
 1. Tap **🛒 Quick Trade** on the main menu
-2. Pick a token (e.g. sUSDT)
-3. Choose **BUY** (spend STX to get sUSDT) or **SELL** (sell sUSDT for STX)
+2. Pick a token (e.g. USDCx)
+3. Choose **BUY** (spend STX to get USDCx) or **SELL** (sell USDCx for STX)
 4. Type the amount (e.g. `5.0`)
 5. Review the quote (shows estimated output, fee, price impact)
 6. Tap **✅ Confirm Trade**

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
@@ -82,18 +83,38 @@ export class RedisService {
     } catch {}
   }
 
-  async acquireLock(key: string, ttlMs = 30_000): Promise<boolean> {
+  // Returns an ownership token on success, null if the lock is already held.
+  // The token exists so a holder whose lock expired mid-operation can't delete
+  // the lock a *different* holder has since acquired — pass it back to
+  // releaseLock. Truthy/falsy return keeps `if (!lock)` call sites working.
+  async acquireLock(key: string, ttlMs = 30_000): Promise<string | null> {
     try {
       const client = this.getClient();
-      const result = await client.set(key, "locked", "PX", ttlMs, "NX");
-      return result === "OK";
+      const token = randomUUID();
+      const result = await client.set(key, token, "PX", ttlMs, "NX");
+      return result === "OK" ? token : null;
     } catch {
-      return false;
+      return null;
     }
   }
 
-  async releaseLock(key: string): Promise<void> {
-    await this.del(key);
+  // Compare-and-delete: only removes the lock if `token` still owns it. Called
+  // without a token it deletes unconditionally (legacy behavior).
+  async releaseLock(key: string, token?: string): Promise<void> {
+    if (!token) {
+      await this.del(key);
+      return;
+    }
+    try {
+      // Single round-trip so the check and the delete can't interleave with
+      // another client acquiring the lock between them.
+      await this.getClient().eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        key,
+        token
+      );
+    } catch { }
   }
 
   async getAndIncrementNonce(

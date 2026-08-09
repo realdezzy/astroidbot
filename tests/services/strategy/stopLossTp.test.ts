@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { StopLossTpStrategy } from "../../../src/services/strategy/stopLossTp.js";
-import { DatabaseService } from "../../../src/services/db.js";
-import { PriceHistoryService } from "../../../src/services/priceHistory.js";
-import { DEXRegistry } from "../../../src/services/dex/dexRegistry.js";
 import type { StrategyContext } from "../../../src/types/strategy.js";
 
 const mockFindMany = vi.fn();

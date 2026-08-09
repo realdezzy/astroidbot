@@ -12,15 +12,15 @@ function getNetworkString(): "mainnet" | "testnet" {
   return network === "mainnet" ? "mainnet" : "testnet";
 }
 
-export function generateWalletKeypair(): { privateKeyHex: string; address: string } {
-  const privateKeyHex = makeRandomPrivKey();
-  const address = getAddressFromPrivateKey(privateKeyHex, getNetworkString());
-  return { privateKeyHex, address };
+export function generateWalletKeypair(): { privateKey: string; address: string } {
+  const privateKey = makeRandomPrivKey();
+  const address = getAddressFromPrivateKey(privateKey, getNetworkString());
+  return { privateKey, address };
 }
 
-export function deriveAddressFromPrivateKey(privateKeyHex: string): string {
+export function deriveAddressFromPrivateKey(privateKey: string): string {
   // getAddressFromPrivateKey automatically validates the private key format and throws if invalid
-  return getAddressFromPrivateKey(privateKeyHex, getNetworkString());
+  return getAddressFromPrivateKey(privateKey, getNetworkString());
 }
 
 export async function provisionDefaultWallet(userId: number): Promise<void> {
@@ -28,8 +28,8 @@ export async function provisionDefaultWallet(userId: number): Promise<void> {
   const existing = await db.findWalletsByUserId(userId);
   if (existing.length > 0) return;
 
-  const { privateKeyHex, address } = generateWalletKeypair();
-  const encryptedKey = await KMSService.getInstance().encryptPrivateKey(privateKeyHex);
+  const { privateKey, address } = generateWalletKeypair();
+  const encryptedKey = await KMSService.getInstance().encryptPrivateKey(privateKey);
 
   await db.createWallet({
     userId,

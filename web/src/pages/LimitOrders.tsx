@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Clock, Zap } from "lucide-react";
 import { apiFetch } from "../lib/api";
@@ -6,7 +6,10 @@ import { formatDate, classNames } from "../lib/utils";
 import { AutoRefreshToggle } from "../components/AutoRefreshToggle";
 import { TokenSelect } from "../components/TokenSelect";
 import { MultiWalletSelect } from "../components/MultiWalletSelect";
+import { ChainSelect } from "../components/ChainSelect";
+import { ChainBadge } from "../components/ChainBadge";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
+import { useChains } from "../hooks/useChains";
 
 interface LimitOrder {
   id: number;
@@ -27,6 +30,7 @@ interface LimitOrder {
 interface Wallet {
   id: number;
   name: string;
+  chain?: string | null;
   address: string;
   balance: number;
 }
@@ -37,10 +41,16 @@ export function LimitOrders() {
   const [showForm, setShowForm] = useState(false);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // A limit order lives on exactly one chain: its pair has to route there and
+  // its wallet has to be there. The chain is therefore picked first and drives
+  // the wallet list, the token list and the default pair — rather than being
+  // implied by an STX/USDCx default that only one chain can fill.
+  const [chainId, setChainId] = useState<string | null>(null);
+
   const [form, setForm] = useState({
     walletIds: [] as number[],
-    tokenIn: "STX",
-    tokenOut: "USDCx",
+    tokenIn: "",
+    tokenOut: "",
     direction: "BUY",
     targetPrice: 0,
     amountIn: 0,
@@ -52,9 +62,43 @@ export function LimitOrders() {
     queryFn: () => apiFetch("/me/wallets"),
   });
 
+  const { tradable, byId } = useChains();
+  const activeChain = byId(chainId);
+
+  // Only wallets on the selected chain can be ticked. The picker used to list
+  // every wallet, and the controller then wrote one order per wallet with the
+  // same token symbols — producing Base orders for a Stacks pair that could
+  // never route and only ever fired via forceAfter.
+  const chainWallets = (wallets ?? []).filter((w) => !chainId || w.chain === chainId);
+
+  // Default the chain from the user's own wallets, then the pair from that
+  // chain's descriptor.
+  useEffect(() => {
+    if (chainId || !wallets?.length) return;
+    const preferred = wallets.find((w) => tradable.some((c) => c.chainId === w.chain));
+    if (preferred?.chain) setChainId(preferred.chain);
+  }, [chainId, wallets, tradable]);
+
+  useEffect(() => {
+    if (!activeChain) return;
+    setForm((prev) => ({
+      ...prev,
+      tokenIn: activeChain.nativeSymbol,
+      tokenOut: activeChain.stableSymbol,
+      // Selections from the previous chain cannot be spent on this one.
+      walletIds: prev.walletIds.filter((id) => chainWallets.some((w) => w.id === id)),
+    }));
+    // chainWallets is derived from chainId; depending on it would re-run this
+    // on every balance refetch and stamp over the user's token choice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainId]);
+
+  // Scoped to the chosen chain. Unscoped, this merged every chain's catalogue
+  // into one picker, so a Stacks wallet could be handed a Base contract.
   const { data: tokensData } = useQuery<{ tokens: { contractId: string; symbol: string; name: string; decimals: number }[] }>({
-    queryKey: ["tokens"],
-    queryFn: () => apiFetch("/tokens"),
+    queryKey: ["tokens", chainId],
+    queryFn: () => apiFetch(chainId ? `/tokens?chainId=${encodeURIComponent(chainId)}` : "/tokens"),
+    enabled: chainId !== null,
   });
 
   const tokens = tokensData?.tokens ?? [];
@@ -87,16 +131,18 @@ export function LimitOrders() {
     refetchInterval: 10000,
   });
 
-  const totalSelectedStxBalance =
-    wallets
-      ?.filter((w) => form.walletIds.includes(w.id))
+  // Summed over chain-filtered wallets only, so this can never add an ETH
+  // balance to an STX one and present the total as spendable.
+  const totalSelectedNativeBalance =
+    chainWallets
+      .filter((w) => form.walletIds.includes(w.id))
       .reduce((sum, w) => sum + w.balance, 0) ?? 0;
 
   const tokenInObj = tokens.find(t => t.contractId === form.tokenIn || t.symbol === form.tokenIn);
   const tokenInSymbol = tokenInObj ? tokenInObj.symbol : form.tokenIn;
 
-  const combinedBalance = form.tokenIn === "STX"
-    ? totalSelectedStxBalance
+  const combinedBalance = form.tokenIn === activeChain?.nativeSymbol
+    ? totalSelectedNativeBalance
     : form.walletIds.reduce((sum, id) => {
         const wBalances = selectedWalletsBalances[id];
         if (!wBalances) return sum;
@@ -130,8 +176,9 @@ export function LimitOrders() {
       setMsg({ type: "success", text: "Limit order created successfully!" });
       setForm({
         walletIds: [],
-        tokenIn: "STX",
-        tokenOut: "USDCx",
+        // Back to the active chain's own pair, not a Stacks literal.
+        tokenIn: activeChain?.nativeSymbol ?? "",
+        tokenOut: activeChain?.stableSymbol ?? "",
         direction: "BUY",
         targetPrice: 0,
         amountIn: 0,
@@ -224,6 +271,26 @@ export function LimitOrders() {
             </div>
           )}
 
+          <div className="mb-4">
+            <ChainSelect
+              value={chainId}
+              onChange={(id) => {
+                setMsg(null);
+                setChainId(id);
+              }}
+              tradableOnly
+              label="Chain"
+              hint="An order can only fill on the chain its wallet and pair live on."
+            />
+          </div>
+
+          {chainId && chainWallets.length === 0 && (
+            <p className="text-xs text-amber-300 mb-4">
+              No wallet on {activeChain?.displayName ?? chainId}. Create one on the Wallets page
+              before placing an order here.
+            </p>
+          )}
+
           {form.walletIds.length > 0 && (
             <p className="text-xs text-muted-text/80 mb-4">
               Combined balance: {combinedBalance.toFixed(4)} {tokenInSymbol}
@@ -234,7 +301,7 @@ export function LimitOrders() {
             <div>
               <label className="block text-xs text-muted-text mb-1">Wallets</label>
               <MultiWalletSelect
-                wallets={wallets ?? []}
+                wallets={chainWallets}
                 selectedIds={form.walletIds}
                 onChange={(ids) => {
                   setMsg(null);

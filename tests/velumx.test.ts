@@ -94,9 +94,9 @@ describe("VelumX Gasless Integration Tests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Globally mock private network methods to prevent timeouts
-    vi.spyOn(txService as any, "fetchOnChainNonce").mockResolvedValue(0);
-    vi.spyOn(txService as any, "fetchFeeRate").mockResolvedValue(1.5);
-    vi.spyOn(txService as any, "verifyMempoolAdmission").mockResolvedValue(true);
+    vi.spyOn(txService as unknown as Record<string, () => unknown>, "fetchOnChainNonce").mockResolvedValue(0);
+    vi.spyOn(txService as unknown as Record<string, () => unknown>, "fetchFeeRate").mockResolvedValue(1.5);
+    vi.spyOn(txService as unknown as Record<string, () => unknown>, "verifyMempoolAdmission").mockResolvedValue(true);
   });
 
   it("should construct and route a sponsored transaction through VelumX client when useGasless is true", async () => {

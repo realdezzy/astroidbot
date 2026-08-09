@@ -1,12 +1,15 @@
 import type { Job } from "bullmq";
-import { QueueManager, QUEUES } from "../services/queue.js";
+import { QueueManager } from "../services/queue.js";
 import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
-import { TransactionService } from "../services/transaction.js";
 import { RiskManager } from "../services/riskManager.js";
 import { TelegramService } from "../services/telegram.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { logger } from "../utils/logger.js";
+import { executeSwapPayload } from "../services/chains/executeSwap.js";
+import { walletChainId } from "../services/chains/walletChain.js";
+import { DEFAULT_CHAIN_ID } from "../services/chains/descriptors/index.js";
+import { resolveTradeSettings } from "../services/tradeSettings.js";
 
 
 interface TradeJob {
@@ -26,36 +29,39 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
 
   const db = DatabaseService.getInstance();
   const registry = DEXRegistry.getInstance();
-  const txService = TransactionService.getInstance();
   const wss = WebSocketManager.getInstance();
   const qm = QueueManager.getInstance();
 
-  // Find best route across all DEXs
-  const bestQuote = await registry.getBestQuote(tokenIn, tokenOut, amountIn);
+  const wallet = await db.findWalletById(walletId);
+  const chainId = wallet ? walletChainId(wallet) : DEFAULT_CHAIN_ID;
+
+  // Find best route across DEXs registered for this wallet's chain
+  const bestQuote = await registry.getBestQuote(tokenIn, tokenOut, amountIn, chainId);
   if (!bestQuote || bestQuote.quote.amountOut <= 0) {
     throw new Error(`No viable swap route: ${tokenIn} → ${tokenOut}`);
   }
 
-  // Pre-execution risk check
-  const settings = await db.findTradeSettings(userId, "personal");
-  if (settings) {
-    const riskResult = await RiskManager.getInstance().evaluateTrade(
-      userId,
-      { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
-      [{ token: tokenIn, symbol: tokenIn, balance: amountIn, usdValue: amountIn }],
-      { slippageBps: settings.slippageBps, maxPositionPct: settings.maxPositionPct, dailyLossLimit: settings.dailyLossLimit }
-    );
-    if (!riskResult.approved) {
-      logger.warn(`Trade rejected by risk manager: ${riskResult.reason}`, { tokenIn, tokenOut, amountIn });
-      throw new Error(`Risk: ${riskResult.reason}`);
-    }
+  // Pre-execution risk check, against this wallet's chain rather than the
+  // account's. Slippage is the setting that differs per chain, and it is the
+  // one this check is about.
+  const settings = await resolveTradeSettings(userId, "personal", chainId);
+
+  const riskResult = await RiskManager.getInstance().evaluateTrade(
+    userId,
+    { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
+    [{ token: tokenIn, symbol: tokenIn, balance: amountIn, usdValue: amountIn }],
+    { slippageBps: settings.slippageBps, maxPositionPct: settings.maxPositionPct, dailyLossLimit: settings.dailyLossLimit }
+  );
+  if (!riskResult.approved) {
+    logger.warn(`Trade rejected by risk manager: ${riskResult.reason}`, { tokenIn, tokenOut, amountIn });
+    throw new Error(`Risk: ${riskResult.reason}`);
   }
 
   const { providerName, quote: est } = bestQuote;
   const provider = registry.getProvider(providerName);
   if (!provider) throw new Error(`Provider not found: ${providerName}`);
 
-  const minOut = est.amountOut * (1 - (settings?.slippageBps ?? 100) / 10000);
+  const minOut = est.amountOut * (1 - settings.slippageBps / 10000);
   const payload = await provider.buildSwapPayload(tokenIn, tokenOut, amountIn, minOut, senderAddress);
   if (!payload) throw new Error("Failed to build swap payload");
 
@@ -65,12 +71,14 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
     feeAmount: est.feeAmount, feeBps: est.feeBps,
   });
 
-  const result = await txService.execute(
-    { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
-    payload.contractAddress, payload.contractName,
-    payload.functionName, payload.functionArgs,
-    walletId, senderAddress, est.amountOut, settings?.useGasless ?? false, payload.postConditions,
-  );
+  const result = await executeSwapPayload(payload, {
+    action: { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
+    walletId,
+    senderAddress,
+    maxOutbound: est.amountOut,
+    useGasless: settings?.useGasless ?? false,
+    chainId,
+  });
 
   if ("txId" in result) {
     await db.updateTradeStatus(trade.id, "BROADCAST", result.txId);

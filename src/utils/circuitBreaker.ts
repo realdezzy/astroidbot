@@ -113,6 +113,23 @@ export class CircuitBreakerRegistry {
     return breaker;
   }
 
+  /**
+   * An existing breaker, or undefined — the non-creating counterpart to
+   * getBreaker, for read-side callers.
+   *
+   * Health reporting must not bring a breaker into existence: a chain that has
+   * never been called would then report CLOSED, which reads as "fine" when the
+   * truth is "never tried".
+   */
+  public static find(name: string): CircuitBreaker | undefined {
+    return this.breakers.get(name);
+  }
+
+  /** Every breaker created so far, for health snapshots. */
+  public static all(): CircuitBreaker[] {
+    return [...this.breakers.values()];
+  }
+
   public static clear(): void {
     this.breakers.clear();
   }

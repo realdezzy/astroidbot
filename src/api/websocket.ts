@@ -4,7 +4,6 @@ import type { IncomingMessage } from "node:http";
 import jwt from "jsonwebtoken";
 import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
-import { UnauthorizedError } from "./errors.js";
 import type { JwtPayload } from "./middleware/auth.js";
 
 interface AuthenticatedClient {
@@ -147,6 +146,21 @@ export class WebSocketManager {
       payload: data,
     });
   }
+
+  broadcastCandleUpdate(symbol: string, candle: { bucketStart: string; open: number; high: number; low: number; close: number; volumeUsd: number }): void {
+    this.broadcastToAll({
+      type: "candle_update",
+      payload: { symbol, candle },
+    });
+  }
+
+  broadcastSwapUpdate(symbol: string, swap: { txKey: string; priceUsd: number; volumeUsd: number; isBuy: boolean; timestamp: string; trader?: string }): void {
+    this.broadcastToAll({
+      type: "swap_update",
+      payload: { symbol, swap },
+    });
+  }
+
 
   getConnectedCount(): number {
     return this.clients.size;

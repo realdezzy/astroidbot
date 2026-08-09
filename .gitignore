@@ -6,6 +6,5 @@ web/dist/
 .env.docker
 *.log
 *.tsbuildinfo
-prisma/migrations/
 .DS_Store
 Thumbs.db

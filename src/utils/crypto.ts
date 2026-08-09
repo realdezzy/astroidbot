@@ -88,7 +88,7 @@ export function decrypt(ciphertext: string): string {
       try {
         const rawKey = masterKey.subarray(0, KEY_LENGTH);
         return decryptWithKey(ciphertext, rawKey);
-      } catch (fallbackErr) {
+      } catch {
         throw err;
       }
     }

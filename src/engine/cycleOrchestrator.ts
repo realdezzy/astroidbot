@@ -2,13 +2,16 @@ import { logger } from "../utils/logger.js";
 import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
 import { RiskManager } from "../services/riskManager.js";
-import { TransactionService } from "../services/transaction.js";
+import { confirmSwap } from "../services/chains/executeSwap.js";
+import { walletChainId } from "../services/chains/walletChain.js";
 import { TelegramService } from "../services/telegram.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { BotStatus } from "../types.js";
 import { executeLimitOrderCycle } from "./limitOrderCycle.js";
 import { StrategyEngine } from "../services/strategyEngine.js";
 import { AgentService } from "../services/agentService.js";
+import { TokenDiscoveryService } from "../services/tokenDiscovery.js";
+import { pollSocialMentions } from "../services/social/socialRegistry.js";
 
 
 export async function runCycle(): Promise<void> {
@@ -26,8 +29,22 @@ export async function runCycle(): Promise<void> {
     const db = DatabaseService.getInstance();
     const registry = DEXRegistry.getInstance();
     const risk = RiskManager.getInstance();
-    const txService = TransactionService.getInstance();
     const wss = WebSocketManager.getInstance();
+
+    // Token catalogue refresh rides the existing global tick rather than
+    // introducing a second scheduler — there is exactly one periodic mechanism
+    // in this codebase on purpose. Fire-and-forget: discovery is a read-side
+    // convenience and must never delay or fail a trading cycle.
+    TokenDiscoveryService.getInstance()
+      .syncAll()
+      .catch((err) => logger.warn("Token discovery sync failed", { error: err }));
+
+    // Social mentions ride the same tick. Fire-and-forget for the same reason
+    // as discovery: an inbound-command failure must never delay or fail a
+    // trading cycle.
+    pollSocialMentions().catch((err) =>
+      logger.warn("Social mention poll failed", { error: err })
+    );
 
     const tokens = await registry.getSwappableTokens();
     if (tokens.length === 0) {
@@ -64,7 +81,7 @@ export async function runCycle(): Promise<void> {
     // Retry pending confirmations from previous cycles (single-check per cycle).
     const pendingTrades = await db.findPendingTrades();
     for (const trade of pendingTrades) {
-      txService.confirmTransaction(trade.txId ?? "dry-run-tx-id", trade.id).then((state) => {
+      confirmSwap(trade.txId ?? "dry-run-tx-id", trade.id, walletChainId(trade.wallet)).then((state) => {
         if (state === "confirmed") {
           wss.broadcastTradeEvent(trade.userId, "trade_confirmed", {
             tradeId: trade.id,
@@ -82,7 +99,10 @@ export async function runCycle(): Promise<void> {
       });
     }
 
-    const walletList = wallets.map((w) => ({ id: w.id, userId: w.userId, address: w.address }));
+    const walletList = wallets.map((w) => ({
+      id: w.id, userId: w.userId, address: w.address,
+      chainFamily: w.chainFamily, chain: w.chain,
+    }));
     const { executed: limitOrdersExecuted } = await executeLimitOrderCycle(walletList, tokens);
     totalActionsExecuted += limitOrdersExecuted;
 

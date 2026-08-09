@@ -7,12 +7,15 @@ import {
 import { apiFetch, getAccessToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { classNames } from "../lib/utils";
+import { useChains } from "../hooks/useChains";
 
 interface ActionResult {
   type: "success" | "error" | "warning" | "info";
   title: string;
   details?: string;
   txId?: string;
+  /** Resolved by the API from the executing wallet's chain. */
+  explorerUrl?: string | null;
   link?: string;
 }
 
@@ -27,6 +30,7 @@ interface Message {
 export function AgentChat() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { chains } = useChains();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -201,8 +205,13 @@ export function AgentChat() {
 
       if (action === "trade") {
         try {
-          const wallets = await apiFetch<{ id: number; name: string }[]>("/me/wallets");
-          const wallet = wallets?.[0];
+          const wallets = await apiFetch<
+            { id: number; name: string; chain?: string | null; isDefault?: boolean }[]
+          >("/me/wallets");
+          // The user's default wallet, not whichever came back first. With one
+          // chain those were the same wallet; with several, "wallets[0]" is an
+          // arbitrary chain to spend from.
+          const wallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
           if (!wallet) {
             replyText = "I parsed this as a trade request, but you don't have any wallets configured.";
             actionResult = {
@@ -211,12 +220,27 @@ export function AgentChat() {
               details: "Please configure a wallet first."
             };
           } else {
-            const tokenIn = (parsed.tokenIn as string) ?? "STX";
-            const tokenOut = (parsed.tokenOut as string) ?? "USDCx";
+            // Defaults come from the wallet's own chain. Hardcoding
+            // STX/USDCx meant an unqualified "buy 10" on a Base wallet asked
+            // for a pair that chain cannot route.
+            const walletChain = chains.find((c) => c.chainId === wallet.chain);
+            const tokenIn = (parsed.tokenIn as string) ?? walletChain?.nativeSymbol;
+            const tokenOut = (parsed.tokenOut as string) ?? walletChain?.stableSymbol;
             const amountIn = (parsed.amountIn as number) ?? 1;
             const direction = (parsed.direction as string) ?? "BUY";
 
-            const tradeResp = await apiFetch<{ ok: boolean; txId: string; dex?: string }>("/me/trades/execute", {
+            if (!tokenIn || !tokenOut) {
+              throw new Error(
+                "I could not tell which tokens to trade, and this wallet's chain has no default pair."
+              );
+            }
+
+            const tradeResp = await apiFetch<{
+              ok: boolean;
+              txId: string;
+              dex?: string;
+              explorerUrl?: string | null;
+            }>("/me/trades/execute", {
               method: "POST",
               body: JSON.stringify({
                 walletId: wallet.id,
@@ -232,7 +256,8 @@ export function AgentChat() {
               type: "success",
               title: "Trade Executed Successfully",
               details: `Swapped ${amountIn} ${tokenIn} → ${tokenOut} using ${wallet.name}`,
-              txId: tradeResp.txId
+              txId: tradeResp.txId,
+              explorerUrl: tradeResp.explorerUrl ?? null,
             };
           }
         } catch (err: any) {
@@ -430,8 +455,13 @@ export function AgentChat() {
 
       if (action === "trade") {
         try {
-          const wallets = await apiFetch<{ id: number; name: string }[]>("/me/wallets");
-          const wallet = wallets?.[0];
+          const wallets = await apiFetch<
+            { id: number; name: string; chain?: string | null; isDefault?: boolean }[]
+          >("/me/wallets");
+          // The user's default wallet, not whichever came back first. With one
+          // chain those were the same wallet; with several, "wallets[0]" is an
+          // arbitrary chain to spend from.
+          const wallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
           if (!wallet) {
             replyText = "I parsed this as a trade request, but you don't have any wallets configured.";
             actionResult = {
@@ -440,12 +470,27 @@ export function AgentChat() {
               details: "Please configure a wallet first."
             };
           } else {
-            const tokenIn = (result.tokenIn as string) ?? "STX";
-            const tokenOut = (result.tokenOut as string) ?? "USDCx";
+            // Defaults come from the wallet's own chain. Hardcoding
+            // STX/USDCx meant an unqualified "buy 10" on a Base wallet asked
+            // for a pair that chain cannot route.
+            const walletChain = chains.find((c) => c.chainId === wallet.chain);
+            const tokenIn = (result.tokenIn as string) ?? walletChain?.nativeSymbol;
+            const tokenOut = (result.tokenOut as string) ?? walletChain?.stableSymbol;
             const amountIn = (result.amountIn as number) ?? 1;
             const direction = (result.direction as string) ?? "BUY";
 
-            const tradeResp = await apiFetch<{ ok: boolean; txId: string; dex?: string }>("/me/trades/execute", {
+            if (!tokenIn || !tokenOut) {
+              throw new Error(
+                "I could not tell which tokens to trade, and this wallet's chain has no default pair."
+              );
+            }
+
+            const tradeResp = await apiFetch<{
+              ok: boolean;
+              txId: string;
+              dex?: string;
+              explorerUrl?: string | null;
+            }>("/me/trades/execute", {
               method: "POST",
               body: JSON.stringify({
                 walletId: wallet.id,
@@ -461,7 +506,8 @@ export function AgentChat() {
               type: "success",
               title: "Trade Executed Successfully",
               details: `Swapped ${amountIn} ${tokenIn} → ${tokenOut} using ${wallet.name}`,
-              txId: tradeResp.txId
+              txId: tradeResp.txId,
+              explorerUrl: tradeResp.explorerUrl ?? null,
             };
           }
         } catch (err: any) {
@@ -636,10 +682,17 @@ export function AgentChat() {
     setInput(command);
   };
 
+  // The swap example follows whichever chain this deployment leads with, so a
+  // Base-only install doesn't suggest a Stacks pair it cannot route.
+  const exampleChain = chains.find((c) => c.tradable) ?? chains[0];
+  const swapExample = exampleChain
+    ? `Swap 10 ${exampleChain.nativeSymbol} for ${exampleChain.stableSymbol}`
+    : "Swap 10 of one token for another";
+
   const SUGGESTIONS = [
     "What are trading agents?",
     "Show my wallets list",
-    "Swap 10 STX for USDCx",
+    swapExample,
     "Halt the bot execution",
     "Set slippageBps to 150",
   ];
@@ -733,14 +786,19 @@ export function AgentChat() {
                         {m.actionResult.txId && (
                           <div className="flex items-center justify-between bg-input-bg/40 p-2 rounded-lg mt-1 border border-divider-color/20 font-mono text-[10px]">
                             <span className="text-muted-text truncate select-all">{m.actionResult.txId}</span>
-                            <a
-                              href={`https://explorer.hiro.so/txid/${m.actionResult.txId}?chain=mainnet`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-brand-400 hover:text-brand-300 ml-2 flex-shrink-0"
-                            >
-                              Explorer
-                            </a>
+                            {/* Link only when the server resolved one for the
+                              * trade's chain. A hardcoded Hiro URL sent every
+                              * Base and Solana trade to a 404. */}
+                            {m.actionResult.explorerUrl && (
+                              <a
+                                href={m.actionResult.explorerUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-brand-400 hover:text-brand-300 ml-2 flex-shrink-0"
+                              >
+                                Explorer
+                              </a>
+                            )}
                           </div>
                         )}
                         {m.actionResult.link && (
@@ -781,7 +839,7 @@ export function AgentChat() {
                 placeholder={
                   isRecording
                     ? "Listening... Speak clearly now."
-                    : "Type your query (e.g. 'swap 10 STX for USDCx')"
+                    : `Type your query (e.g. '${swapExample.toLowerCase()}')`
                 }
                 className="flex-1 bg-transparent text-sm text-title-text placeholder:text-muted-text/60 focus:outline-none py-1.5"
                 disabled={loading || !!streamingMessageId}
@@ -842,7 +900,7 @@ export function AgentChat() {
             <div className="space-y-2 border-t border-divider-color/40 pt-3">
               <div className="flex gap-2">
                 <span className="text-brand-400 font-bold font-mono">1.</span>
-                <span>Swaps tokens instantly using best quotes from Stacks DEXs (ALEX & Bitflow).</span>
+                <span>Swaps tokens instantly using the best quote across the DEXs on your wallet&apos;s chain.</span>
               </div>
               <div className="flex gap-2">
                 <span className="text-brand-400 font-bold font-mono">2.</span>

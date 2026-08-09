@@ -9,7 +9,6 @@ import { sendEmail, buildVerificationEmail, buildPasswordResetEmail } from "../.
 import { provisionDefaultWallet } from "../../services/wallet.js";
 import {
   UnauthorizedError,
-  ValidationError,
   ConflictError,
   InternalError,
   NotFoundError,

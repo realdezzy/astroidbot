@@ -24,13 +24,21 @@ Limit orders let you set a target price and walk away. The bot monitors prices e
 1. Go to **Limit Orders** in the sidebar
 2. Click **➕ Create** (or **➕ New Order**)
 3. Fill in the form:
-   - **Wallet** — select which wallet to trade from
+   - **Chain** — picked first. An order can only fill on the chain its wallet
+     and pair live on, so this drives everything below it: the wallet list is
+     filtered to that chain, the token pickers show only that chain's
+     catalogue, and the default pair comes from the chain itself.
+   - **Wallets** — one or more wallets *on that chain* to place the order from
    - **Direction** — BUY or SELL
-   - **Token In** — the token you're spending (e.g. STX)
-   - **Token Out** — the token you're buying (e.g. sUSDT)
+   - **Token In** — the token you're spending
+   - **Token Out** — the token you're buying
    - **Amount** — how much to spend
    - **Target Price (USD)** — the price at which to execute
 4. Click **Create Order**
+
+An order whose pair cannot route on the wallet's chain is rejected at creation
+with the chain named, rather than stored and left to fail later. Target prices
+are denominated in that chain's USD stablecoin.
 
 ### Telegram
 1. Tap **📋 Limit Orders** on the main menu
@@ -60,7 +68,7 @@ Limit orders let you set a target price and walk away. The bot monitors prices e
 ## Limit Order Execution
 
 **Price Checking:**
-The bot uses the sUSDT price of the input token as a proxy for the real pair price. This works well for tokens that are directionally correlated with sUSDT (the Stacks USD stablecoin). For exotic token pairs, the execution price may differ slightly from your target.
+The bot uses the USDCx price of the input token as a proxy for the real pair price. This works well for tokens that are directionally correlated with USDCx (the Stacks USD stablecoin). For exotic token pairs, the execution price may differ slightly from your target.
 
 **Execution Conditions:**
 - **BUY order**: executes when current price **≤** target price (buy when it drops to your target)

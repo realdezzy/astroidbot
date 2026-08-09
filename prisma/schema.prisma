@@ -8,32 +8,36 @@ datasource db {
 }
 
 model User {
-  id           Int       @id @default(autoincrement())
-  telegramId   BigInt?   @unique
-  email        String?   @unique
-  passwordHash String?
-  username     String?
+  id            Int      @id @default(autoincrement())
+  telegramId    BigInt?  @unique
+  email         String?  @unique
+  passwordHash  String?
+  username      String?
   emailVerified Boolean  @default(false)
-  referralCode String    @unique @default(uuid())
-  referredBy   Int?
-  referrer     User?     @relation("Referrals", fields: [referredBy], references: [id])
-  referees     User[]    @relation("Referrals")
-  points       Int       @default(0)
-  isActive     Boolean   @default(true)
-  isAdmin      Boolean   @default(false)
-  createdAt    DateTime  @default(now())
+  referralCode  String   @unique @default(uuid())
+  referredBy    Int?
+  referrer      User?    @relation("Referrals", fields: [referredBy], references: [id])
+  referees      User[]   @relation("Referrals")
+  points        Int      @default(0)
+  isActive      Boolean  @default(true)
+  isAdmin       Boolean  @default(false)
+  createdAt     DateTime @default(now())
 
-  wallets       Wallet[]
-  tradeSettings TradeSettings[]
-  trades        Trade[]
-  perpPositions PerpPosition[]
+  wallets          Wallet[]
+  tradeSettings    TradeSettings[]
+  chainPreferences ChainPreference[]
+  trades           Trade[]
+  perpPositions  PerpPosition[]
+  socialAccounts SocialAccount[]
 }
 
 model Wallet {
   id           Int      @id @default(autoincrement())
   userId       Int
   user         User     @relation(fields: [userId], references: [id])
-  address      String   @unique
+  address      String
+  chainFamily  String   @default("stacks")
+  chain        String   @default("stacks:mainnet")
   name         String
   encryptedKey String
   balance      Float    @default(0)
@@ -43,62 +47,118 @@ model Wallet {
 
   trades        Trade[]
   perpPositions PerpPosition[]
+
+  @@unique([chainFamily, address])
+  @@index([userId, chain])
 }
 
-
+// Account-wide trading preferences, one row per (user, context).
+//
+// This table used to carry a `chain` column and a per-chain `sponsorGas`,
+// which made it two tables wearing one name — and the collision was not
+// theoretical. The gas-sponsorship endpoint keyed rows by (userId, chain)
+// while every other reader looked them up by (userId, context) with an
+// unordered findFirst, and nothing constrained either shape. Toggling
+// sponsorship for a second chain therefore inserted a *duplicate*
+// (userId, "personal") row carrying default risk limits, after which which
+// row RiskManager got was up to the query planner.
+//
+// Per-chain overrides now live in ChainPreference, and the unique constraint
+// below makes the duplicate unrepresentable.
 model TradeSettings {
   id                 Int      @id @default(autoincrement())
   userId             Int
   user               User     @relation(fields: [userId], references: [id])
   context            String   @default("personal")
-  chain              String   @default("stacks:mainnet")
-  slippageBps        Int      @default(100)
+  // Portfolio-level limits: these are about the account's exposure, not about
+  // any one network, so they are deliberately not per chain.
   maxPositionPct     Float    @default(25.0)
   dailyLossLimit     Float    @default(5.0)
   rebalanceThreshold Float    @default(2.0)
+  // The account-wide default. A chain may override it — see ChainPreference.
+  slippageBps        Int      @default(100)
   useGasless         Boolean  @default(false)
   gaslessFeeToken    String   @default("USDC")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  @@unique([userId, context])
+}
+
+// What one user wants done differently on one chain.
+//
+// Every column but the key is nullable, and that is the whole design: a row
+// states only what it overrides. A chain with no row, or a null column,
+// inherits from TradeSettings — so enabling a chain never silently resets a
+// preference to a product default, which is exactly what the old shape did
+// when a sponsorship toggle wrote a fresh row.
+model ChainPreference {
+  id      Int    @id @default(autoincrement())
+  userId  Int
+  user    User   @relation(fields: [userId], references: [id])
+  chainId String
+
+  // ERC-4337 paymaster sponsorship. Null means sponsored, which is how every
+  // 4337 wallet behaved before the toggle existed. Ignored on chains that
+  // cannot sponsor at all — EOA custody has no paymaster to ask.
+  sponsorGas  Boolean?
+  // Slippage differs by chain more than any other setting: a Stacks AMM and a
+  // Solana aggregator are not the same trade at the same tolerance.
+  slippageBps Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, chainId])
 }
 
 model Trade {
-  id           Int       @id @default(autoincrement())
-  walletId     Int
-  wallet       Wallet    @relation(fields: [walletId], references: [id])
-  userId       Int
-  user         User      @relation(fields: [userId], references: [id])
-  direction    String
-  tokenIn      String
-  tokenOut     String
-  amountIn     Float
-  amountOut    Float
-  feeAmount    Float     @default(0)
-  feeBps       Int       @default(30)
-  txId         String?
-  status       String    @default("PENDING")
-  errorMessage String?
+  id               Int       @id @default(autoincrement())
+  walletId         Int
+  wallet           Wallet    @relation(fields: [walletId], references: [id])
+  userId           Int
+  user             User      @relation(fields: [userId], references: [id])
+  // The ChainId this trade executed on, denormalized from the wallet at
+  // creation. Not a join away for a reason: a txId only means something
+  // alongside the network it was broadcast to, and every surface that renders
+  // an explorer link needs both. Without it the web app had no way to build a
+  // correct link and hardcoded the Stacks explorer for all of them.
+  //
+  // Nullable because trades that predate the column genuinely have no recorded
+  // chain; readers fall back to the wallet's current chain.
+  chain            String?
+  direction        String
+  tokenIn          String
+  tokenOut         String
+  amountIn         Float
+  amountOut        Float
+  feeAmount        Float     @default(0)
+  feeBps           Int       @default(30)
+  txId             String?
+  status           String    @default("PENDING")
+  errorMessage     String?
   isGasless        Boolean   @default(false)
   relayerFeeAmount Float?
   relayerFeeToken  String?
   amountInUsd      Float?
   amountOutUsd     Float?
-  createdAt    DateTime  @default(now())
-  confirmedAt  DateTime?
+  createdAt        DateTime  @default(now())
+  confirmedAt      DateTime?
 
   @@index([userId, status, createdAt])
+  @@index([chain, createdAt])
 }
 
 model MarketMakingGrid {
-  id         Int      @id @default(autoincrement())
-  userId     Int
-  walletId   Int
-  tokenPair  String
-  midPrice   Float
-  gridLevels Int      @default(5)
-  spreadBps  Int
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  walletId    Int
+  tokenPair   String
+  midPrice    Float
+  gridLevels  Int      @default(5)
+  spreadBps   Int
   lastUpdated DateTime @updatedAt
-  createdAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   @@unique([walletId, tokenPair])
 }
@@ -143,21 +203,21 @@ model EmailToken {
 }
 
 model LimitOrder {
-  id          Int       @id @default(autoincrement())
-  userId      Int
-  walletId    Int
-  tokenIn     String
-  tokenOut    String
-  direction   String
-  targetPrice Float
-  amountIn    Float
-  status      String    @default("ACTIVE")
-  forceAfter  DateTime?
-  expiresAt   DateTime?
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  walletId     Int
+  tokenIn      String
+  tokenOut     String
+  direction    String
+  targetPrice  Float
+  amountIn     Float
+  status       String    @default("ACTIVE")
+  forceAfter   DateTime?
+  expiresAt    DateTime?
   failureCount Int       @default(0)
-  createdAt   DateTime  @default(now())
-  filledAt    DateTime?
-  txId        String?
+  createdAt    DateTime  @default(now())
+  filledAt     DateTime?
+  txId         String?
 
   @@index([userId, walletId])
   @@index([status])
@@ -175,34 +235,34 @@ model BlockedToken {
 }
 
 model TradingStrategy {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  agentId   Int?
-  type      String
-  config    Json
-  state     Json     @default("{}")
-  isActive  Boolean  @default(true)
-  failureCount Int    @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  agentId      Int?
+  type         String
+  config       Json
+  state        Json     @default("{}")
+  isActive     Boolean  @default(true)
+  failureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
   @@index([agentId])
 }
 
 model TradeAgent {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  name      String
-  context   String    @default("custom")
-  aiMode    String    @default("off")
-  config    Json
-  state     Json      @default("{}")
-  model     String    @default("deepseek-v4-pro")
-  isActive  Boolean   @default(true)
-  failureCount Int     @default(0)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  name         String
+  context      String   @default("custom")
+  aiMode       String   @default("off")
+  config       Json
+  state        Json     @default("{}")
+  model        String   @default("deepseek-v4-pro")
+  isActive     Boolean  @default(true)
+  failureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
 }
@@ -213,15 +273,15 @@ model PerpPosition {
   user             User     @relation(fields: [userId], references: [id])
   walletId         Int
   wallet           Wallet   @relation(fields: [walletId], references: [id])
-  market           String   
-  direction        String   // "LONG" | "SHORT"
-  size             Float    
-  leverage         Float    
+  market           String
+  direction        String // "LONG" | "SHORT"
+  size             Float
+  leverage         Float
   entryPrice       Float
   liquidationPrice Float
-  margin           Float    
-  status           String   // "OPEN" | "CLOSED" | "LIQUIDATED"
-  txId             String?  
+  margin           Float
+  status           String // "OPEN" | "CLOSED" | "LIQUIDATED"
+  txId             String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -254,7 +314,7 @@ model Notification {
   userId    Int
   title     String
   message   String
-  type      String   // "INFO" | "WARNING" | "ERROR" | "SUCCESS"
+  type      String // "INFO" | "WARNING" | "ERROR" | "SUCCESS"
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 
@@ -263,8 +323,12 @@ model Notification {
 
 model Candle {
   id        Int      @id @default(autoincrement())
+  // Network the token lives on. Without it the unique key collides across
+  // chains: "USDC" on Base and "USDC" on Stacks are different assets at
+  // different prices, and one would silently overwrite the other's candles.
+  chainId   String   @default("stacks:mainnet")
   token     String
-  timeframe String   // "1m", "5m", "15m", "1h", "4h", "1d"
+  timeframe String // "1m", "5m", "15m", "1h", "4h", "1d"
   timestamp DateTime
   open      Float
   high      Float
@@ -272,8 +336,293 @@ model Candle {
   close     Float
   volume    Float    @default(0)
 
-  @@unique([token, timeframe, timestamp])
-  @@index([token, timeframe, timestamp])
+  @@unique([chainId, token, timeframe, timestamp])
+  @@index([chainId, token, timeframe, timestamp])
+}
+
+// Cross-chain token catalogue backing the public discovery pages.
+//
+// **Written only by the backend** (TokenDiscoveryService), from two sources:
+// the registered DEX providers' token lists — what this deployment can
+// actually route a trade through — and promotion of tokens the indexer has
+// seen trade. The market columns here are a *cache* of IndexedToken, refreshed
+// each discovery sync; IndexedToken is the source of truth and the only place
+// the indexer writes.
+//
+// Keeping the cache rather than joining is deliberate. This table also holds
+// the tokens of chains that have no indexer at all (Stacks, Solana), so a join
+// would make discovery a union of two shapes; and sorting a page of twenty
+// rows by volume should be one indexed scan, not a relation traversal.
+model Token {
+  id             Int       @id @default(autoincrement())
+  chainId        String
+  contractId     String // address, principal, or mint depending on the chain
+  symbol         String
+  name           String
+  decimals       Int
+  logoUrl        String?
+  dexId          String?
+  priceUsd       Float?
+  priceChange5m  Float?
+  priceChange1h  Float?
+  priceChange6h  Float?
+  priceChange24h Float?
+  volume24h      Float?
+  liquidityUsd   Float?
+  marketCapUsd   Float?
+  txnsBuys24h    Int?
+  txnsSells24h   Int?
+  pairCreatedAt  DateTime?
+  isVerified     Boolean   @default(false)
+  lastSyncedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([chainId, contractId])
+  @@index([chainId, volume24h])
+  @@index([symbol])
+}
+
+// ─── Internal market-data indexer ────────────────────────────────────────────
+// Everything below backs MARKET_DATA_PROVIDER="internal": our own swap-event
+// ingestion, so production doesn't depend on a third-party feed. DexScreener
+// stays available as a development provider for exercising the same interface.
+//
+// **Ownership rule: every table below is written by the indexer process and by
+// nothing else.** The backend reads them and never writes them. Token above is
+// the mirror image — written only by the backend. Two processes writing one
+// table is how you get a row whose columns disagree about which pass produced
+// them, and no amount of care in either process fixes it from the outside.
+
+// What the indexer observed about a token: its identity as read off-chain, and
+// the metrics RollupService computes from that token's candles.
+//
+// Separate from Token because the two answer different questions and have
+// different owners. Token is "what can this deployment offer a user" — curated,
+// listable, backend-owned. IndexedToken is "what did we actually see trade" —
+// every token with a pool, including the scams and the test deployments,
+// written only here.
+model IndexedToken {
+  id             Int       @id @default(autoincrement())
+  chainId        String
+  contractId     String
+  // Read from the contract at discovery time. A token whose symbol can't be
+  // read is never catalogued — it would render as a blank row and is
+  // overwhelmingly likely to be broken or hostile.
+  symbol         String
+  name           String
+  decimals       Int
+  dexId          String?
+  // Metrics. Nullable throughout and deliberately so: null is "we don't know",
+  // which is a different fact from zero and must sort to the other end of a
+  // ranked table. Nothing here may be coalesced on write.
+  priceUsd       Float?
+  priceChange5m  Float?
+  priceChange1h  Float?
+  priceChange6h  Float?
+  priceChange24h Float?
+  volume24h      Float?
+  liquidityUsd   Float?
+  marketCapUsd   Float?
+  txnsBuys24h    Int?
+  txnsSells24h   Int?
+  pairCreatedAt  DateTime?
+  // Last time the rollup wrote metrics onto this row — not the last swap. Lets
+  // the backend tell "no trades" from "the indexer stopped".
+  lastRolledUpAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([chainId, contractId])
+  // The discovery read path: rank a chain's tokens by volume.
+  @@index([chainId, volume24h])
+  // Cross-chain native-price anchoring looks a symbol up everywhere else.
+  @@index([symbol])
+}
+
+// A liquidity pool we ingest swaps from. Discovered from the DEX factory's
+// pool-creation events, never hand-listed — a chain's interesting pools are
+// mostly ones that didn't exist when the code shipped.
+model IndexedPool {
+  id            Int       @id @default(autoincrement())
+  chainId       String
+  dexId         String // "uniswap-v3", "jupiter", "alex", …
+  poolAddress   String
+  // Contract ids, ordered as the pool itself orders them. Kept denormalized
+  // rather than joined to Token: a pool is discovered before either side is
+  // necessarily in the catalogue, and the indexer must not block on that.
+  token0        String
+  token1        String
+  decimals0     Int
+  decimals1     Int
+  // Which side this pool is *about*. The quote side is the wrapped native or a
+  // stable — the leg we can price — and the base is the token traded against
+  // it. Stored rather than re-derived because the rollup must credit a pool's
+  // price to exactly one token: crediting both made WETH inherit the inverse
+  // of every memecoin it was paired with and report +469% in an hour.
+  baseToken     String?
+  quoteToken    String?
+  feeTier       Int?
+  // Block the pool was created in. Doubles as the backfill floor — there are
+  // no swaps before it, so a fresh pool never triggers a full-chain rescan.
+  createdBlock  BigInt?
+  pairCreatedAt DateTime?
+
+  // Latest observed state, refreshed by the rollup. Denormalized so the
+  // discovery query never has to aggregate candles at read time.
+  liquidityUsd Float?
+  lastSwapAt   DateTime?
+  lastPrice0   Float? // token0 priced in token1, from the last swap's sqrtPriceX96
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  swaps   IndexedSwap[]
+
+  // Per-pool ingestion cursor, used only by Solana.
+  //
+  // `getSignaturesForAddress` is per account and pages backwards from newest,
+  // taking an `until` signature — there is no "give me this slot range" for an
+  // account. A chain-wide cursor cannot express "pool A is caught up, pool B
+  // is not", which is the normal state when pools are discovered at different
+  // times.
+  lastSignature String?
+
+  // The other end of the same walk: where this pool's *downward* history pass
+  // has reached. Separate from lastSignature because the two move in opposite
+  // directions and meet in the middle — one cursor could not say whether a
+  // pool is behind the head or still filling in its past, and the responses to
+  // those are opposite. `backfillDone` distinguishes "reached the window" from
+  // "never started", which look identical once the signature stops moving.
+  backfillSignature String?
+  backfillDone      Boolean @default(false)
+
+  candles PoolCandle[]
+
+  @@unique([chainId, poolAddress])
+  @@index([chainId, dexId])
+  // Rollups walk pools by the token they price.
+  @@index([chainId, baseToken])
+  @@index([chainId, token0])
+  @@index([chainId, token1])
+}
+
+// One row per swap we ingested, keyed by the swap's own identity on its chain.
+//
+// This table is what makes ingestion idempotent, and its absence is what made
+// the rest of the indexer so defensive. Candle volume used to accumulate
+// additively (`volume = volume + new`), so processing a range twice inflated
+// it permanently and undetectably — and *that* is why there is a cross-process
+// lock, a transaction-wrapped cursor, a rule against stepping over gaps, and a
+// migration that marks pre-existing chains' backfill complete. Every one of
+// those exists to enforce "never process a range twice".
+//
+// With raw swaps stored under a unique key, re-processing inserts nothing and
+// candles are *recomputed* from what is stored rather than added to. Replays
+// become free, and a reorg can be repaired by deleting the affected swaps and
+// recomputing — which was previously impossible, since addition has no inverse.
+//
+// Retention is deliberately shorter than the candles derived from it
+// (INDEXER_SWAP_RETENTION_DAYS): raw rows earn their keep only while a bucket
+// might still be rewritten.
+model IndexedSwap {
+  id     Int         @id @default(autoincrement())
+  poolId Int
+  pool   IndexedPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+
+  // The swap's identity on its own chain, which is what makes the insert
+  // idempotent: `txHash:logIndex` on EVM, `txId:eventIndex` on Stacks, the
+  // signature on Solana.
+  txKey String
+
+  // Ordering within a bucket, for open/close. Block number is the slot on
+  // Solana and the block height on Stacks.
+  blockNumber BigInt
+  logIndex    Int    @default(0)
+
+  bucketStart DateTime
+  // Zero means "we saw this trade but could not price it" — distinct from a
+  // trade at a price of zero, which is why the recompute filters it out of
+  // OHLC rather than letting it drag the low to nothing.
+  priceUsd    Float
+  volumeUsd   Float
+  isBuy       Boolean
+
+  createdAt DateTime @default(now())
+
+  @@unique([poolId, txKey])
+  // The recompute reads exactly this shape: one pool's swaps in one bucket.
+  @@index([poolId, bucketStart])
+  @@index([bucketStart])
+}
+
+// Five-minute OHLCV buckets — the aggregation primitive every window is
+// derived from. No question the UI asks needs finer resolution than the 5M
+// column it renders, and 288 rows/pool/day compacts the raw swap stream by
+// roughly four orders of magnitude.
+model PoolCandle {
+  id          BigInt      @id @default(autoincrement())
+  poolId      Int
+  pool        IndexedPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  // Bucket start, floored to a 5-minute boundary in UTC.
+  bucketStart DateTime
+
+  open  Float
+  high  Float
+  low   Float
+  close Float
+
+  volumeUsd Float @default(0)
+  buys      Int   @default(0)
+  sells     Int   @default(0)
+
+  @@unique([poolId, bucketStart])
+  // Window rollups scan by time first, then narrow to pools.
+  @@index([bucketStart])
+  @@index([poolId, bucketStart])
+}
+
+// Per-chain ingestion cursor. One row per chain; the indexer resumes from
+// lastBlock every tick, so a restart costs one block range rather than a
+// rescan from genesis.
+model IndexerCursor {
+  chainId       String   @id
+  // Last block whose logs are fully ingested. Held `confirmations` behind the
+  // head so a reorg can't strand us ahead of canonical history.
+  lastBlock     BigInt
+  // Separate cursor: pool discovery scans the factory, swap ingestion scans
+  // pools, and they advance at different rates (discovery can lag safely).
+  lastPoolBlock BigInt?
+
+  // Backfill walks *downward* from where the chain was first indexed, so the
+  // 24h columns are complete rather than showing a partial window for the
+  // first day of a chain's life. Two separate marks because it moves in the
+  // opposite direction to everything else: `backfillBlock` is the low-water
+  // mark reached so far, `backfillFloor` is where it stops.
+  //
+  // Null floor means "not yet computed" — it is derived from measured block
+  // time on first run, because a fixed block count means wildly different
+  // spans per chain (50k blocks is 7 days of Ethereum and 3 hours of a
+  // sub-second L2).
+  backfillBlock BigInt?
+  backfillFloor BigInt?
+  // Set when the walk reaches the floor. Distinguishes "done" from "not
+  // started", which otherwise look identical once backfillBlock == floor.
+  backfillDone  Boolean  @default(false)
+
+  // Opaque per-source paging state, written and read only by the chain's own
+  // indexer. Stacks needs it: its API is address-paged by offset rather than
+  // queryable by block range, so resuming a downward walk means remembering
+  // where in each contract's transaction list we had got to — and doing so per
+  // contract, since ALEX and Velar are walked independently. Deriving that
+  // offset instead would cost a page-by-page seek from the head every tick,
+  // whose cost grows with how far the walk has already come.
+  //
+  // Json rather than columns because the shape is the chain's business and
+  // nothing joins or filters on it. See StacksBackfillState in stacksIndexer.
+  backfillState Json?
+
+  updatedAt     DateTime @updatedAt
 }
 
 model PoolStatsHistory {
@@ -287,4 +636,81 @@ model PoolStatsHistory {
   netWhaleFlowUsd     Float    @default(0)
 
   @@index([token, timestamp])
+}
+
+// A linked social identity that may act on a user's behalf.
+//
+// Keyed on platformUserId, never the handle: handles are transferable and
+// re-registrable, so trusting one would let anyone who acquires an abandoned
+// @name move another user's funds.
+model SocialAccount {
+  id               Int       @id @default(autoincrement())
+  userId           Int
+  user             User      @relation(fields: [userId], references: [id])
+  platform         String // "x" | "farcaster"
+  platformUserId   String // immutable numeric/fid identifier
+  handle           String // display only — never used for authorization
+  verifiedAt       DateTime?
+  // Caps enforced before execution and independently of RiskManager, so a
+  // compromised social account cannot drain an account even if it passes
+  // every trading-risk check.
+  perTradeLimitUsd Float     @default(50)
+  dailyLimitUsd    Float     @default(200)
+  // Confirm-first by default: a reply with a signed link the user must open.
+  // Auto-execute is strictly opt-in.
+  autoExecute      Boolean   @default(false)
+  enabled          Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  commands SocialCommand[]
+
+  @@unique([platform, platformUserId])
+  @@index([userId])
+}
+
+// A pending "prove you own this account" challenge.
+//
+// The problem it solves: linking used to accept a `platformUserId` typed into
+// a form, so the claim "this X account is mine" was attested by the person
+// making it. This makes the *platform* the attester instead — the id is read
+// off a post the account actually published, and never comes from the client.
+model SocialVerification {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  platform   String
+  // The one-time string the user posts. Unique because the mention poller
+  // looks a post's text up by it, with no idea whose it is.
+  code       String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, platform])
+  @@index([expiresAt])
+}
+
+// One row per inbound post that addressed the bot.
+//
+// The unique key on [platform, postId] is the idempotency guard: streams
+// redeliver, webhooks retry, and a restart can replay a backlog. Without it
+// the same tweet could execute a trade more than once.
+model SocialCommand {
+  id               Int            @id @default(autoincrement())
+  socialAccountId  Int?
+  socialAccount    SocialAccount? @relation(fields: [socialAccountId], references: [id])
+  platform         String
+  postId           String
+  authorId         String
+  rawText          String
+  parsedIntent     String? // JSON of the validated intent, or null if unparseable
+  status           String         @default("RECEIVED") // RECEIVED|REJECTED|AWAITING_CONFIRMATION|EXECUTED|FAILED
+  rejectionReason  String?
+  tradeId          Int?
+  confirmToken     String?        @unique
+  confirmExpiresAt DateTime?
+  createdAt        DateTime       @default(now())
+
+  @@unique([platform, postId])
+  @@index([socialAccountId, createdAt])
 }

@@ -16,6 +16,12 @@ export interface StrategyContext {
   userId: number;
   walletId: number;
   address: string;
+  /**
+   * The wallet's chain. Carried on the context so a strategy never has to
+   * re-derive it — and so one that fans out to another service (grid → market
+   * maker) can pass it on rather than letting it default to Stacks.
+   */
+  chainId: string;
   balances: TokenBalance[];
   tokens: SwappableToken[];
   settings: TradeSettings;

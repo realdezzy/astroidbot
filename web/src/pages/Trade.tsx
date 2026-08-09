@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUp,
@@ -10,6 +11,9 @@ import {
   Square,
   ArrowRightLeft,
   Receipt,
+  Share2,
+  CheckCircle2,
+  Clock,
 } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { formatNumber, classNames } from "../lib/utils";
@@ -28,6 +32,10 @@ interface WalletItem {
   address: string;
   name: string;
   balance: number;
+  isDefault?: boolean;
+  chainId?: string;
+  chain?: string;
+  chainFamily?: string;
 }
 interface QuoteItem {
   dex: string;
@@ -53,37 +61,167 @@ type TradeTab = "swap" | "history";
 
 export function Trade() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TradeTab>("swap");
   const [selectedWalletIds, setSelectedWalletIds] = useState<number[]>([]);
   const [direction, setDirection] = useState<"BUY" | "SELL">("BUY");
-  const [tokenIn, setTokenIn] = useState("STX");
-  const [tokenOut, setTokenOut] = useState("USDCx");
+
+  // Deep-link prefill from the token discovery pages: /trade?chainId=…&tokenOut=…
+  // The whole point of the discovery flow is that a user arrives here with
+  // everything chosen and only has to type an amount.
+  const prefillChainId = searchParams.get("chainId");
+  const prefillTokenIn = searchParams.get("tokenIn");
+  const prefillTokenOut = searchParams.get("tokenOut");
+  const confirmToken = searchParams.get("confirm");
+
+  // The chain this trade is on. Everything below is scoped to it: the token
+  // list, the quote, and which wallets can be selected.
+  //
+  // Previously there was no chain at all — tokenIn defaulted to "STX" and
+  // tokenOut to "USDCx" whatever wallet you held, the token list came from an
+  // unscoped /tokens, and the quote asked every provider on every chain. On a
+  // Stacks-only deployment that was invisible; with three chains enabled it
+  // means a Base wallet offered Stacks tokens.
+  const [chainId, setChainId] = useState<string | null>(prefillChainId);
+  const [tokenIn, setTokenIn] = useState(prefillTokenIn ?? "");
+  const [tokenOut, setTokenOut] = useState(prefillTokenOut ?? "");
   const [amount, setAmount] = useState("");
+  const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [selectedDex, setSelectedDex] = useState<string | null>(null);
 
-  const { data: tokensData } = useQuery<{ tokens: Token[] }>({
-    queryKey: ["tokens"],
-    queryFn: () => apiFetch("/tokens"),
+  const { data: pendingSocialData, isLoading: pendingSocialLoading } = useQuery<{
+    ok: boolean;
+    command: {
+      id: number;
+      platform: string;
+      rawText: string;
+      parsedIntent: {
+        action: "buy" | "sell";
+        amount: number;
+        token: string;
+      } | null;
+      confirmExpiresAt: string;
+    };
+  }>({
+    queryKey: ["pending-social-command", confirmToken],
+    queryFn: () => apiFetch(`/me/social-commands/confirm?token=${confirmToken}`),
+    enabled: !!confirmToken,
   });
 
-  const { data: wallets } = useQuery<WalletItem[]>({
+  const confirmSocialMutation = useMutation({
+    mutationFn: (token: string) =>
+      apiFetch<{ ok: boolean; message: string }>("/me/social-commands/confirm", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    onSuccess: (data) => {
+      setMsg({ type: "success", text: data.message || "Social trade confirmed and enqueued!" });
+      queryClient.invalidateQueries({ queryKey: ["trades"] });
+      queryClient.invalidateQueries({ queryKey: ["wallets"] });
+    },
+    onError: (err: Error) => {
+      setMsg({ type: "error", text: err.message || "Failed to confirm social trade" });
+    },
+  });
+
+  const { data: chainData } = useQuery<{
+    chains: {
+      chainId: string;
+      displayName: string;
+      nativeSymbol: string;
+      stableSymbol: string;
+      tradable: boolean;
+    }[];
+  }>({
+    queryKey: ["chains"],
+    queryFn: () => apiFetch("/chains"),
+    staleTime: 5 * 60_000,
+  });
+
+  const chains = (chainData?.chains ?? []).filter((c) => c.tradable);
+  const activeChain = chains.find((c) => c.chainId === chainId) ?? null;
+
+  // Scoped to the chain. Unscoped, this returned every chain's tokens, so a
+  // Base wallet's picker offered Stacks tokens that could never route.
+  const { data: tokensData } = useQuery<{ tokens: Token[] }>({
+    queryKey: ["tokens", chainId],
+    queryFn: () => apiFetch(chainId ? `/tokens?chainId=${encodeURIComponent(chainId)}` : "/tokens"),
+    enabled: chainId !== null,
+  });
+
+  const { data: wallets, isLoading: walletsLoading } = useQuery<WalletItem[]>({
     queryKey: ["wallets"],
     queryFn: () => apiFetch("/me/wallets"),
   });
 
   const tokens = tokensData?.tokens ?? [];
 
+  // Wallets are filtered to the chain: a trade executes from one of these, and
+  // a wallet on another chain cannot run it.
+  const chainWallets = (wallets ?? []).filter((w) => !chainId || w.chain === chainId);
+
+  /**
+   * Default the chain from the user's wallets, then the token pair from that
+   * chain's own native and stable assets.
+   *
+   * Both were hardcoded to Stacks ("STX" / "USDCx") whatever the user held.
+   */
+  useEffect(() => {
+    if (chainId || !wallets?.length) return;
+    // The user's default wallet, not whichever the API listed first — that is
+    // an arbitrary chain to open the trade form on.
+    const preferred = wallets.find((w) => w.isDefault) ?? wallets[0]!;
+    setChainId(preferred.chain ?? null);
+  }, [chainId, wallets]);
+
+  useEffect(() => {
+    if (!activeChain) return;
+    const { nativeSymbol, stableSymbol } = activeChain;
+
+    // Fill only the side the deep link left empty, and never with the token
+    // already on the other side. Arriving from the token pages with
+    // `tokenOut=CELO` — the chain's own native asset, which the discovery
+    // table lists like any other — used to default `tokenIn` to CELO as well
+    // and render a CELO → CELO swap the form was happy to quote.
+    setTokenIn((current) => {
+      if (current) return current;
+      return tokenOut === nativeSymbol ? stableSymbol : nativeSymbol;
+    });
+    setTokenOut((current) => {
+      if (current) return current;
+      return tokenIn === stableSymbol ? nativeSymbol : stableSymbol;
+    });
+    // tokenIn/tokenOut are read to avoid colliding, but adding them as
+    // dependencies would re-run this on every user edit and fight the input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChain]);
+
+  // Selecting a chain drops a wallet that isn't on it, rather than leaving a
+  // selection that would fail at execution.
+  useEffect(() => {
+    setSelectedWalletIds((ids) =>
+      ids.filter((id) => chainWallets.some((w) => w.id === id))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainId]);
+
   const tokenInObj = tokens.find(t => t.contractId === tokenIn || t.symbol === tokenIn);
   const tokenInSymbol = tokenInObj ? tokenInObj.symbol : tokenIn;
 
   const { data: quote, isFetching: quoteLoading, error: quoteError } = useQuery<QuoteResult, Error>({
-    queryKey: ["quote", tokenIn, tokenOut, amount],
-    queryFn: () =>
-      apiFetch(
-        `/me/trades/quote?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`
-      ),
+    queryKey: ["quote", tokenIn, tokenOut, amount, selectedWalletIds[0] ?? chainId],
+    queryFn: () => {
+      const params = new URLSearchParams({ tokenIn, tokenOut, amountIn: amount });
+      // The wallet is what the trade executes from, so it is what the quote
+      // must be scoped to. Without it the server asked every provider on every
+      // chain and returned whichever answered first.
+      if (selectedWalletIds[0]) params.set("walletId", String(selectedWalletIds[0]));
+      else if (chainId) params.set("chainId", chainId);
+      return apiFetch(`/me/trades/quote?${params}`);
+    },
     enabled:
       !!tokenIn &&
       !!tokenOut &&
@@ -130,6 +268,33 @@ export function Trade() {
     setSelectedDex(null);
   }, [tokenIn, tokenOut, amount, direction]);
 
+  // Deep-link arrival: pick a wallet on the requested chain and focus the
+  // amount field, so the user's only remaining action is typing a number.
+  // Runs once — after that the user's own wallet choice must win.
+  const prefillApplied = useRef(false);
+  useEffect(() => {
+    if (prefillApplied.current) return;
+    if (!prefillChainId || !wallets || wallets.length === 0) return;
+    prefillApplied.current = true;
+
+    const walletChain = (w: WalletItem) => w.chainId ?? w.chain;
+    const compatible = wallets.filter((w) => walletChain(w) === prefillChainId);
+
+    if (compatible.length === 0) {
+      // Don't silently trade on the wrong chain. Say so, and leave the user to
+      // create a wallet — a same-ticker token on another chain is a different
+      // asset entirely.
+      setPrefillNotice(
+        `You have no wallet on ${prefillChainId}. Create one to trade this token.`
+      );
+      return;
+    }
+
+    const preferred = compatible.find((w) => w.balance > 0) ?? compatible[0]!;
+    setSelectedWalletIds([preferred.id]);
+    amountRef.current?.focus();
+  }, [prefillChainId, wallets]);
+
   const toggleWallet = (id: number) => {
     setMsg(null);
     setSelectedWalletIds((prev) =>
@@ -137,13 +302,18 @@ export function Trade() {
     );
   };
 
-  const totalSelectedStxBalance =
-    wallets
-      ?.filter((w) => selectedWalletIds.includes(w.id))
+  // Summed only over the wallets on the selected chain — `chainWallets` is
+  // already filtered, so this cannot add an ETH balance to an STX one.
+  const totalSelectedNativeBalance =
+    chainWallets
+      .filter((w) => selectedWalletIds.includes(w.id))
       .reduce((sum, w) => sum + w.balance, 0) ?? 0;
 
-  const combinedBalance = tokenIn === "STX"
-    ? totalSelectedStxBalance
+  // The native leg is whatever this chain calls it, not "STX". On Base the
+  // literal sent every native-ETH trade down the token-balance branch, which
+  // looked right only because the balances map happens to carry ETH too.
+  const combinedBalance = tokenIn === activeChain?.nativeSymbol
+    ? totalSelectedNativeBalance
     : selectedWalletIds.reduce((sum, id) => {
       const wBalances = walletsBalances[id];
       if (!wBalances) return sum;
@@ -278,7 +448,109 @@ export function Trade() {
       {activeTab === "history" && <TradeHistory />}
 
       {activeTab === "swap" && (
-        <div className="max-w-lg mx-auto">
+        <div className="max-w-lg mx-auto space-y-4">
+          {/* Chain selector.
+            *
+            * The page had none: tokens, defaults and the quote were all
+            * implicitly Stacks, so holding a Base wallet gave you a Stacks
+            * token picker and a quote for a trade that could not execute.
+            * Everything below is scoped to whatever is chosen here. */}
+          {chains.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {chains.map((c) => (
+                <button
+                  key={c.chainId}
+                  onClick={() => {
+                    setChainId(c.chainId);
+                    // Cleared rather than carried over: a symbol from the old
+                    // chain is at best unroutable here and at worst a
+                    // different asset with the same ticker.
+                    setTokenIn(c.nativeSymbol);
+                    setTokenOut(c.stableSymbol);
+                    setAmount("");
+                  }}
+                  className={classNames(
+                    "px-3 py-1.5 rounded-full text-xs font-semibold transition-colors",
+                    chainId === c.chainId
+                      ? "bg-brand-500 text-white"
+                      : "bg-card-bg text-muted-text hover:text-title-text"
+                  )}
+                >
+                  {c.displayName}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Only once the query has settled. The wallets endpoint reads live
+            * balances per chain and takes seconds, and rendering the empty
+            * state meanwhile told users to create a wallet they already had —
+            * then swapped it for their wallet a moment later. */}
+          {chainId && !walletsLoading && chainWallets.length === 0 && (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+              No wallet on {activeChain?.displayName ?? chainId}. Create one before trading here.{" "}
+              <Link to="/wallets" className="underline hover:no-underline">
+                Go to Wallets
+              </Link>
+            </div>
+          )}
+
+          {/* Pending Social Trade Banner */}
+          {confirmToken && (
+            <div className="bg-gradient-to-r from-violet-900/40 via-brand-950/40 to-violet-900/40 border border-violet-500/30 rounded-3xl p-5 space-y-3 backdrop-blur shadow-xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Share2 className="w-5 h-5 text-violet-400" />
+                  <span className="text-sm font-bold text-title-text uppercase tracking-wider">
+                    Social Trade Authorization
+                  </span>
+                </div>
+                <span className="flex items-center gap-1 text-xs text-amber-400 font-medium bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">
+                  <Clock className="w-3.5 h-3.5" /> 5-Min TTL
+                </span>
+              </div>
+
+              {pendingSocialLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-text py-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-violet-400" /> Loading mention details...
+                </div>
+              ) : pendingSocialData?.command ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-text/90 italic bg-input-bg/60 p-3 rounded-2xl border border-divider-color/40">
+                    &quot;{pendingSocialData.command.rawText}&quot;
+                  </p>
+                  <div className="flex items-center justify-between text-xs text-title-text font-medium bg-violet-500/10 p-3 rounded-2xl border border-violet-500/20">
+                    <span>Requested Command:</span>
+                    <span className="font-bold text-violet-300 uppercase">
+                      {pendingSocialData.command.parsedIntent?.action}{" "}
+                      {pendingSocialData.command.parsedIntent?.amount}{" "}
+                      {pendingSocialData.command.parsedIntent?.token}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => confirmSocialMutation.mutate(confirmToken)}
+                    disabled={confirmSocialMutation.isPending}
+                    className="w-full py-3 bg-gradient-to-r from-violet-600 to-brand-500 hover:from-violet-500 hover:to-brand-400 text-white font-bold text-sm rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-50"
+                  >
+                    {confirmSocialMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Authorizing...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" /> Confirm & Execute Social Trade
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-red-400">
+                  Invalid or expired confirmation link. Please check your social post reply for updated details.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="bg-card-bg/80 backdrop-blur border border-card-border rounded-3xl p-1 space-y-1 shadow-2xl">
             {/* Multi-wallet selector */}
             <div className="px-4 pt-4 pb-2 space-y-2">
@@ -286,11 +558,17 @@ export function Trade() {
                 <Wallet className="w-3.5 h-3.5" />
                 <span>Select Wallets</span>
               </div>
-              {!wallets?.length ? (
-                <p className="text-xs text-muted-text/80 py-1">No wallets found.</p>
+              {!chainWallets.length ? (
+                <p className="text-xs text-muted-text/80 py-1">
+                  {wallets?.length
+                    ? `No wallet on ${activeChain?.displayName ?? "this chain"}.`
+                    : "No wallets found."}
+                </p>
               ) : (
                 <MultiWalletSelect
-                  wallets={wallets}
+                  // Only wallets on the selected chain: a trade executes from
+                  // one of these, and one on another chain cannot run it.
+                  wallets={chainWallets}
                   selectedIds={selectedWalletIds}
                   onChange={(ids) => {
                     setSelectedWalletIds(ids);
@@ -340,6 +618,7 @@ export function Trade() {
               </div>
               <div className="flex items-center gap-3">
                 <input
+                  ref={amountRef}
                   value={amount}
                   onChange={(e) => {
                     setAmount(e.target.value);
@@ -352,6 +631,7 @@ export function Trade() {
                 />
                 <TokenSelect
                   tokens={tokens}
+                  chainId={chainId ?? undefined}
                   value={tokenIn}
                   onChange={(v) => {
                     setTokenIn(v);
@@ -391,6 +671,7 @@ export function Trade() {
                 </div>
                 <TokenSelect
                   tokens={tokens}
+                  chainId={chainId ?? undefined}
                   value={tokenOut}
                   onChange={(v) => {
                     setTokenOut(v);
@@ -494,6 +775,11 @@ export function Trade() {
               </div>
             )}
 
+            {prefillNotice && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                {prefillNotice}
+              </div>
+            )}
             {msg && (
               <div
                 className={classNames(

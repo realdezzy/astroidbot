@@ -35,7 +35,7 @@ Every sub-screen has **← Back** and **🏠 Home** buttons. Back returns to the
 
 Execute a swap in 4 taps:
 
-1. **Tap 🛒 Quick Trade** → pick a token from the 16 available tokens (e.g. sUSDT)
+1. **Tap 🛒 Quick Trade** → pick a token from the 16 available tokens (e.g. USDCx)
 2. **Choose direction** — 🟢 BUY (spend STX to get the token) or 🔴 SELL (sell the token for STX)
 3. **Type the amount** — reply with a number like `5.0` (STX amount to spend/receive)
 4. **Confirm** — review the quote: estimated output, fee, price impact, wallet used. Tap **✅ Confirm Trade** to execute.
@@ -116,7 +116,7 @@ You don't need to remember commands. Just type naturally:
 
 | You say | Bot does |
 |---------|----------|
-| "buy 10 STX for sUSDT" | Executes a BUY trade |
+| "buy 10 STX for USDCx" | Executes a BUY trade |
 | "show my portfolio" | Opens portfolio screen |
 | "how do I create a wallet?" | Explains wallet creation |
 | "what can you do?" | Lists platform features |
@@ -156,3 +156,25 @@ If you're an admin (configured via `TELEGRAM_ADMIN_IDS`), you also have:
 | `/ai` | AI assistant (opens agents) |
 | `/link_email` | Link email for web access |
 | `/cancel` | Abort any active input flow |
+
+
+## Token lookup
+
+`/token <symbol or contract address>` resolves anything the platform knows
+about and shows price, liquidity, chain and contract, with a Trade button that
+pre-fills the wizard.
+
+Resolution walks outward from most trustworthy to least — the DEX providers'
+curated lists, then the token catalogue, then what the indexer has seen
+trading, then a bare contract address on a known chain — and **every result
+says which of those it came from**. A ticker on its own is not evidence of
+anything, and an address anyone can paste is exactly where a token with a
+spoofed symbol lands, so provenance is shown as prominently as the price.
+
+A symbol matching on several chains is never resolved silently: `USDC` exists
+on five, and picking one for the user is how somebody buys the right ticker on
+the wrong network. The bot asks.
+
+The same resolver backs the trade wizard's "Enter Custom Token Symbol" step, so
+addresses and indexer-discovered tokens are now accepted there too. Both warn
+before the amount step when the token is not on a curated list.

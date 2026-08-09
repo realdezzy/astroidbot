@@ -66,7 +66,7 @@ Agents are created via the web dashboard. On Telegram, tap **🤖 Agents** to vi
 6. Select wallets
 7. Click **Add Strategy**
 
-An agent can have multiple strategies. For example, one agent might run DCA on sUSDT AND a sniper strategy on new tokens simultaneously.
+An agent can have multiple strategies. For example, one agent might run DCA on USDCx AND a sniper strategy on new tokens simultaneously.
 
 ## Running an Agent
 

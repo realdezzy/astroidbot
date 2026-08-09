@@ -2,13 +2,12 @@ import {
   makeContractCall,
   makeSTXTokenTransfer,
   broadcastTransaction,
-  AnchorMode,
   PostConditionMode,
   FungibleConditionCode,
-  PostConditionType,
   Cl,
   Pc,
   type ClarityValue,
+  type PostCondition,
 } from "@stacks/transactions";
 import { createNetwork } from "@stacks/network";
 import axios from "axios";
@@ -17,13 +16,13 @@ import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { KMSService } from "./kms.js";
 import { RedisService } from "./redis.js";
-import type { RebalanceAction } from "../types.js";
+import type { ClarityArgs, RebalanceAction } from "../types.js";
 import { VelumXClient, RelayerError } from "@velumx/sdk";
 import { CircuitBreakerRegistry } from "../utils/circuitBreaker.js";
 
 export class TransactionService {
   private static instance: TransactionService;
-  private readonly network: any;
+  private readonly network: ReturnType<typeof createNetwork>;
   private readonly activeConfirmations = new Set<string>();
 
   private constructor() {
@@ -59,19 +58,19 @@ export class TransactionService {
     contractAddress: string,
     contractName: string,
     functionName: string,
-    functionArgs: any[],
+    functionArgs: ClarityArgs,
     walletId: number,
     senderAddress: string,
     maxOutbound: number,
     useGasless = false,
-    postConditionsOverride?: any[]
+    postConditionsOverride?: PostCondition[]
   ): Promise<{ txId: string } | { error: string }> {
     const db = DatabaseService.getInstance();
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
-    const lockAcquired = await redis.acquireLock(lockKey, 30_000);
+    const lockToken = await redis.acquireLock(lockKey, 30_000);
 
-    if (!lockAcquired) {
+    if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
 
@@ -93,7 +92,7 @@ export class TransactionService {
         ? (functionArgs as ClarityValue[])
         : parseClarityArgs(functionArgs as string[]);
 
-      let tx: any = null;
+      let tx: Awaited<ReturnType<typeof makeContractCall>> | null = null;
       let txId: string = "";
       const config = ConfigManager.getInstance().config;
       let usedGaslessExecution = false;
@@ -202,6 +201,12 @@ export class TransactionService {
           postConditions,
         });
 
+        // Captured into a const for the broadcast closures below. `tx` is a
+        // `let` the gasless path may have reset to null, and TypeScript widens
+        // a captured mutable back to its declared type inside a closure — so
+        // without this the narrowing done here is lost at the call site.
+        const signedTx = tx;
+
         if (config.DRY_RUN) {
           logger.info("DRY RUN: would broadcast transaction", {
             contractAddress,
@@ -215,7 +220,9 @@ export class TransactionService {
         }
 
         const stacksRpc = CircuitBreakerRegistry.getBreaker("StacksRpc");
-        const result = await stacksRpc.execute(() => broadcastTransaction({ transaction: tx, network: this.network }));
+        const result = await stacksRpc.execute(() =>
+          broadcastTransaction({ transaction: signedTx, network: this.network })
+        );
         if ("error" in result && result.error) {
           logger.error("Transaction broadcast rejected by node", {
             error: result.error,
@@ -232,7 +239,9 @@ export class TransactionService {
         const admitted = await this.verifyMempoolAdmission(txId);
         if (!admitted) {
           logger.warn("Transaction broadcasted but not visible in mempool. Re-broadcasting...", { txId });
-          const retryResult = await stacksRpc.execute(() => broadcastTransaction({ transaction: tx, network: this.network }));
+          const retryResult = await stacksRpc.execute(() =>
+            broadcastTransaction({ transaction: signedTx, network: this.network })
+          );
           if ("error" in retryResult && retryResult.error) {
             throw new Error(`Re-broadcast failed: ${retryResult.error} - ${retryResult.reason || ""}`);
           }
@@ -250,7 +259,7 @@ export class TransactionService {
       logger.error("Transaction failed", { error: message, action });
       return { error: message };
     } finally {
-      await redis.releaseLock(lockKey);
+      await redis.releaseLock(lockKey, lockToken);
     }
   }
 
@@ -265,9 +274,9 @@ export class TransactionService {
     const db = DatabaseService.getInstance();
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
-    const lockAcquired = await redis.acquireLock(lockKey, 30_000);
+    const lockToken = await redis.acquireLock(lockKey, 30_000);
 
-    if (!lockAcquired) {
+    if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
 
@@ -449,7 +458,7 @@ export class TransactionService {
       logger.error("Transfer failed", { error: message, token, amount, toAddress });
       return { error: message };
     } finally {
-      await redis.releaseLock(lockKey);
+      await redis.releaseLock(lockKey, lockToken);
     }
   }
 
@@ -729,8 +738,8 @@ export class TransactionService {
     senderAddress: string,
     contractAddress: string,
     txFee: bigint,
-    overridePostConditions?: any[]
-  ): any[] {
+    overridePostConditions?: PostCondition[]
+  ): PostCondition[] {
     // Provider-supplied post conditions are computed in exact base units by the DEX SDK.
     // Trust them entirely rather than rebuilding — our local rebuild only understands
     // BUY/SELL direction and would overwrite the SDK's strict Equal/GreaterEqual conditions.

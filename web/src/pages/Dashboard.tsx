@@ -36,9 +36,13 @@ interface TradeSummary {
     direction: string;
     amountIn: number;
     amountOut: number;
+    /** Null when the trade's tokens had no quotable price at execution time. */
+    amountInUsd?: number | null;
+    amountOutUsd?: number | null;
     status: string;
     tokenIn: string;
     tokenOut: string;
+    chain?: string;
   }>;
   total: number;
 }
@@ -73,9 +77,15 @@ export function Dashboard() {
       (t) => t.status === "PENDING" || t.status === "BROADCAST"
     ) ?? [];
 
+  // Summed in USD, which is the only unit that means anything across chains —
+  // and, as it happens, across tokens at all. This previously added raw token
+  // amounts together and labelled the total "STX", so a Base swap of 0.5 WETH
+  // and a Stacks swap of 40 STX contributed to the same number as though they
+  // were the same asset.
   const dailyPnl = confirmedTrades.reduce((sum, t) => {
-    if (t.direction === "BUY") return sum - t.amountIn;
-    return sum + (t.amountOut - t.amountIn);
+    const inUsd = t.amountInUsd ?? 0;
+    const outUsd = t.amountOutUsd ?? 0;
+    return sum + (outUsd - inUsd);
   }, 0);
 
   return (
@@ -157,7 +167,7 @@ export function Dashboard() {
         <StatCard
           icon={dailyPnl >= 0 ? TrendingUp : TrendingDown}
           label="Daily PnL"
-          value={`${dailyPnl >= 0 ? "+" : ""}${formatNumber(dailyPnl, 2)} STX`}
+          value={`${dailyPnl >= 0 ? "+" : ""}${formatUSD(dailyPnl)}`}
           trend={dailyPnl >= 0 ? "up" : "down"}
         />
       </div>

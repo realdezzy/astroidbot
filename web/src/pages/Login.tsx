@@ -1,26 +1,40 @@
 import { useState, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { Bot, Mail, MessageCircle } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 export function Login() {
   const { user, login, loginWithEmail, loading, error } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Where to land after signing in. Set by the public token pages so a user who
+  // clicked "Trade" arrives at the prefilled trade form rather than a bare
+  // dashboard with their choice discarded.
+  //
+  // Only same-origin relative paths are honoured: an attacker-supplied
+  // absolute URL here would turn the login page into an open redirect, and
+  // "//evil.com" is a protocol-relative URL, not a local path.
+  const rawRedirect = searchParams.get("redirect");
+  const redirectTo =
+    rawRedirect && rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
+      ? rawRedirect
+      : "/dashboard";
   const [tab, setTab] = useState<"email" | "telegram">("email");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user) navigate("/dashboard", { replace: true });
-  }, [user, navigate]);
+    if (user) navigate(redirectTo, { replace: true });
+  }, [user, navigate, redirectTo]);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
     try {
       await loginWithEmail(email, password);
-      navigate("/dashboard", { replace: true });
+      navigate(redirectTo, { replace: true });
     } catch {
       setLoginError(error || "Invalid email or password");
     }
@@ -36,7 +50,7 @@ export function Login() {
         auth_date: Number(data.auth_date),
         hash: data.hash as string,
       });
-      navigate("/dashboard", { replace: true });
+      navigate(redirectTo, { replace: true });
     } catch {
       setLoginError("Telegram authentication failed");
     }
@@ -50,7 +64,7 @@ export function Login() {
             <img src="/logo.png" alt="AstroidBot Logo" className="w-16 h-16 object-contain" />
           </div>
           <h1 className="text-2xl font-bold text-white">AstroidBot</h1>
-          <p className="text-gray-400 mt-1">AI-Powered Trading Bot for Stacks</p>
+          <p className="text-gray-400 mt-1">AI-Powered Multichain Trading Bot</p>
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">

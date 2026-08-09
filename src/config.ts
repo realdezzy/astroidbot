@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import { z } from "zod";
 import { logger, Logger } from "./utils/logger.js";
-import { LogLevel } from "./types.js";
 
 dotenv.config();
 
@@ -27,7 +26,7 @@ const envSchema = z.object({
   DUST_THRESHOLD_USD: z.coerce.number().positive().default(0.5),
   TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_BOT_USERNAME: z.string().default(""),
-  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
+  TELEGRAM_WEBHOOK_URL: z.preprocess((val) => (val === "" ? undefined : val), z.string().url().optional()),
   TELEGRAM_ADMIN_IDS: z.string().default(""),
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(14).default(12),
   SMTP_HOST: z.string().default(""),
@@ -48,6 +47,159 @@ const envSchema = z.object({
   KMS_PROVIDER: z.enum(["aws", "gcp", "local"]).default("local"),
   KMS_KEY_ID: z.string().optional(),
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
+  BASE_NETWORK: z.enum(["mainnet", "sepolia"]).default("sepolia"),
+  BASE_RPC_URL: z.string().url().optional(),
+  PIMLICO_API_KEY: z.string().optional(),
+  // Comma-separated ChainIds this deployment transacts on.
+  //
+  // **Multichain by default.** One chain per execution family — a Clarity
+  // chain, an EVM chain, and an SVM chain — because that is what this product
+  // is, and because a single-chain default made every multichain surface
+  // impossible to see: pickers rendered one option, the aggregation bugs that
+  // only appear with two chains stayed hidden, and "does the wallet flow work
+  // on Solana" could not be answered by running the app.
+  //
+  // Every chain here works with no credentials beyond a database and Redis.
+  // Base prefers ERC-4337 but falls back to EOA custody without
+  // PIMLICO_API_KEY, so this list never blocks a first boot.
+  //
+  // Two EVM chains, not one: Base for the depth, and Robinhood Chain because
+  // it is what this platform is aimed at — an Arbitrum Orbit L2 for tokenized
+  // equities and RWAs, with its own Uniswap V3 deployment and no bundler, so
+  // it runs EOA custody natively. Having two also keeps the case that used to
+  // break honest: a family-keyed registry silently dropped the second EVM
+  // chain, and a default with only one would never show it.
+  //
+  // Deliberately *not* included: Ethereum mainnet, which is fine to trade but
+  // is not practical to index through a public RPC (see Docs/market-data.md),
+  // and the testnets. Add either with one env var.
+  //
+  // A chain named here that isn't in the descriptor catalogue is a startup
+  // failure, never a silent skip.
+  ENABLED_CHAINS: z
+    .string()
+    .default("stacks:mainnet,base:mainnet,robinhood:mainnet,solana:mainnet"),
+  // JSON array of EvmChainSpec for networks not in the built-in catalogue —
+  // the supported path for an L2 whose router addresses we can't pin from
+  // here. See descriptors/defineEvmChain.ts.
+  CUSTOM_EVM_CHAINS: z.string().default(""),
+  // Jupiter's keyed tier. Without it the free lite-api host is used, which is
+  // rate-limited per IP — fine for a single deployment, not for one serving
+  // many users' quotes.
+  JUPITER_API_KEY: z.string().optional(),
+
+  // ─── Market data ───────────────────────────────────────────────────────────
+  // Where token prices, volume and transaction counts come from.
+  //   internal    — our own swap index. Production.
+  //   dexscreener — third-party API. Development only; it puts someone else's
+  //                 rate limit in our request path.
+  //   auto        — internal, falling back per chain while an index warms up.
+  MARKET_DATA_PROVIDER: z.enum(["internal", "dexscreener", "auto"]).default("internal"),
+
+  // Ingestion runs in the indexer process (src/indexer.ts) and nowhere else.
+  // There is no flag for this: the API process has no ingestion code path to
+  // enable, and a deployment that doesn't want market data doesn't run the
+  // container. A flag would only have described which processes were disobeying
+  // the rule.
+  //
+  // How often that process ingests. Unset means POLL_INTERVAL_SECONDS — the
+  // cadence the numbers were designed around — but the two processes have
+  // genuinely different cost profiles and a deployment may want the indexer
+  // slower.
+  INDEXER_POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().optional(),
+  // Health port for the indexer process. It serves nothing else — this exists
+  // so the container has something to health-check.
+  INDEXER_PORT: z.coerce.number().int().positive().default(8007),
+  // TTL on the per-chain ingestion lock. Sized well above a normal run: the
+  // lock is what stops two processes ingesting the same chain and
+  // double-counting additively-accumulated volume, and expiring it early would
+  // hand that guarantee away.
+  INDEXER_LOCK_TTL_MS: z.coerce.number().int().positive().default(300_000),
+  // Blocks to stay behind the head. The cursor must never enter a range that
+  // can still be reorged out, or ingested volume becomes unattributable.
+  INDEXER_CONFIRMATIONS: z.coerce.number().int().min(0).default(12),
+  // Blocks per eth_getLogs call. Most providers cap the range; 2000 is a
+  // widely-accepted ceiling.
+  INDEXER_BLOCK_CHUNK_SIZE: z.coerce.number().int().positive().default(2_000),
+  // Ceiling per tick, so a chain that has fallen behind catches up across
+  // several cycles instead of monopolising one.
+  INDEXER_MAX_BLOCKS_PER_RUN: z.coerce.number().int().positive().default(20_000),
+  // How far back a never-indexed chain starts. Deliberately not a full
+  // backfill: discovery pages want what is trading now.
+  INDEXER_INITIAL_LOOKBACK_BLOCKS: z.coerce.number().int().positive().default(50_000),
+  // Swap-bearing transactions inspected per tick on transaction-shaped chains
+  // (Stacks). The EVM cap is in blocks, which is the wrong unit here: Stacks
+  // ingestion costs one request per swap, so the thing worth bounding is
+  // swaps, not the range they fall in.
+  INDEXER_MAX_TX_PER_RUN: z.coerce.number().int().positive().default(300),
+  // Pools tracked per chain, most-recently-active first.
+  INDEXER_MAX_POOLS_PER_CHAIN: z.coerce.number().int().positive().default(300),
+  // Addresses per log filter; providers reject very large arrays.
+  INDEXER_MAX_ADDRESSES_PER_FILTER: z.coerce.number().int().positive().default(100),
+  // Times a failing log range may be halved before the indexer gives up on it.
+  // Providers cap by *result count*, not block range, so no fixed chunk size is
+  // safe and subdivision is the only reliable response.
+  INDEXER_MAX_SPLIT_DEPTH: z.coerce.number().int().min(0).default(12),
+  // Pause before the single retry a transient RPC failure gets. Transient
+  // failures are not retried recursively — that turns one slow endpoint into a
+  // request storm against an endpoint that is already struggling.
+  INDEXER_RETRY_BACKOFF_MS: z.coerce.number().int().min(0).default(1_000),
+  // Below this, a pool's quoted price is whatever the last trader decided, so
+  // activity is still counted but the price is not trusted.
+  INDEXER_MIN_POOL_LIQUIDITY_USD: z.coerce.number().min(0).default(1_000),
+  // Raw swaps older than this are dropped. Shorter than the candle retention
+  // by design: a raw row exists so a bucket can be *recomputed*, and a bucket
+  // old enough to never be rewritten no longer needs its inputs kept.
+  INDEXER_SWAP_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  // Candles older than this are dropped — no window reads them.
+  INDEXER_CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  // How much history the backfill walks back to cover, in hours. Defaults to
+  // the widest window the UI renders: with less than this a freshly-indexed
+  // chain shows a 24H column computed from six hours of data, which is not
+  // visibly wrong and is wrong.
+  INDEXER_BACKFILL_WINDOW_HOURS: z.coerce.number().int().min(0).default(24),
+  // Ceiling on backfilled blocks per tick. Separate from
+  // INDEXER_MAX_BLOCKS_PER_RUN so backfill can be given a smaller share:
+  // history is worth having, but never at the cost of falling behind the head.
+  INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN: z.coerce.number().int().positive().default(10_000),
+  // Sources a transaction-shaped chain backfills per tick — Stacks contracts,
+  // Solana pools. The EVM budget is in blocks, which is the wrong unit for a
+  // family whose history is walked one account at a time: a chain tracking 300
+  // pools would otherwise triple its tick cost the moment backfill started.
+  INDEXER_MAX_BACKFILL_SOURCES_PER_RUN: z.coerce.number().int().positive().default(10),
+  // Walk *all* of history rather than INDEXER_BACKFILL_WINDOW_HOURS of it.
+  // Off by default: the columns the UI renders stop at 24H, so beyond that
+  // this buys chart depth at a cost measured in RPC calls, and on a chain
+  // millions of blocks deep it is days of walking. Enum-transformed rather
+  // than z.coerce.boolean() for the reason given on SOCIAL_TRADING_ENABLED.
+  INDEXER_BACKFILL_FULL_HISTORY: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("false"),
+  // Social trading. Off by default and deliberately so: this surface lets a
+  // public post move real funds, and it should be a considered decision to
+  // enable rather than something that arrives with an upgrade.
+  // Enum-transformed, not z.coerce.boolean(): Boolean("false") is true, so a
+  // coerced kill switch would be *enabled* by the very value meant to disable
+  // it. DRY_RUN above uses the same shape for the same reason.
+  SOCIAL_TRADING_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("false"),
+  SOCIAL_BOT_HANDLES: z.string().default(""),
+  // Caps a newly-verified account starts with. Deliberately small: an account
+  // is linked by posting a code publicly, so the first thing a successful
+  // link should be able to do is very little until the user raises it
+  // deliberately in Settings.
+  SOCIAL_PER_TRADE_LIMIT_USD: z.coerce.number().positive().default(50),
+  SOCIAL_DAILY_LIMIT_USD: z.coerce.number().positive().default(200),
+  X_BEARER_TOKEN: z.string().optional(),
+  NEYNAR_API_KEY: z.string().optional(),
+  // The bot's own Farcaster account id. Numeric and permanent, unlike a
+  // username — mentions are polled against it.
+  FARCASTER_BOT_FID: z.string().optional(),
+  // Reading mentions needs only an API key; posting a reply needs a signer.
+  NEYNAR_SIGNER_UUID: z.string().optional(),
   VELAR_PERP_CONTRACT_ADDRESS: z.string().default("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE"),
   VELAR_PERP_CONTRACT_NAME: z.string().default("velar-artha-perp"),
 });
@@ -101,6 +253,16 @@ export class ConfigManager {
       throw new Error("ConfigManager not initialized. Call ConfigManager.load() first.");
     }
     return ConfigManager.instance;
+  }
+
+  /**
+   * Test-only: drop the cached config so the next load() re-reads process.env.
+   * load() is deliberately idempotent in production — config must not change
+   * under a running process — which leaves tests unable to exercise more than
+   * one environment without this seam.
+   */
+  static reset(): void {
+    ConfigManager.instance = undefined as unknown as ConfigManager;
   }
 
   get allowedTokens(): string[] {

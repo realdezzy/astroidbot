@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { logger } from "../utils/logger.js";
 import { DatabaseService } from "./db.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
@@ -8,8 +7,11 @@ import { PortfolioManager } from "./portfolio.js";
 import { NotificationService } from "./notificationService.js";
 import { RiskManager } from "./riskManager.js";
 import { buildAgentPrompt } from "./ai/prompts/agent.js";
+import { walletChainId, walletNativeSymbol, groupByChainId } from "./chains/walletChain.js";
 import { AgentDecisionSchema } from "../validation/ai/schemas.js";
-import type { RebalanceAction } from "../types.js";
+import { resolveTradeSettings } from "./tradeSettings.js";
+import type { RebalanceAction, SwappableToken } from "../types.js";
+import { Prisma } from "@prisma/client";
 
 interface AgentRunResult {
   actions: number;
@@ -86,18 +88,30 @@ export class AgentService {
       }
 
       const registry = DEXRegistry.getInstance();
-      const tokens = await registry.getSwappableTokens();
       const pm = PortfolioManager.getInstance();
+
+      // A user's wallets can span chains, and each chain has its own token
+      // universe and native asset — resolve both per chain rather than pricing
+      // every wallet's balance as STX. Keyed by ChainId, not family: Base and
+      // Celo are both "evm" but share neither token list nor native asset.
+      const tokensByChain = new Map<string, SwappableToken[]>();
+      await Promise.all(
+        [...groupByChainId(wallets).keys()].map(async (chainId) => {
+          tokensByChain.set(chainId, await registry.getSwappableTokens(false, chainId));
+        })
+      );
 
       const updatedWallets = await Promise.all(
         wallets.map(async (w) => {
+          const chainId = walletChainId(w);
           try {
-            const balances = await pm.fetchBalances(w.address, tokens, agent.userId);
-            const stxBal = balances.find((b) => b.symbol === "STX")?.balance ?? 0;
-            if (stxBal !== w.balance) {
-              await db.updateWalletBalance(w.id, stxBal);
+            const nativeSymbol = walletNativeSymbol(w);
+            const balances = await pm.fetchBalances(w.address, tokensByChain.get(chainId) ?? [], agent.userId);
+            const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
+            if (nativeBal !== w.balance) {
+              await db.updateWalletBalance(w.id, nativeBal);
             }
-            return { ...w, balance: stxBal };
+            return { ...w, balance: nativeBal };
           } catch {
             return w;
           }
@@ -141,7 +155,7 @@ export class AgentService {
 
       await db.prisma.tradeAgent.update({
         where: { id: agent.id },
-        data: { state: state as any },
+        data: { state: state as Prisma.InputJsonValue },
       });
 
       await this.handleAgentSuccess(agentId);
@@ -162,7 +176,7 @@ export class AgentService {
 
   private async runAiOverlay(
     agent: { id: number; userId: number; name: string; context: string; model: string; config: unknown; state: unknown },
-    wallets: Array<{ id: number; address: string; balance: number; isDefault?: boolean }>,
+    wallets: Array<{ id: number; address: string; balance: number; isDefault?: boolean; chainFamily?: string }>,
     state: Record<string, unknown>,
     config: Record<string, unknown>,
     autonomous: boolean,
@@ -196,21 +210,23 @@ export class AgentService {
       const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0];
       const wallet = wallets.find((w) => w.id === (t.walletId ?? defaultWallet?.id));
       if (wallet) {
-          const settings = await db.findTradeSettings(agent.userId, "personal");
-          const maxPct = (config.maxPositionPct as number) ?? (settings?.maxPositionPct ?? 25);
+          const settings = await resolveTradeSettings(agent.userId, "personal", walletChainId(wallet));
+          const maxPct = (config.maxPositionPct as number) ?? settings.maxPositionPct;
           const maxAmount = (wallet.balance * maxPct) / 100;
           const perRunCap = Number(config.maxAutonomousTradeAmount ?? maxAmount);
           const cappedAmount = Math.min(t.amountIn, maxAmount, Number.isFinite(perRunCap) && perRunCap > 0 ? perRunCap : maxAmount);
 
         const action: RebalanceAction = {
-          tokenIn: t.tokenIn ?? "STX",
+          // Required by AgentDecisionSchema — no "STX" fallback, which would
+          // silently pick a Stacks token for a trade on another chain.
+          tokenIn: t.tokenIn,
           tokenOut: t.tokenOut,
           amountIn: cappedAmount,
           direction: t.direction,
           reason: `Agent "${agent.name}" (AI): ${t.reason ?? "autonomous"}`,
         };
 
-        const tokens = await DEXRegistry.getInstance().getSwappableTokens();
+        const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, walletChainId(wallet));
         const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId);
 
           const riskSettings = {
@@ -243,7 +259,8 @@ export class AgentService {
               wallet.id,
             agent.userId,
             wallet.address,
-            riskSettings.slippageBps
+            riskSettings.slippageBps,
+            walletChainId(wallet)
           );
           if (res.executed > 0) {
             executed = true;

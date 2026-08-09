@@ -29,7 +29,7 @@ describe("RegimeDetectionService", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     // Reset the singleton's cache between tests.
-    (RegimeDetectionService as any).instance = undefined;
+    (RegimeDetectionService as unknown as { instance?: unknown }).instance = undefined;
     service = RegimeDetectionService.getInstance();
   });
 
@@ -104,7 +104,7 @@ describe("RegimeDetectionService", () => {
     for (const features of regimes) {
       mockCompute.mockResolvedValueOnce(features);
       // Reset cache between iterations.
-      (service as any).cache = new Map();
+      (service as unknown as { cache: Map<string, unknown> }).cache = new Map();
       const allowed = await service.isStrategyAllowed("dca", "STX");
       expect(allowed).toBe(true);
     }

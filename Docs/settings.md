@@ -27,6 +27,32 @@ Tap **⚙️ Settings** on the main menu. Use ◀ and ▶ buttons to adjust each
 | **Daily Loss Limit (%)** | If daily losses exceed this percentage of portfolio value, further trades are halted. | 0.5–25 | 5% |
 | **Rebalance Threshold (%)** | Minimum allocation drift to trigger portfolio rebalancing. | 0.5–10 | 2% |
 
+### Which settings are per chain
+
+Two layers, and which layer a setting lives in follows from what it bounds.
+
+**Slippage is per chain.** A Stacks AMM and a Solana aggregator are not the same
+trade at the same tolerance. The web Settings page lists every enabled chain
+below the account default; a chain left on *Inherit* uses that default, and
+clearing an override returns it to inheriting rather than pinning it at today's
+value.
+
+**Max position, daily loss limit and rebalance threshold are account-wide.**
+They bound total exposure, so a per-chain copy would let someone running three
+chains take three times the position they asked to be limited to.
+
+**Gas sponsorship is per chain**, and only offered on chains that can sponsor
+at all — ERC-4337 custody with a bundler and a paymaster key. Chains that
+cannot are listed with the reason rather than hidden, so a missing toggle is
+explained instead of mysterious.
+
+> Per-chain preferences live in their own table. They previously shared one
+> with the account settings, and toggling sponsorship for a second chain
+> inserted a duplicate settings row carrying product defaults — after which
+> which risk limits were enforced depended on which row the database returned
+> first. If you are upgrading across that change, the migration keeps your
+> configured row and carries every sponsorship choice across.
+
 ### When Settings Take Effect
 
 Settings are checked at two points:

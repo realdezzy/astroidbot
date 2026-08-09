@@ -16,12 +16,15 @@ import { logger, loggerStorage } from "../utils/logger.js";
 import { AppError, InternalError } from "./errors.js";
 import { WebSocketManager } from "./websocket.js";
 import { DatabaseService } from "../services/db.js";
+import { ChainHealthMonitor } from "../services/chains/chainHealth.js";
 import { authenticate, requireAdmin } from "./middleware/auth.js";
 import { TelegramService } from "../services/telegram.js";
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/user.js";
 import botRoutes from "./routes/bot.js";
 import tokenRoutes from "./routes/tokens.js";
+import chainRoutes from "./routes/chains.js";
+import discoveryRoutes from "./routes/discovery.js";
 import limitOrderRoutes from "./routes/limitOrders.js";
 import strategiesRoutes from "./routes/strategies.js";
 import agentsRoutes from "./routes/agents.js";
@@ -113,7 +116,22 @@ export function createServer(): HttpServer {
       uptime: process.uptime(),
       wsClients: WebSocketManager.getInstance().getConnectedCount(),
       telegramBotUsername: ConfigManager.getInstance().config.TELEGRAM_BOT_USERNAME || null,
+      chains: ChainHealthMonitor.getInstance().snapshot(),
     });
+  });
+
+  /**
+   * Per-chain RPC health.
+   *
+   * Deliberately **not** 503 when a chain is down. This process is serving
+   * requests fine; one chain being unreachable is a degraded capability, not a
+   * dead instance, and returning 503 would have an orchestrator restart a
+   * healthy container over someone else's outage. `degraded: true` is the
+   * signal to alert on; the container-level check stays on /api/health.
+   */
+  app.get("/api/health/chains", (_req: Request, res: Response) => {
+    const monitor = ChainHealthMonitor.getInstance();
+    res.json({ degraded: monitor.anyUnhealthy(), chains: monitor.snapshot() });
   });
 
   app.get("/api/health/liveness", (_req: Request, res: Response) => {
@@ -129,7 +147,9 @@ export function createServer(): HttpServer {
       try {
         const queue = QueueManager.getInstance().getQueue(QUEUES.TRADE_EXECUTION);
         const client = await queue.client;
-        const pingRes = await (client as any).ping();
+        // BullMQ types `queue.client` as its own connection wrapper; ping is
+        // ioredis's and isn't on that type, though it is on the object.
+        const pingRes = await (client as unknown as { ping(): Promise<string> }).ping();
         redisOk = pingRes === "PONG";
       } catch (redisErr) {
         logger.error("Redis readiness check failed", { error: (redisErr as Error).message });
@@ -245,6 +265,12 @@ export function createServer(): HttpServer {
   });
   app.use("/api/bot", botRoutes);
   app.use("/api", tokenRoutes);
+  // Registered AFTER tokenRoutes on purpose: discovery's
+  // /tokens/:chainId/:contractId is the same shape as the existing
+  // /tokens/:pair/price, and mounting it first would swallow that route with
+  // contractId="price".
+  app.use("/api", discoveryRoutes);
+  app.use("/api", chainRoutes);
 
   const webDistPath = path.resolve(__dirname, "../../web/dist");
   if (fs.existsSync(webDistPath)) {

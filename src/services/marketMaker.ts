@@ -3,6 +3,7 @@ import { AIOrchestrator } from "./ai.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { DatabaseService } from "./db.js";
 import { PriceHistoryService } from "./priceHistory.js";
+import { resolveTradeSettings } from "./tradeSettings.js";
 import type { RebalanceAction, TokenBalance } from "../types.js";
 
 export class MarketMakerService {
@@ -21,7 +22,8 @@ export class MarketMakerService {
   async tick(
     userId: number,
     walletId: number,
-    balances: TokenBalance[]
+    balances: TokenBalance[],
+    chainId?: string
   ): Promise<RebalanceAction[]> {
     const db = DatabaseService.getInstance();
     const registry = DEXRegistry.getInstance();
@@ -30,9 +32,9 @@ export class MarketMakerService {
 
     const totalPortfolioValue = balances.reduce((sum, b) => sum + b.usdValue, 0);
 
-    const settings = await db.findTradeSettings(userId, "personal");
-    const maxPositionPct = settings?.maxPositionPct ?? 25;
-    const slippageBps = settings?.slippageBps ?? 100;
+    const settings = await resolveTradeSettings(userId, "personal", chainId);
+    const maxPositionPct = settings.maxPositionPct;
+    const slippageBps = settings.slippageBps;
     const maxGridPositionValue = totalPortfolioValue * (maxPositionPct / 100);
     const baseGridSize = maxGridPositionValue / 20;
 

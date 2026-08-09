@@ -26,10 +26,10 @@ export async function agentDetailsScreen(ctx: BotContext, agentId: number): Prom
     orderBy: { createdAt: "desc" },
   });
 
-  const state = (agent.state as Record<string, any>) ?? {};
+  const state = (agent.state as Record<string, unknown>) ?? {};
   const lastRun = state.lastRun as string | undefined;
   const lastActions = state.lastActions as number | undefined;
-  const lastDecision = state.lastDecision as Record<string, any> | undefined;
+  const lastDecision = state.lastDecision as Record<string, unknown> | undefined;
 
   const lines = [
     `🤖 *Agent Details: ${escapeMd(agent.name)}*`,
@@ -42,7 +42,7 @@ export async function agentDetailsScreen(ctx: BotContext, agentId: number): Prom
     `• Last Run: ${lastRun ? lastRun.slice(0, 16).replace("T", " ") : "Never"}`,
     `• Executed Strategies: \`${state.lastStrategiesExecuted ?? 0}\``,
     `• Executed Actions: \`${lastActions ?? 0}\``,
-    lastDecision ? `• Last Decision Reason: _${escapeMd(lastDecision.reason ?? "N/A")}_` : `• Last Decision Reason: _N/A_`,
+    lastDecision ? `• Last Decision Reason: _${escapeMd(String(lastDecision.reason ?? "N/A"))}_` : `• Last Decision Reason: _N/A_`,
     ``,
     `📈 *Configured Strategies (${strategies.length}):*`,
   ];
@@ -52,7 +52,7 @@ export async function agentDetailsScreen(ctx: BotContext, agentId: number): Prom
   } else {
     strategies.forEach((s) => {
       const activeSymbol = s.isActive ? "🟢" : "⏸";
-      const configStr = Object.entries(s.config as Record<string, any>)
+      const configStr = Object.entries(s.config as Record<string, unknown>)
         .filter(([k]) => k !== "walletIds")
         .map(([k, v]) => `${k}:${v}`)
         .join(", ");

@@ -10,6 +10,9 @@ export interface JwtPayload {
 }
 
 declare global {
+  // Augmenting Express's Request is only expressible as a namespace — this is
+  // the idiom the @types/express docs prescribe, not avoidable legacy syntax.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       userId?: number;

@@ -1,11 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { AgentService } from "../../src/services/agentService.js";
 import { ConfigManager } from "../../src/config.js";
-import { DatabaseService } from "../../src/services/db.js";
-import { DEXRegistry } from "../../src/services/dex/dexRegistry.js";
-import { AIOrchestrator } from "../../src/services/ai.js";
-import { PortfolioManager } from "../../src/services/portfolio.js";
-import { StrategyEngine } from "../../src/services/strategyEngine.js";
 
 const mockDbInstance = {
   findWalletsByUserId: vi.fn(),

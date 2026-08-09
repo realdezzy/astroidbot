@@ -6,6 +6,32 @@ import type { SwappableToken, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote } from "../../types/dexProvider.js";
 import { CircuitBreakerRegistry } from "../../utils/circuitBreaker.js";
 
+/**
+ * Velar's token shape, taken from the SDK's own signature rather than
+ * hand-declared — the package doesn't export the type directly, and a
+ * hand-written copy is a second source of truth that silently rots.
+ */
+type VelarToken = Awaited<ReturnType<typeof getTokensMeta>>[number];
+
+/**
+ * Velar reports a token's precision as the *multiplier* (1000000), as a
+ * string, rather than as the exponent everything else uses.
+ *
+ * This was `Math.log10(t.tokenDecimalNum)` on a value typed `any`, which
+ * worked only because JS coerces the string for arithmetic. Once the SDK's own
+ * type was used it stopped compiling — which is the point: a token whose
+ * multiplier arrives malformed now falls back to 6 rather than producing NaN
+ * decimals and an unspendable amount.
+ */
+function decimalsFromMultiplier(multiplier: string | number | undefined): number {
+  const value = Number(multiplier);
+  if (!Number.isFinite(value) || value <= 0) return 6;
+  const decimals = Math.round(Math.log10(value));
+  return Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 6;
+}
+import type { ClarityValue, PostCondition } from "@stacks/transactions";
+
+
 export class VelarDEXService implements DEXProvider {
   name = "Velar";
   private static instance: VelarDEXService;
@@ -88,12 +114,19 @@ export class VelarDEXService implements DEXProvider {
     try {
       await this.ensureInitialized();
       const tokensMeta = await this.breaker.execute(() => getTokensMeta());
-      this.swappableTokens = tokensMeta.map((t: any) => ({
-        contractId: t.contractAddress,
-        symbol: t.symbol,
-        name: t.name,
-        decimals: Math.round(Math.log10(t.tokenDecimalNum)) || 6,
-      }));
+      // A token with no contract address can't be routed to, and letting one
+      // through produced a SwappableToken whose contractId was undefined —
+      // which reached the quoter as the string "undefined".
+      this.swappableTokens = tokensMeta
+        .filter((t: VelarToken) =>
+          Boolean(t.contractAddress)
+        )
+        .map((t) => ({
+          contractId: t.contractAddress,
+          symbol: t.symbol,
+          name: t.name ?? t.symbol,
+          decimals: decimalsFromMultiplier(t.tokenDecimalNum),
+        }));
       this.tokensCacheExpiry = now + this.TOKEN_CACHE_TTL_MS;
       logger.info(`VelarProvider: cache updated with ${this.swappableTokens.length} tokens`);
     } catch (err) {
@@ -145,7 +178,7 @@ export class VelarDEXService implements DEXProvider {
       } catch {}
 
       const tokensMeta = await this.breaker.execute(() => getTokensMeta());
-      const match = tokensMeta.find((t: any) => t.symbol.toLowerCase() === token.symbol.toLowerCase());
+      const match = tokensMeta.find((t: VelarToken) => t.symbol.toLowerCase() === token.symbol.toLowerCase());
       const price = match ? parseFloat(match.price) : 0;
 
       try {
@@ -256,8 +289,8 @@ export class VelarDEXService implements DEXProvider {
         contractAddress: tx.contractAddress,
         contractName: tx.contractName,
         functionName: tx.functionName,
-        functionArgs: tx.functionArgs as any[],
-        postConditions: tx.postConditions as any[],
+        functionArgs: tx.functionArgs as ClarityValue[],
+        postConditions: tx.postConditions as PostCondition[],
       };
     } catch (err) {
       logger.warn("VelarProvider buildSwapPayload failed", {

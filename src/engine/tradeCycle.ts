@@ -1,13 +1,9 @@
 import { logger } from "../utils/logger.js";
-import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
 import { AIOrchestrator } from "../services/ai.js";
 import { PortfolioManager } from "../services/portfolio.js";
 import { RiskManager } from "../services/riskManager.js";
 import { MarketMakerService } from "../services/marketMaker.js";
-import { TransactionService } from "../services/transaction.js";
-import { TelegramService } from "../services/telegram.js";
-import { WebSocketManager } from "../api/websocket.js";
 import { QueueManager } from "../services/queue.js";
 import type { SwappableToken } from "../types.js";
 
@@ -32,14 +28,10 @@ export async function executeTradeCycle(
   tokens: SwappableToken[],
   settings: TradeSettings
 ): Promise<number> {
-  const db = DatabaseService.getInstance();
   const ai = AIOrchestrator.getInstance();
   const portfolio = PortfolioManager.getInstance();
   const risk = RiskManager.getInstance();
   const marketMaker = MarketMakerService.getInstance();
-  const txService = TransactionService.getInstance();
-  const wss = WebSocketManager.getInstance();
-  const telegram = TelegramService.getInstance();
 
   const balances = await portfolio.fetchBalances(wallet.address, tokens, wallet.userId);
   if (balances.length === 0) {

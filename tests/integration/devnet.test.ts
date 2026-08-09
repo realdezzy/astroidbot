@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { TransactionService } from "../../src/services/transaction.js";
 import { ConfigManager } from "../../src/config.js";
-import { DatabaseService } from "../../src/services/db.js";
-import { RedisService } from "../../src/services/redis.js";
-import { KMSService } from "../../src/services/kms.js";
 import { Cl } from "@stacks/transactions";
 
 // Mock Database, Redis, and KMS to run without needing real databases configured
@@ -67,11 +64,11 @@ describe("TransactionService Devnet Integration Test", () => {
     process.env.DRY_RUN = "false"; // We want to broadcast to the local node
 
     // Reset ConfigManager instance for network settings reload
-    (ConfigManager as any).instance = undefined;
+    (ConfigManager as unknown as { instance?: unknown }).instance = undefined;
     ConfigManager.load();
   });
 
-  it("should connect, estimate fees, sign, broadcast, and confirm a transaction to local devnet", async () => {
+  it("should connect, estimate fees, sign, broadcast, and confirm a transaction to local devnet", async (ctx) => {
     const txService = TransactionService.getInstance();
     
     // We will test using a contract call to the Stacks system pox-4 contract on devnet.
@@ -100,10 +97,11 @@ describe("TransactionService Devnet Integration Test", () => {
         throw new Error("Devnet node returned non-OK status");
       }
       console.log("Local Devnet is online! Proceeding with transaction broadcast...");
-    } catch (err) {
-      console.warn("Devnet node is NOT running locally. Skipping live broadcast validation.");
-      // Skip the test gracefully since devnet isn't running in CI/offline test environment
-      return;
+    } catch {
+      // `ctx.skip()` rather than an early return: returning reported this as a
+      // pass, so a machine with no devnet showed a green test for a broadcast
+      // that never happened.
+      ctx.skip();
     }
 
     const result = await txService.execute(

@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { Search, ChevronDown } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Search, ChevronDown, Globe, AlertTriangle } from "lucide-react";
 import { classNames } from "../lib/utils";
+import { apiFetch } from "../lib/api";
+import { useChains } from "../hooks/useChains";
 
 interface Token {
   contractId: string;
@@ -15,9 +18,34 @@ interface TokenSelectProps {
   onChange: (symbol: string) => void;
   placeholder?: string;
   className?: string;
+  /** Scopes the catalogue search. Without it, results span every chain. */
+  chainId?: string;
 }
 
-const POPULAR_SYMBOLS = ["STX", "USDCx", "USDA", "ALEX", "WELSH"];
+/** A discovery row, which carries more than the tradable list does. */
+interface DiscoveredToken {
+  chainId: string;
+  contractId: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  liquidityUsd: number | null;
+  isVerified: boolean;
+}
+
+/**
+ * Symbols surfaced first in the picker, per chain family.
+ *
+ * A single flat list was Stacks-only, so on Base the "popular" row promoted
+ * five tokens that chain has never heard of and buried the ones it does. Keyed
+ * by family rather than chain because the majors are shared across an EVM
+ * fleet; anything more specific belongs in the descriptor, not here.
+ */
+const POPULAR_BY_FAMILY: Record<string, string[]> = {
+  stacks: ["STX", "USDCx", "USDA", "ALEX", "WELSH"],
+  evm: ["ETH", "WETH", "USDC", "USDT", "DAI"],
+  svm: ["SOL", "USDC", "USDT", "JUP", "BONK"],
+};
 
 export function TokenSelect({
   tokens,
@@ -25,10 +53,12 @@ export function TokenSelect({
   onChange,
   placeholder = "Select token",
   className,
+  chainId,
 }: TokenSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const { byId } = useChains();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -41,6 +71,11 @@ export function TokenSelect({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // The picker already receives a chainId for its remote search; the same value
+  // decides which majors to promote.
+  const family = byId(chainId)?.family;
+  const popularSymbols = (family && POPULAR_BY_FAMILY[family]) ?? [];
+
   const filtered = tokens.filter(
     (t) =>
       t.symbol.toLowerCase().includes(search.toLowerCase()) ||
@@ -49,8 +84,8 @@ export function TokenSelect({
   );
 
   const sortedFiltered = [...filtered].sort((a, b) => {
-    const idxA = POPULAR_SYMBOLS.indexOf(a.symbol);
-    const idxB = POPULAR_SYMBOLS.indexOf(b.symbol);
+    const idxA = popularSymbols.indexOf(a.symbol);
+    const idxB = popularSymbols.indexOf(b.symbol);
     const isPopA = idxA !== -1;
     const isPopB = idxB !== -1;
 
@@ -60,7 +95,32 @@ export function TokenSelect({
     return a.symbol.localeCompare(b.symbol);
   });
 
-  const popularTokens = tokens.filter((t) => POPULAR_SYMBOLS.includes(t.symbol));
+  /**
+   * Search the catalogue when the local list has nothing.
+   *
+   * The tradable list is the handful of tokens the DEX providers hardcode, so
+   * a token the indexer discovered — the entire long tail it exists to surface
+   * — could be looked at on /tokens and not selected here. Contract addresses
+   * had the same problem: nothing in a curated list matches one.
+   *
+   * Only queried on a miss, so the common case costs nothing.
+   */
+  const needsRemote = search.trim().length >= 2 && sortedFiltered.length === 0;
+
+  const { data: remote, isFetching: searching } = useQuery<{ items: DiscoveredToken[] }>({
+    queryKey: ["token-search", search, chainId],
+    queryFn: () =>
+      apiFetch(
+        `/tokens/discover?q=${encodeURIComponent(search.trim())}&pageSize=8` +
+          (chainId ? `&chainId=${encodeURIComponent(chainId)}` : "")
+      ),
+    enabled: needsRemote,
+    staleTime: 30_000,
+  });
+
+  const remoteResults = needsRemote ? (remote?.items ?? []) : [];
+
+  const popularTokens = tokens.filter((t) => popularSymbols.includes(t.symbol));
   const selectedToken = tokens.find((t) => t.symbol === value);
 
   return (
@@ -139,9 +199,49 @@ export function TokenSelect({
 
           {/* Tokens List */}
           <div className="max-h-64 overflow-y-auto divide-y divide-divider-color/20">
-            {sortedFiltered.length === 0 ? (
+            {sortedFiltered.length === 0 && remoteResults.length > 0 ? (
+              <>
+                <div className="px-4 pt-3 pb-1 flex items-center gap-1.5 text-xs text-muted-text">
+                  <Globe className="w-3 h-3" /> From the token catalogue
+                </div>
+                {remoteResults.map((t) => (
+                  <button
+                    key={`${t.chainId}:${t.contractId}`}
+                    onClick={() => {
+                      // The contract, not the symbol: a discovered token has no
+                      // entry in any provider list to look a symbol up in, and
+                      // an address is unambiguous about which token was meant.
+                      onChange(t.contractId);
+                      setOpen(false);
+                      setSearch("");
+                    }}
+                    className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-input-bg transition-colors text-left"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-title-text truncate">
+                        {t.symbol}
+                        {!t.isVerified && (
+                          <AlertTriangle
+                            className="inline w-3 h-3 ml-1.5 text-amber-400"
+                            aria-label="Not on a curated list — check the contract"
+                          />
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-text font-mono truncate">
+                        {t.chainId} · {t.contractId.slice(0, 10)}…
+                      </p>
+                    </div>
+                    {t.liquidityUsd !== null && (
+                      <span className="text-xs text-muted-text whitespace-nowrap">
+                        ${Math.round(t.liquidityUsd).toLocaleString()}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </>
+            ) : sortedFiltered.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-muted-text">
-                No tokens found
+                {searching ? "Searching every chain…" : "No tokens found"}
               </div>
             ) : (
               sortedFiltered.map((t) => (

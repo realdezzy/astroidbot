@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { TransactionService } from "../../src/services/transaction.js";
 import { ConfigManager } from "../../src/config.js";
-import { DatabaseService } from "../../src/services/db.js";
-import { RedisService } from "../../src/services/redis.js";
-import { KMSService } from "../../src/services/kms.js";
 import { Cl } from "@stacks/transactions";
 
 // Retrieve testnet credentials from environment variables
@@ -71,15 +68,16 @@ describe("TransactionService Testnet Integration Test", () => {
     process.env.DRY_RUN = "false"; // We want to broadcast to Testnet
 
     // Reset ConfigManager instance for network settings reload
-    (ConfigManager as any).instance = undefined;
+    (ConfigManager as unknown as { instance?: unknown }).instance = undefined;
     ConfigManager.load();
   });
 
-  it("should connect, estimate fees, sign, broadcast, and confirm a transaction to public Stacks Testnet", async () => {
-    if (!testnetPrivateKey || !testnetAddress) {
-      console.warn("TESTNET_PRIVATE_KEY or TESTNET_ADDRESS not set in env. Skipping Stacks Testnet integration test.");
-      return;
-    }
+  // Skipped *visibly* when the credentials are absent. It used to `return`
+  // early, which reported as a pass — so a suite that had never run once
+  // still contributed to the green count.
+  const withCredentials = testnetPrivateKey && testnetAddress ? it : it.skip;
+
+  withCredentials("should connect, estimate fees, sign, broadcast, and confirm a transaction to public Stacks Testnet", async () => {
 
     const txService = TransactionService.getInstance();
     

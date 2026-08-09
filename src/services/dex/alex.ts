@@ -4,6 +4,7 @@ import { RedisService } from "../redis.js";
 import type { SwappableToken, SwapRoute, TransactionPayload } from "../../types.js";
 import type { DEXProvider, DEXQuote } from "../../types/dexProvider.js";
 import { CircuitBreakerRegistry } from "../../utils/circuitBreaker.js";
+import type { ClarityValue, PostCondition } from "@stacks/transactions";
 
 interface TokenPair {
   tokenX: string;
@@ -281,8 +282,8 @@ export class AlexDEXService implements DEXProvider {
         contractAddress: tx.contractAddress,
         contractName: tx.contractName,
         functionName: tx.functionName,
-        functionArgs: tx.functionArgs as any[],
-        postConditions: tx.postConditions as any[],
+        functionArgs: tx.functionArgs as ClarityValue[],
+        postConditions: tx.postConditions as PostCondition[],
       };
     } catch (err) {
       logger.warn("AlexSDK buildSwapPayload failed", {

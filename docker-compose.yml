@@ -59,6 +59,44 @@ services:
           memory: 512M
           cpus: "2.0"
 
+  # Market-data ingestion. Same image, different entrypoint — see
+  # src/indexer.ts for why this is a separate process at all.
+  indexer:
+    build: .
+    container_name: astroidbot-indexer
+    restart: unless-stopped
+    entrypoint: ["/docker-entrypoint-indexer.sh"]
+    env_file:
+      - .env.docker
+    volumes:
+      - ./docker-entrypoint-indexer.sh:/docker-entrypoint-indexer.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Not just ordering: the bot owns `prisma migrate deploy`, so waiting for
+      # it to be healthy is what guarantees this process starts against a
+      # current schema.
+      bot:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 30s
+      timeout: 5s
+      # Generous: a cold chain's first pass walks INDEXER_INITIAL_LOOKBACK_BLOCKS
+      # before it reports anything, and killing it mid-catch-up would restart
+      # that walk from the same place forever.
+      start_period: 120s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          # Heavier than the bot on both axes: log decoding is CPU-bound and a
+          # wide block range holds a lot of events in memory at once.
+          memory: 1G
+          cpus: "2.0"
+
 volumes:
   pgdata:
   redisdata:

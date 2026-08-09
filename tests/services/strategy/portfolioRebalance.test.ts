@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PortfolioRebalanceStrategy } from "../../../src/services/strategy/portfolioRebalance.js";
-import { DatabaseService } from "../../../src/services/db.js";
-import { AIOrchestrator } from "../../../src/services/ai.js";
-import { PortfolioManager } from "../../../src/services/portfolio.js";
-import { RiskManager } from "../../../src/services/riskManager.js";
-import { PriceHistoryService } from "../../../src/services/priceHistory.js";
 import type { StrategyContext, StrategyState } from "../../../src/types/strategy.js";
 
 const mockUpdate = vi.fn();

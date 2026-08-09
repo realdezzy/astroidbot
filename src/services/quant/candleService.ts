@@ -1,5 +1,7 @@
 import { DatabaseService } from "../db.js";
 import { logger } from "../../utils/logger.js";
+import { DEFAULT_CHAIN_ID } from "../chains/descriptors/index.js";
+import { Prisma } from "@prisma/client";
 
 export interface CandleData {
   open: number;
@@ -58,7 +60,12 @@ export class CandleService {
   /**
    * Records a new swap/price tick and updates candles across all timeframes.
    */
-  async recordPrice(token: string, price: number, volume: number): Promise<void> {
+  async recordPrice(
+    token: string,
+    price: number,
+    volume: number,
+    chainId: string = DEFAULT_CHAIN_ID
+  ): Promise<void> {
     if (price <= 0) return;
     const db = DatabaseService.getInstance();
     const cleanToken = token.toUpperCase();
@@ -74,6 +81,7 @@ export class CandleService {
           await db.prisma.$transaction(async (tx) => {
             const existing = await tx.candle.findFirst({
               where: {
+                chainId,
                 token: cleanToken,
                 timeframe: tf,
                 timestamp: periodStart,
@@ -93,6 +101,7 @@ export class CandleService {
             } else {
               await tx.candle.create({
                 data: {
+                  chainId,
                   token: cleanToken,
                   timeframe: tf,
                   timestamp: periodStart,
@@ -115,12 +124,18 @@ export class CandleService {
   /**
    * Retrieves historical candles for a token/timeframe.
    */
-  async getCandles(token: string, timeframe: string, limit = 100): Promise<CandleData[]> {
+  async getCandles(
+    token: string,
+    timeframe: string,
+    limit = 100,
+    chainId: string = DEFAULT_CHAIN_ID
+  ): Promise<CandleData[]> {
     const db = DatabaseService.getInstance();
     const cleanToken = token.toUpperCase();
 
     let candles = await db.prisma.candle.findMany({
       where: {
+        chainId,
         token: cleanToken,
         timeframe,
       },
@@ -133,7 +148,7 @@ export class CandleService {
     // Auto-seed to prevent cold-start data gaps
     if (candles.length === 0) {
       try {
-        const seeded = await this.autoSeed(cleanToken, timeframe, limit);
+        const seeded = await this.autoSeed(cleanToken, timeframe, limit, chainId);
         return seeded;
       } catch (err) {
         logger.warn("Candle auto-seeding failed", { token, error: err });
@@ -154,11 +169,16 @@ export class CandleService {
   /**
    * Seeds historical candles for testing/cold start
    */
-  private async autoSeed(token: string, timeframe: string, limit: number): Promise<CandleData[]> {
+  private async autoSeed(
+    token: string,
+    timeframe: string,
+    limit: number,
+    chainId: string
+  ): Promise<CandleData[]> {
     const db = DatabaseService.getInstance();
     const registryModule = await import("../dex/dexRegistry.js");
     const registry = registryModule.DEXRegistry.getInstance();
-    const currentPrice = await registry.getTokenPrice(token).catch(() => 1.0);
+    const currentPrice = await registry.getTokenPrice(token, chainId).catch(() => 1.0);
     const startPrice = currentPrice > 0 ? currentPrice : 1.0;
 
     const intervalMsMap: Record<string, number> = {
@@ -171,7 +191,7 @@ export class CandleService {
     };
     const intervalMs = intervalMsMap[timeframe] ?? 60_000;
     const now = Date.now();
-    const candlesToCreate: any[] = [];
+    const candlesToCreate: Prisma.CandleCreateManyInput[] = [];
     let lastPrice = startPrice;
 
     for (let i = limit; i >= 1; i--) {
@@ -185,6 +205,7 @@ export class CandleService {
       const volume = 1000 + Math.random() * 10000;
 
       candlesToCreate.push({
+        chainId,
         token,
         timeframe,
         timestamp: periodStart,
@@ -207,7 +228,7 @@ export class CandleService {
     } catch {}
 
     const candles = await db.prisma.candle.findMany({
-      where: { token, timeframe },
+      where: { chainId, token, timeframe },
       orderBy: { timestamp: "desc" },
       take: limit,
     });

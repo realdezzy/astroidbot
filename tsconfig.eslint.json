@@ -1,0 +1,10 @@
+{
+  // Lint-only project. tsconfig.json deliberately excludes tests/ from the
+  // build (they must not land in dist/), but ESLint's type-aware rules need
+  // every linted file to belong to *some* project — without this, every file
+  // under tests/ fails with "not found in any of the provided project(s)"
+  // and is silently never linted.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "shared/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist", "web"]
+}

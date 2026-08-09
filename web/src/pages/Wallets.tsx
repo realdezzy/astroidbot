@@ -18,19 +18,55 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { WalletDetailsPanel } from "./ui/WalletDetailsPanel";
+import { ChainBadge } from "../components/ChainBadge";
+import { ChainSelect } from "../components/ChainSelect";
+import { useChains, chainLabel, nativeSymbolOf } from "../hooks/useChains";
 import { apiFetch } from "../lib/api";
 import { classNames } from "../lib/utils";
-
-
-
 
 interface WalletRecord {
   id: number;
   address: string;
   name: string;
   balance: number;
+  balanceUsd?: number;
+  /** ChainId — authoritative for everything shown about this wallet. */
+  chain?: string | null;
+  chainFamily?: string;
   isDefault?: boolean;
   createdAt: string;
+}
+
+/**
+ * What a private key looks like on each family, so the import field can say so.
+ *
+ * Keyed by family rather than chain: key format is a property of the signature
+ * scheme, and every EVM chain shares one. The generic fallback is deliberately
+ * vague rather than wrong — a chain family we don't have a hint for should not
+ * be told it needs 64 hex characters.
+ */
+const KEY_HINTS: Record<string, { label: string; placeholder: string }> = {
+  stacks: {
+    label: "Stacks private key",
+    placeholder: "64-character hex private key",
+  },
+  evm: {
+    label: "EVM private key",
+    placeholder: "0x-prefixed 64-character hex private key",
+  },
+  svm: {
+    label: "Solana private key",
+    placeholder: "base58-encoded secret key",
+  },
+};
+
+function keyHint(family: string | undefined): { label: string; placeholder: string } {
+  return (
+    (family ? KEY_HINTS[family] : undefined) ?? {
+      label: "Private key",
+      placeholder: "Paste the private key for this chain",
+    }
+  );
 }
 
 function shortenAddr(addr: string) {
@@ -62,14 +98,27 @@ function CopyButton({ text }: { text: string }) {
 function ImportModal({ onClose }: { onClose: () => void }) {
   const [privateKey, setPrivateKey] = useState("");
   const [name, setName] = useState("");
+  const [chainId, setChainId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const qc = useQueryClient();
+  const { chains, byId } = useChains();
+
+  // Default to the only chain when there is only one, so a single-chain
+  // deployment doesn't make the user tap something with no alternative.
+  const effectiveChainId = chainId ?? (chains.length === 1 ? chains[0]!.chainId : null);
+  const hint = keyHint(byId(effectiveChainId)?.family);
 
   const importMut = useMutation({
     mutationFn: () =>
       apiFetch("/me/wallets/import", {
         method: "POST",
-        body: JSON.stringify({ privateKey: privateKey.trim(), name: name.trim() || undefined }),
+        // chainId decides which adapter derives the address. Omitting it — as
+        // this form used to — silently imported every key as a Stacks wallet.
+        body: JSON.stringify({
+          privateKey: privateKey.trim(),
+          name: name.trim() || undefined,
+          chainId: effectiveChainId,
+        }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["wallets"] });
@@ -103,7 +152,13 @@ function ImportModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <div className="space-y-3">
+        <div className="space-y-4">
+          <ChainSelect
+            value={effectiveChainId}
+            onChange={setChainId}
+            label="Which chain is this key for?"
+            hint="The key format differs per chain, and an address derived on the wrong one is not your wallet."
+          />
           <div>
             <label className="text-xs font-medium text-muted-text block mb-1">Wallet Name (optional)</label>
             <input
@@ -115,22 +170,25 @@ function ImportModal({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="text-xs font-medium text-muted-text block mb-1">Stacks Private Key</label>
+            <label className="text-xs font-medium text-muted-text block mb-1">{hint.label}</label>
             <textarea
               value={privateKey}
               onChange={(e) => setPrivateKey(e.target.value)}
-              placeholder="64-character hex private key..."
+              placeholder={hint.placeholder}
               rows={3}
-              className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text placeholder:text-muted-text focus:border-brand-500 focus:outline-none font-mono resize-none"
+              disabled={!effectiveChainId}
+              className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text placeholder:text-muted-text focus:border-brand-500 focus:outline-none font-mono resize-none disabled:opacity-50"
             />
           </div>
           <button
             onClick={() => importMut.mutate()}
-            disabled={importMut.isPending || !privateKey.trim()}
+            disabled={importMut.isPending || !privateKey.trim() || !effectiveChainId}
             className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {importMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            Import Wallet
+            {effectiveChainId
+              ? `Import on ${chainLabel(effectiveChainId, chains)}`
+              : "Select a chain first"}
           </button>
         </div>
       </div>
@@ -247,16 +305,30 @@ function RevealKeyModal({ wallet, onClose }: { wallet: WalletRecord; onClose: ()
 
 // ─── Create Modal ────────────────────────────────────────────────────────────
 
-function CreateModal({ onClose }: { onClose: () => void }) {
+function CreateModal({
+  onClose,
+  defaultChainId,
+}: {
+  onClose: () => void;
+  defaultChainId?: string | null;
+}) {
   const [name, setName] = useState("");
+  const [chainId, setChainId] = useState<string | null>(defaultChainId ?? null);
   const [error, setError] = useState<string | null>(null);
   const qc = useQueryClient();
+  const { chains } = useChains();
+
+  const effectiveChainId = chainId ?? (chains.length === 1 ? chains[0]!.chainId : null);
 
   const generateMut = useMutation({
     mutationFn: () =>
       apiFetch("/me/wallets/generate", {
         method: "POST",
-        body: JSON.stringify({ name: name.trim() || undefined }),
+        // The chain is chosen before the keypair exists, because the adapter
+        // for that chain is what generates it. Without this the endpoint fell
+        // back to the deployment default and every web-created wallet was a
+        // Stacks wallet, whatever else was enabled.
+        body: JSON.stringify({ name: name.trim() || undefined, chainId: effectiveChainId }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["wallets"] });
@@ -283,26 +355,34 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <div className="space-y-3">
+        <div className="space-y-4">
+          <ChainSelect
+            value={effectiveChainId}
+            onChange={setChainId}
+            label="Which chain should this wallet be on?"
+            hint="A wallet belongs to one chain for life. Create one per chain you want to trade."
+          />
           <div>
             <label className="text-xs font-medium text-muted-text block mb-1">Wallet Name (optional)</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="My Stacks Wallet"
+              placeholder="My Trading Wallet"
               className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text placeholder:text-muted-text focus:border-brand-500 focus:outline-none"
-              onKeyDown={(e) => e.key === "Enter" && generateMut.mutate()}
+              onKeyDown={(e) => e.key === "Enter" && effectiveChainId && generateMut.mutate()}
               autoFocus
             />
           </div>
           <button
             onClick={() => generateMut.mutate()}
-            disabled={generateMut.isPending}
+            disabled={generateMut.isPending || !effectiveChainId}
             className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {generateMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            Create Wallet
+            {effectiveChainId
+              ? `Create on ${chainLabel(effectiveChainId, chains)}`
+              : "Select a chain first"}
           </button>
         </div>
       </div>
@@ -317,8 +397,11 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 
 export function Wallets() {
   const qc = useQueryClient();
+  const { chains } = useChains();
   const [showImport, setShowImport] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  /** Preselects the chain when the create modal is opened from a coverage gap. */
+  const [createChainId, setCreateChainId] = useState<string | null>(null);
   const [revealWallet, setRevealWallet] = useState<WalletRecord | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [selectedWalletId, setSelectedWalletId] = useState<number | null>(null);
@@ -349,16 +432,28 @@ export function Wallets() {
 
   const selectedWallet = wallets.find((w) => w.id === selectedWalletId);
 
+  // Enabled chains the user holds nothing on. Tradable only: prompting someone
+  // to create a wallet on a chain with no router would be an invitation to a
+  // dead end of a different kind.
+  const covered = new Set(wallets.map((w) => w.chain).filter(Boolean));
+  const missingChains = chains.filter((c) => c.tradable && !covered.has(c.chainId));
+
   return (
     <div>
       {showImport && <ImportModal onClose={() => setShowImport(false)} />}
-      {showCreate && <CreateModal onClose={() => setShowCreate(false)} />}
+      {showCreate && (
+        <CreateModal onClose={() => setShowCreate(false)} defaultChainId={createChainId} />
+      )}
       {revealWallet && <RevealKeyModal wallet={revealWallet} onClose={() => setRevealWallet(null)} />}
 
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-title-text">Wallets</h2>
-          <p className="text-muted-text mt-1">Manage your Stacks trading wallets</p>
+          <p className="text-muted-text mt-1">
+            {chains.length > 1
+              ? `Manage your trading wallets across ${chains.length} chains`
+              : "Manage your trading wallets"}
+          </p>
         </div>
         <div className="flex gap-2">
           <button
@@ -368,7 +463,10 @@ export function Wallets() {
             <Download className="w-4 h-4" /> Import
           </button>
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => {
+              setCreateChainId(null);
+              setShowCreate(true);
+            }}
             className="flex items-center gap-2 px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -376,6 +474,29 @@ export function Wallets() {
           </button>
         </div>
       </div>
+
+      {/* Chains with no wallet yet.
+        *
+        * The Trade page already tells a user "no wallet on Base — create one
+        * before trading here", and until now the web app had no way to do
+        * that. This is the other half of that sentence. */}
+      {missingChains.length > 0 && wallets.length > 0 && (
+        <div className="mb-4 p-3 bg-input-bg/60 border border-divider-color rounded-lg flex items-center gap-3 flex-wrap">
+          <span className="text-xs text-muted-text">No wallet yet on</span>
+          {missingChains.map((c) => (
+            <button
+              key={c.chainId}
+              onClick={() => {
+                setCreateChainId(c.chainId);
+                setShowCreate(true);
+              }}
+              className="px-2.5 py-1 rounded-lg border border-divider-color text-xs text-muted-text hover:border-brand-500 hover:text-brand-300 transition-colors"
+            >
+              + {c.displayName}
+            </button>
+          ))}
+        </div>
+      )}
 
       {deleteError && (
         <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400 flex items-center gap-2">
@@ -417,8 +538,9 @@ export function Wallets() {
                       <Wallet className="w-5 h-5 text-brand-400" />
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-semibold text-title-text">{w.name}</p>
+                        {w.chain && <ChainBadge chainId={w.chain} />}
                         {w.isDefault && (
                           <span className="px-1.5 py-0.5 bg-brand-500/20 text-brand-400 text-[10px] font-bold rounded-md uppercase tracking-wider">
                             Default
@@ -476,7 +598,13 @@ export function Wallets() {
                 <div className="flex items-center justify-between border-t border-divider-color pt-3">
                   <span className="text-xs text-muted-text">Balance</span>
                   <span className="text-sm font-semibold text-title-text">
-                    {w.balance.toFixed(4)} <span className="text-muted-text font-normal">STX</span>
+                    {w.balance.toFixed(4)}{" "}
+                    {/* The wallet's own native asset. Labelling every chain's
+                        balance "STX" was not a cosmetic bug: it told a Base
+                        user their ETH balance was in the wrong asset. */}
+                    <span className="text-muted-text font-normal">
+                      {nativeSymbolOf(w.chain, chains)}
+                    </span>
                   </span>
                 </div>
               </div>

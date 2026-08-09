@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RotationalStrategy } from "../../../src/services/strategy/rotational.js";
-import { PriceHistoryService } from "../../../src/services/priceHistory.js";
 import type { StrategyContext, StrategyState } from "../../../src/types/strategy.js";
 
 const mockComputeMomentum = vi.fn();

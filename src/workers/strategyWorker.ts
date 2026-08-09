@@ -3,7 +3,6 @@ import { DatabaseService } from "../services/db.js";
 import { DEXRegistry } from "../services/dex/dexRegistry.js";
 import { PortfolioManager } from "../services/portfolio.js";
 import { PriceHistoryService } from "../services/priceHistory.js";
-import { RiskManager } from "../services/riskManager.js";
 import { NotificationService } from "../services/notificationService.js";
 import { STRATEGY_REGISTRY } from "../services/strategy/registry.js";
 import { MarketDataService } from "../services/quant/marketData.js";
@@ -15,9 +14,12 @@ import { AIOrchestrator } from "../services/ai.js";
 import { ConfigManager } from "../config.js";
 import type { StrategyContext, StrategyState } from "../types/strategy.js";
 import type { StrategyRunJob } from "../services/queue.js";
+import { walletChainId } from "../services/chains/walletChain.js";
 import { executeApprovedActions } from "../services/strategyEngine.js";
 import { logger } from "../utils/logger.js";
 import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
+import { resolveTradeSettings } from "../services/tradeSettings.js";
+import { Prisma } from "@prisma/client";
 
 
 export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void> {
@@ -38,8 +40,12 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   const wallet = await db.prisma.wallet.findUnique({ where: { id: walletId } });
   if (!wallet || wallet.userId !== userId) return;
 
-  const settings = await db.findTradeSettings(userId, "personal");
-  if (!settings) return;
+  // Resolved against this wallet's chain: a strategy running a Solana wallet
+  // gets Solana's slippage, not whatever the account happens to default to.
+  // Previously a user with no settings row at all returned here and their
+  // strategies simply never ran.
+  const chainId = walletChainId(wallet);
+  const settings = await resolveTradeSettings(userId, "personal", chainId);
 
   // Load the associated TradeAgent (if any) to check the aiMode setting.
   let aiMode = "off";
@@ -53,7 +59,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
     if (activeAgent) aiMode = activeAgent.aiMode;
   }
 
-  const tokens = await registry.getSwappableTokens();
+  const tokens = await registry.getSwappableTokens(false, chainId);
   const tokenSymbols = tokens.map(t => t.symbol);
   const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
   if (balances.length === 0) return;
@@ -101,6 +107,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
     userId,
     walletId,
     address: wallet.address,
+    chainId,
     balances,
     tokens,
     settings,
@@ -176,11 +183,11 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   // Persist state mutations written by the strategy (e.g. lastAiRefresh, wasAboveHigh).
   await db.prisma.tradingStrategy.update({
     where: { id: strategyId },
-    data: { state: state as any },
+    data: { state: state as Prisma.InputJsonValue },
   });
 
   const slippageBps = (config.maxSlippageBps as number) ?? settings.slippageBps;
-  const { executed, attempted } = await executeApprovedActions(sizedActions, walletId, userId, wallet.address, slippageBps);
+  const { executed, attempted } = await executeApprovedActions(sizedActions, walletId, userId, wallet.address, slippageBps, walletChainId(wallet));
 
   if (attempted > 0 && executed === 0) {
     await handleStrategyFailure(strategyId, userId, "All trade executions failed in the cycle", db);
