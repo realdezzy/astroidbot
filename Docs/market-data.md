@@ -104,6 +104,24 @@ The floor is derived from measured block time rather than a fixed block count: 5
 
 Backfill uses its own cursor and never touches `lastBlock`, `lastPrice0` or pool liquidity. Those all mean *latest*, and a walk through older blocks writing them would move a pool's current price backwards in time — which, since the deepest pool sets a token's displayed price, surfaces as the quoted price jumping to a stale one. A chain whose original ingestion start isn't recorded is marked complete rather than walked, because the only available starting point would be the current cursor, and descending through already-ingested blocks inflates additively-accumulated volume permanently.
 
+`INDEXER_BACKFILL_FULL_HISTORY=true` replaces the window with genesis. It is off by default because the columns the UI renders stop at 24H: beyond that, history buys chart depth at a cost measured in RPC calls, and on a chain millions of blocks deep it is days of walking at the per-tick budget. The switch overrides the window rather than adding to it, so setting it alongside `INDEXER_BACKFILL_WINDOW_HOURS=0` means *everything* rather than *nothing* — the explicit request beats the tuning knob.
+
+### The same walk on chains that have no block ranges
+
+Stacks and Solana had no backfill at all for a while, and the reason is worth stating: "walk backwards" is only a block-range query on EVM. Neither of the others can address history by height, so each needed a cursor of its own shape.
+
+**Stacks** pages a contract's transaction list from the newest, by offset. The resume point is therefore an offset, held per swap contract in `IndexerCursor.backfillState` — ALEX and Velar are walked independently and finish at different times. An offset into a list that grows at the head is meaningless on its own, so the list length is stored beside it: everything new arrives at the top, so a stored position is later found at `offset + (lengthNow - lengthThen)`. Without that correction a busy contract's walk slips backwards by however many trades happened between ticks, and on a contract busier than the per-tick budget it never descends at all. The alternative — re-deriving the offset by paging from the head each tick — costs more the further the walk has come, which is exactly backwards.
+
+**Solana** walks per pool, mirroring `lastSignature` with a `backfillSignature` on the same row, because `getSignaturesForAddress` is an account-level query and pools discovered at different times reach the window at different times. Pools that predate the feature are seeded from the oldest swap already stored for them rather than from `lastSignature`, which is the *newest* swap seen and would send the walk down through everything already ingested.
+
+Both are bounded by `INDEXER_MAX_BACKFILL_SOURCES_PER_RUN` contracts or pools per tick — Solana's deepest pools first, since those are the ones the columns are actually reporting — and by `INDEXER_MAX_TX_PER_RUN` within each. Neither the walk nor the forward pass can starve the other.
+
+The same rule about *latest* applies: neither walk writes `lastPrice0`, `lastSwapAt`, `lastSignature` or liquidity. On Stacks that last one matters more than it looks, because pool depth there is read from reserves carried in the swap print itself — attributing last week's reserves to a pool because of last week's trade would be free, and wrong.
+
+**A note on why this is now safe.** These walks re-read ranges the forward pass has already seen, and under the original accumulate-on-write design that would have inflated volume permanently. It doesn't any more: swaps are stored under their on-chain identity and candles are recomputed from them, so a replay inserts nothing. That is what makes it acceptable for a malformed `backfillState` entry to restart a contract's walk from the head instead of throwing — the cost is wasted requests, not corrupted numbers.
+
+**One thing the backfill work fixed on the way past.** Solana's forward pass asked for the newest `INDEXER_MAX_TX_PER_RUN` signatures above its cursor. The RPC returns the newest `limit` and silently omits the rest, so any pool busier than one tick's budget lost every swap between its cursor and that page — a hole no cursor could describe, and therefore one nothing would ever retry. The pass now lists signatures in pages (listing is cheap; fetching transaction bodies is what costs) and spends its budget on the *oldest* unread end, so progress stays contiguous with where the last tick stopped. It also advances past signatures that decoded to nothing, which a pool of undecodable traffic previously re-read at full cost every tick, forever.
+
 **Block timestamps are interpolated.** Asking the chain for every block a swap landed in is thousands of round trips per tick and dominated everything else the indexer did. `BlockTimeOracle` samples a bounded number of blocks per range and interpolates, making the cost constant in range size rather than linear. The timestamp's only job is to place a swap in a five-minute bucket, so a few seconds of error is immaterial — and a misplaced swap lands in an adjacent bucket at worst, never lost or mispriced, since price and volume come from the log itself.
 
 ## USD anchoring
@@ -142,6 +160,8 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 | `INDEXER_CANDLE_RETENTION_DAYS` | `30` | Candles older than this are pruned |
 | `INDEXER_BACKFILL_WINDOW_HOURS` | `24` | History the downward walk covers; `0` disables it |
 | `INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN` | `10000` | Backfill's per-tick budget, kept below the forward pass's |
+| `INDEXER_MAX_BACKFILL_SOURCES_PER_RUN` | `10` | Contracts (Stacks) or pools (Solana) walked per tick |
+| `INDEXER_BACKFILL_FULL_HISTORY` | `false` | Walk to genesis instead of the window; overrides it |
 
 The indexer is by far the heaviest RPC consumer in the process. Point each chain at a paid endpoint via the per-chain override — `RPC_URL_ETHEREUM_MAINNET`, `RPC_URL_BASE_MAINNET`, and so on. Public endpoints rate-limit hard, and Ethereum mainnet in particular is not practical to index through one.
 

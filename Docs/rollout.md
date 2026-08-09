@@ -9,6 +9,22 @@ nothing in the system will ask whether that was a good idea.
 This is that procedure. It assumes the chain already has a descriptor; adding
 one is [chains.md](chains.md).
 
+**This applies to chains beyond the default set.** `ENABLED_CHAINS` now
+defaults to `stacks:mainnet,base:mainnet,solana:mainnet` — one chain per
+execution family — because the product is multichain and a deployment that
+configures nothing should get one. Those three are already through the checks
+below: each runs without credentials, each has a working router, and each has
+been exercised end to end. The procedure here is for the *next* chain — Celo,
+Ethereum, Robinhood, or anything arriving through `CUSTOM_EVM_CHAINS`.
+
+If you are upgrading a deployment that predates this default and has been
+running Stacks-only, read that change the same way as any other chain
+enablement: three chains will register where one did before. Existing wallets
+are untouched — they keep their chain and their balances — but users gain the
+ability to create wallets on the other two, and the indexer will begin
+ingesting them. Pin the old behaviour with `ENABLED_CHAINS="stacks:mainnet"`
+if you want to schedule that rather than take it on the next deploy.
+
 ## What "enabled" actually means
 
 `ENABLED_CHAINS` decides which chains register at startup. A chain not named

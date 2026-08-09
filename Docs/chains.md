@@ -23,9 +23,36 @@ Base and Celo share a family and differ on network. They sign identically and ro
 ENABLED_CHAINS="stacks:mainnet,base:mainnet,solana:mainnet"
 ```
 
-It defaults to `stacks:mainnet`, so a deployment that sets nothing behaves exactly as it did before multichain support existed.
+**The default is multichain**: `stacks:mainnet,base:mainnet,solana:mainnet` — one chain per execution family. A deployment that configures nothing gets a working multichain deployment, because that is what this product is. It used to default to `stacks:mainnet` alone, to keep pre-multichain deployments byte-identical; that debt is paid, and the cost of keeping it was that every multichain surface was invisible in normal use. A picker with one option looks like a picker with a bug, and the aggregation defects that only appear with two chains cannot appear at all.
 
-Misconfiguration is **fatal at startup**, never a silent skip — an unknown ChainId, or an ERC-4337 chain with no `PIMLICO_API_KEY`, stops the process with a message naming the chain.
+Ethereum mainnet is deliberately excluded from the default. It trades fine, but it is not practical to *index* through a public RPC (see `Docs/market-data.md`), and a default that quietly needs a paid endpoint is not a default. Add it — or Celo, Robinhood, the testnets — with one env var.
+
+Every chain in the default list runs with no credentials beyond a database and Redis.
+
+### Why two EVM chains in the default
+
+Base for depth, and **Robinhood Chain** because it is what this platform is aimed at — an Arbitrum Orbit L2 (chain 4663) for tokenized equities and RWAs, with its own Uniswap V3 deployment and no bundler, so it runs EOA custody natively.
+
+Having two also keeps an old failure honest: the family-keyed registry silently dropped the second EVM chain registered, and a default carrying only one would never exercise the case that broke.
+
+### `quoteSymbol` — when a chain's pools aren't built against its dollar
+
+Robinhood forced a distinction most chains don't need. Sampling its factory's `PoolCreated` logs returns **60 of 60 pools paired against WETH and none against rUSDC**, and `getPool(WETH, rUSDC, fee)` returns the zero address at every tier. So:
+
+- `stableSymbol` stays `rUSDC` — it is the chain's dollar unit, and it is what a *price* is denominated in.
+- `quoteSymbol` is `WETH` — it is what a *trade* has to route through.
+
+Use `quoteSymbol` (or `walletQuoteSymbol()`) for default pairs and routing decisions; use `stableSymbol` when the question is genuinely about dollars. Leave `quoteSymbol` unset on any chain where the two are the same, which is every other chain here.
+
+Getting this wrong is quiet rather than loud: the trade and limit-order forms would default to WETH→rUSDC, the quote would find no pool, and the user would see "no route" on the chain's most obvious pair.
+
+The same split is why the limit-order price trigger no longer quotes against `stableSymbol` directly. It asks the market-data layer, which owns USD anchoring and already resolves this chain's ETH price from another chain — a direct stable quote returns 0 here, which would leave every order waiting for `forceAfter`.
+
+Misconfiguration is **fatal at startup**, never a silent skip — an unknown ChainId stops the process with a message naming it and listing what is known.
+
+**Missing sponsorship credentials are the one exception, and not a weakening of that rule.** A chain whose descriptor prefers ERC-4337 runs as a plain EOA when `PIMLICO_API_KEY` is absent: it registers, it trades, and it logs a warning naming the consequence — wallets pay their own gas, and calls are submitted sequentially rather than atomically. Settings shows the same fact per chain, with the reason.
+
+This matters because the alternative made a principle untrue. `EvmChainAdapter` has always supported both custody modes so that "EVM support" would not collapse into "support for the chains Pimlico serves" — but refusing to boot without a paymaster key meant Base could not be enabled at all without a Pimlico account. Sponsorship is an enhancement to a chain, not a prerequisite for its existence.
 
 Per-chain RPC overrides follow a fixed pattern derived from the ChainId:
 

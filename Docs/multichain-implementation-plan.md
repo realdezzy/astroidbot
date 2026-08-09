@@ -1,7 +1,7 @@
 # AstroidBot — Multichain Product Implementation Plan
 
-**Status:** P0–P8 landed; the remaining items are new work, not debt · **Author:** engineering
-**Written:** 2026-07-26 · **Status last verified:** 2026-08-04
+**Status:** P0–P8 landed and complete; what remains is an operational act, not code · **Author:** engineering
+**Written:** 2026-07-26 · **Status last verified:** 2026-08-08
 **Scope:** take the current Stacks + Base(EVM) codebase to a fully multichain product spanning Stacks, Solana, and an open-ended set of EVM chains (Base, Celo, ARC, Robinhood Chain, …), with token discovery, social-agent trading, and a fully-migrated Telegram bot.
 
 ---
@@ -18,12 +18,19 @@
 | P5 Token discovery | ✅ done | `b592448`, `05467a2` |
 | P6 Social agent | ✅ done | `08c1b0e`, `7c41634` |
 | P7 Hardening & ship | ✅ done — P7.6 is an operational act, see `Docs/rollout.md` | `780a18d`, `3d67667`, `9a1ec6b` |
-| P8 Market data | ✅ done — **not in the original plan**; see §9.1 | `73fcb1d`, `ae53327` |
+| P8 Market data | ✅ done — **not in the original plan**; see §9.1 | `73fcb1d`, `ae53327`, `93cd91a`, `2f0a9b7` |
 
 Two things changed shape versus the proposal, both recorded in place below:
 
 - **§10.4 (discovery data quality) was answered by building an indexer**, not by labelling DEX-derived prices or buying a market-data feed. That is Phase 8, added after the fact.
 - **ARC and Robinhood Chain resolved differently from each other.** Robinhood Chain has a real Uniswap V3 deployment and ships tradable; ARC is testnet-only with no DEX and ships listable, which is exactly the split §10.1 was designed to absorb.
+
+Landed after Phase 8 closed, none of it in the original plan:
+
+- **Candles are derived, not accumulated** (`2f0a9b7`). Raw swaps are stored under their on-chain identity and candles recomputed from them, which is what made replay free and reorg repair possible at all. Most of the indexer's defensiveness pre-dates this and was written to enforce "never process a range twice"; it is kept because it still saves work, but it is no longer load-bearing for correctness.
+- **Tokens resolve by symbol or address everywhere** (`1fae01c`), including a Telegram lookup.
+- **The public token page is a market screener** (`e47d8d4`).
+- **The trade path is chain-aware, and price impact is right** (`28746fc`). `getTradeQuote` had been asking every chain and ignoring the `walletId` it was passed — precisely the hazard §2 exists to prevent — and price impact was inverted, reading 100% on every healthy quote.
 
 The per-item checkboxes below are the source of truth for what remains: `[x]` shipped · `[~]` partial, with the gap stated in italics · `[ ]` not started.
 
@@ -433,7 +440,7 @@ SocialCommandProcessor          (shared, provider-agnostic: parse → authorize 
 
 ## 9. Phase 7 — Hardening & ship (3–4 days)
 
-**The only phase with real work left.** Everything here is a guard rail rather than a feature, which is exactly why it is the part that gets deferred — and why the list is worth keeping honest.
+Everything here is a guard rail rather than a feature, which is exactly why it is the part that gets deferred — and why the list is worth keeping honest. All of it has landed except the act of running the rollout.
 
 - [x] **P7.1** Cross-chain E2E per family: create wallet → fund (testnet) → quote → trade → confirm → portfolio reflects it. *`walletLifecycle` covers address derivation, balance reads and real-size quotes per family against live chains, unfunded; the funded leg is gated on `FUNDED_TESTNET_CHAIN`/`FUNDED_TESTNET_KEY`. Integration suites moved out of `npm test` — every case that lacked credentials used to `return` early and report as a pass.*
 - [x] **P7.2** Adapter conformance suite (`describe.each` over every registered adapter) — the structural guarantee that chain #8 can't half-implement the contract. *Found three real defects on first run; see `adapterConformance.test.ts`.*
@@ -454,11 +461,12 @@ Added because §10.4 needed a real answer, not a label. Delivered in `73fcb1d`; 
 - [x] **P8.6** **Separate process.** Ingestion runs in its own container (`src/indexer.ts`), sharing only Postgres and Redis, and in no other process — there is no flag for it. A per-chain Redis lock makes concurrent ingestion of a chain impossible across processes, since volume accumulates additively and a replayed range would inflate it permanently.
 - [x] **P8.7** **Single writer per table.** `IndexedToken` split out of `Token`: the indexer writes its own tables, the backend writes the catalogue, and the two meet only through `MarketDataProvider` — a read from the index and a write to the catalogue, never the reverse. Newly-indexed tokens are promoted into the catalogue above the liquidity floor, which is how the long tail becomes visible without becoming a firehose.
 
-Not done, and worth knowing:
+Added after the phase was first written up, each because something had already gone wrong without it:
 
 - [x] **P8.7b** Chain reachability suite. A chain whose DEX endpoint has been retired registers, lists tokens, and answers "no route" to everything — which is what `solana:mainnet` did until `9a1ec6b`, because Jupiter had shut down `quote-api.jup.ag/v6`. No unit test can catch it; `chainReachability` asks live endpoints.
 - [x] **P8.8** Stacks and Solana ingestion. *Two more `ChainIndexer` implementations: Stacks decodes ALEX and Velar swap prints over a transaction-shaped API; Solana discovers pools from Jupiter's routePlan and derives amounts from pool-vault balance deltas, which is program-agnostic.*
-- [~] **P8.9** Backfill. *Shipped for EVM in `ae53327`: the walk covers `INDEXER_BACKFILL_WINDOW_HOURS` (24h by default), which is what the columns need. Two gaps remain — it does not reconstruct a chain's full history, and Stacks and Solana have no equivalent walk, so their first day is still partial.*
+- [x] **P8.9** Backfill. *EVM in `ae53327`; Stacks, Solana and full history after it. The window walk covers `INDEXER_BACKFILL_WINDOW_HOURS` (24h), which is what the columns need, and `INDEXER_BACKFILL_FULL_HISTORY=true` replaces it with genesis for a deployment that wants chart depth. Stacks and Solana needed cursors of their own shape rather than a second bigint — neither can address history by height, so one walks a contract's transaction list by offset and the other a pool's signatures by `before`. See `Docs/market-data.md`.*
+- [x] **P8.10** Solana's forward pass no longer loses swaps. *Found while building P8.9. `getSignaturesForAddress` returns the newest `limit` signatures and silently omits the rest, so any pool busier than one tick's budget lost everything between its cursor and that page — a hole no cursor could describe and nothing would ever retry. The pass now pages the listing and spends its transaction budget on the oldest unread end, keeping progress contiguous.*
 
 ---
 
@@ -489,19 +497,18 @@ This is 26–34 engineer-days sequentially. P2/P3/P4/P5 parallelise across 2–3
 |---|---|---|---|---|
 | P0 | Stabilize: commit, lint gate, tag | 0.5d | — | ✅ |
 | P1 | 🔑 Chain identity, registries, adapter hierarchy | 3–4d | P0 | ✅ |
-| P2 | Telegram: modular, multichain, button-first | 4–5d | P1 | ✅ (P2.11 partial) |
+| P2 | Telegram: modular, multichain, button-first | 4–5d | P1 | ✅ |
 | P3 | Solana family + Jupiter | 4–5d | P1 | ✅ |
-| P4 | Celo, ARC, Robinhood + native wrap | 2–3d | P1 | ✅ (P4.6 outstanding) |
+| P4 | Celo, ARC, Robinhood + native wrap | 2–3d | P1 | ✅ |
 | P5 | Token discovery + deep-link trade | 4–5d | P1 | ✅ |
 | P6 | Social agent (X + Farcaster) | 5–6d | P1, P5 | ✅ |
 | P7 | Hardening, docs, rollout | 3–4d | all | ✅ (P7.6 is an ops act) |
-| P8 | Market data indexer *(added)* | — | P4, P5 | ✅ (P8.7–8.8 outstanding) |
+| P8 | Market data indexer *(added)* | — | P4, P5 | ✅ |
 
 **Definition of done:** a user discovers a token on the public `/tokens` page, taps Trade, registers, and completes a swap on any enabled chain — and can do the same by tapping through Telegram or by tagging the bot on X — while every trade routes through one `executeSwapPayload` seam, one `RiskManager` check, and one `NotificationService` fan-out, on any chain that exists as a descriptor file.
 
-**Against that definition, the product is done, and so is the work that keeps it done.** The conformance suite, per-chain health, quote expiry, backfill and the E2E suites have all landed.
+**Against that definition, the product is done, and so is the work that keeps it done.** The conformance suite, per-chain health, quote expiry, backfill on every family, and the E2E suites have all landed.
 
-What remains is genuinely new work rather than debt:
+One item remains, and it is not a code change:
 
-- **Full history backfill** (P8.9) — the walk covers 24h, which is what the columns need; it does not reconstruct a chain's whole past.
-- **Running the rollout** (P7.6) — `Docs/rollout.md` is the procedure.
+- **Running the rollout** (P7.6) — `Docs/rollout.md` is the procedure: testnet-only, then internal wallets on mainnet, then a per-chain flag flip through `ENABLED_CHAINS`. It includes the pre-flight endpoint check that the retired Jupiter v6 URL would have failed, and that check is worth running against production's chain list on a schedule rather than only at rollout — `GET /api/health/chains` answers "can this process reach the chain", which a dead DEX endpoint leaves perfectly green.

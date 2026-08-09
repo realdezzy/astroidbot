@@ -16,7 +16,7 @@ The sidebar (left) lists all pages:
 |------|------|---------|
 | Dashboard | 📊 | Overview: portfolio value, bot status, recent trades, AI chat |
 | Portfolio | 🥧 | Allocation charts, PnL/volume TradingView charts, per-wallet tabs |
-| Wallets | 💼 | Create, import, reveal, delete Stacks wallets |
+| Wallets | 💼 | Create, import, reveal, delete wallets on any enabled chain |
 | Trade | 🔄 | Execute token swaps with quote preview |
 | Trades | 📋 | Full trade history with status and filtering |
 | Limit Orders | ⏰ | Create and manage buy/sell limit orders |
