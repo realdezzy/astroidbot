@@ -31,6 +31,7 @@ function loadConfig(pimlicoKey?: string) {
   process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";
   process.env.AES_KEY = "testkey";
   process.env.JWT_SECRET = "change-me-in-production-to-32-char-min-xyz";
+  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = "sk-dummy-key-for-test";
   if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
   if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
   if (pimlicoKey) process.env.PIMLICO_API_KEY = pimlicoKey;
