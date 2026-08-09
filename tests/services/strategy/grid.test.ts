@@ -21,6 +21,7 @@ describe("GridStrategy", () => {
     userId: 10,
     walletId: 2,
     address: "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE",
+    chainId: "stacks:mainnet",
     balances: [],
     tokens: [],
     settings: {
@@ -44,7 +45,7 @@ describe("GridStrategy", () => {
     mockTick.mockResolvedValue(mockActions);
 
     const actions = await strategy.execute(mockCtx, {});
-    expect(mockTick).toHaveBeenCalledWith(10, 2, []);
+    expect(mockTick).toHaveBeenCalledWith(10, 2, [], "stacks:mainnet");
     expect(actions).toEqual(mockActions);
   });
 
@@ -52,7 +53,7 @@ describe("GridStrategy", () => {
     mockTick.mockResolvedValue([]);
 
     const actions = await strategy.execute(mockCtx, {});
-    expect(mockTick).toHaveBeenCalledWith(10, 2, []);
+    expect(mockTick).toHaveBeenCalledWith(10, 2, [], "stacks:mainnet");
     expect(actions).toEqual([]);
   });
 

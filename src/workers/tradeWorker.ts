@@ -9,6 +9,7 @@ import { logger } from "../utils/logger.js";
 import { executeSwapPayload } from "../services/chains/executeSwap.js";
 import { walletChainId } from "../services/chains/walletChain.js";
 import { DEFAULT_CHAIN_ID } from "../services/chains/descriptors/index.js";
+import { resolveTradeSettings } from "../services/tradeSettings.js";
 
 
 interface TradeJob {
@@ -40,26 +41,27 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
     throw new Error(`No viable swap route: ${tokenIn} → ${tokenOut}`);
   }
 
-  // Pre-execution risk check
-  const settings = await db.findTradeSettings(userId, "personal");
-  if (settings) {
-    const riskResult = await RiskManager.getInstance().evaluateTrade(
-      userId,
-      { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
-      [{ token: tokenIn, symbol: tokenIn, balance: amountIn, usdValue: amountIn }],
-      { slippageBps: settings.slippageBps, maxPositionPct: settings.maxPositionPct, dailyLossLimit: settings.dailyLossLimit }
-    );
-    if (!riskResult.approved) {
-      logger.warn(`Trade rejected by risk manager: ${riskResult.reason}`, { tokenIn, tokenOut, amountIn });
-      throw new Error(`Risk: ${riskResult.reason}`);
-    }
+  // Pre-execution risk check, against this wallet's chain rather than the
+  // account's. Slippage is the setting that differs per chain, and it is the
+  // one this check is about.
+  const settings = await resolveTradeSettings(userId, "personal", chainId);
+
+  const riskResult = await RiskManager.getInstance().evaluateTrade(
+    userId,
+    { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
+    [{ token: tokenIn, symbol: tokenIn, balance: amountIn, usdValue: amountIn }],
+    { slippageBps: settings.slippageBps, maxPositionPct: settings.maxPositionPct, dailyLossLimit: settings.dailyLossLimit }
+  );
+  if (!riskResult.approved) {
+    logger.warn(`Trade rejected by risk manager: ${riskResult.reason}`, { tokenIn, tokenOut, amountIn });
+    throw new Error(`Risk: ${riskResult.reason}`);
   }
 
   const { providerName, quote: est } = bestQuote;
   const provider = registry.getProvider(providerName);
   if (!provider) throw new Error(`Provider not found: ${providerName}`);
 
-  const minOut = est.amountOut * (1 - (settings?.slippageBps ?? 100) / 10000);
+  const minOut = est.amountOut * (1 - settings.slippageBps / 10000);
   const payload = await provider.buildSwapPayload(tokenIn, tokenOut, amountIn, minOut, senderAddress);
   if (!payload) throw new Error("Failed to build swap payload");
 

@@ -147,6 +147,21 @@ export class WebSocketManager {
     });
   }
 
+  broadcastCandleUpdate(symbol: string, candle: { bucketStart: string; open: number; high: number; low: number; close: number; volumeUsd: number }): void {
+    this.broadcastToAll({
+      type: "candle_update",
+      payload: { symbol, candle },
+    });
+  }
+
+  broadcastSwapUpdate(symbol: string, swap: { txKey: string; priceUsd: number; volumeUsd: number; isBuy: boolean; timestamp: string; trader?: string }): void {
+    this.broadcastToAll({
+      type: "swap_update",
+      payload: { symbol, swap },
+    });
+  }
+
+
   getConnectedCount(): number {
     return this.clients.size;
   }

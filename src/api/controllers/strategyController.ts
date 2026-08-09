@@ -5,6 +5,7 @@ import { logger } from "../../utils/logger.js";
 import { ValidationError, NotFoundError, InternalError } from "../errors.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { safeValidateStrategyConfig } from "../../services/strategy/configValidation.js";
+import { walletChainId, explorerTxUrlFor } from "../../services/chains/walletChain.js";
 
 export class StrategyController {
   static async getStrategies(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -158,6 +159,7 @@ export class StrategyController {
         },
         orderBy: { createdAt: "desc" },
         take: 50,
+        include: { wallet: { select: { chain: true, chainFamily: true } } },
       });
 
       let pnl = 0;
@@ -195,6 +197,10 @@ export class StrategyController {
           feeAmount: t.feeAmount,
           feeBps: t.feeBps,
           txId: t.txId,
+          chain: t.chain ?? walletChainId(t.wallet),
+          // Resolved server-side: this modal used to build a Hiro link for
+          // every strategy trade regardless of the chain it ran on.
+          explorerUrl: explorerTxUrlFor(t.chain ?? walletChainId(t.wallet), t.txId),
           status: t.status,
           createdAt: t.createdAt,
           confirmedAt: t.confirmedAt,

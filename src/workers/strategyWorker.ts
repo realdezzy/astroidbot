@@ -18,6 +18,7 @@ import { walletChainId } from "../services/chains/walletChain.js";
 import { executeApprovedActions } from "../services/strategyEngine.js";
 import { logger } from "../utils/logger.js";
 import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
+import { resolveTradeSettings } from "../services/tradeSettings.js";
 import { Prisma } from "@prisma/client";
 
 
@@ -39,8 +40,12 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   const wallet = await db.prisma.wallet.findUnique({ where: { id: walletId } });
   if (!wallet || wallet.userId !== userId) return;
 
-  const settings = await db.findTradeSettings(userId, "personal");
-  if (!settings) return;
+  // Resolved against this wallet's chain: a strategy running a Solana wallet
+  // gets Solana's slippage, not whatever the account happens to default to.
+  // Previously a user with no settings row at all returned here and their
+  // strategies simply never ran.
+  const chainId = walletChainId(wallet);
+  const settings = await resolveTradeSettings(userId, "personal", chainId);
 
   // Load the associated TradeAgent (if any) to check the aiMode setting.
   let aiMode = "off";
@@ -54,7 +59,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
     if (activeAgent) aiMode = activeAgent.aiMode;
   }
 
-  const tokens = await registry.getSwappableTokens(false, walletChainId(wallet));
+  const tokens = await registry.getSwappableTokens(false, chainId);
   const tokenSymbols = tokens.map(t => t.symbol);
   const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
   if (balances.length === 0) return;
@@ -102,6 +107,7 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
     userId,
     walletId,
     address: wallet.address,
+    chainId,
     balances,
     tokens,
     settings,

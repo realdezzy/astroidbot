@@ -51,8 +51,15 @@ export const refreshTokenSchema = z.object({
 
 export const updateSettingsSchema = z.object({
   context: z.enum(["personal", "market_making"]).optional(),
-  chain: z.string().optional(),
-  slippageBps: z.number().int().min(1).max(10000).optional(),
+  // Present means "store this as an override for that chain" rather than as
+  // the account default. This validator strips unknown keys, so a field the
+  // controller reads but the schema omits silently becomes undefined — which
+  // is how a per-chain slippage write ended up overwriting the account-wide
+  // value instead, with no error to show for it.
+  chainId: z.string().optional(),
+  // Nullable on purpose: null clears a chain's override so it goes back to
+  // inheriting, which is a different operation from leaving it unchanged.
+  slippageBps: z.number().int().min(1).max(10000).nullable().optional(),
   maxPositionPct: z.number().min(0).max(100).optional(),
   dailyLossLimit: z.number().min(0).max(100).optional(),
   rebalanceThreshold: z.number().min(0).max(100).optional(),

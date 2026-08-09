@@ -221,4 +221,15 @@ export class PerpService {
       orderBy: { createdAt: "desc" }
     });
   }
+
+  async calculateFundingRate(market: string, indexPrice: number, markPrice: number): Promise<{ rateBps: number; isPayLong: boolean }> {
+    if (indexPrice <= 0) return { rateBps: 0, isPayLong: true };
+    const premium = (markPrice - indexPrice) / indexPrice;
+    const rateBps = Math.round(premium * 10000);
+    return {
+      rateBps,
+      isPayLong: rateBps > 0,
+    };
+  }
 }
+

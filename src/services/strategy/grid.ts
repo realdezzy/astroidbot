@@ -4,9 +4,9 @@ import type { Strategy, StrategyContext, StrategyState } from "../../types/strat
 
 export class GridStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, balances, config, settings } = ctx;
+    const { userId, walletId, balances, config, settings, chainId } = ctx;
     const mm = MarketMakerService.getInstance();
-    const actions = await mm.tick(userId, walletId, balances);
+    const actions = await mm.tick(userId, walletId, balances, chainId);
     if (actions.length === 0) return [];
     void config;
     void settings;

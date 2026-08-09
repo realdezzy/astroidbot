@@ -9,6 +9,7 @@ import { RiskManager } from "./riskManager.js";
 import { buildAgentPrompt } from "./ai/prompts/agent.js";
 import { walletChainId, walletNativeSymbol, groupByChainId } from "./chains/walletChain.js";
 import { AgentDecisionSchema } from "../validation/ai/schemas.js";
+import { resolveTradeSettings } from "./tradeSettings.js";
 import type { RebalanceAction, SwappableToken } from "../types.js";
 import { Prisma } from "@prisma/client";
 
@@ -209,8 +210,8 @@ export class AgentService {
       const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0];
       const wallet = wallets.find((w) => w.id === (t.walletId ?? defaultWallet?.id));
       if (wallet) {
-          const settings = await db.findTradeSettings(agent.userId, "personal");
-          const maxPct = (config.maxPositionPct as number) ?? (settings?.maxPositionPct ?? 25);
+          const settings = await resolveTradeSettings(agent.userId, "personal", walletChainId(wallet));
+          const maxPct = (config.maxPositionPct as number) ?? settings.maxPositionPct;
           const maxAmount = (wallet.balance * maxPct) / 100;
           const perRunCap = Number(config.maxAutonomousTradeAmount ?? maxAmount);
           const cappedAmount = Math.min(t.amountIn, maxAmount, Number.isFinite(perRunCap) && perRunCap > 0 ? perRunCap : maxAmount);

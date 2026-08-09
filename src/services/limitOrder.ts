@@ -7,6 +7,9 @@ import { NotificationService } from "./notificationService.js";
 import type { SwappableToken } from "../types.js";
 import { executeSwapPayload } from "./chains/executeSwap.js";
 import { walletChainId, walletStableSymbol } from "./chains/walletChain.js";
+import { resolveTradeSettings } from "./tradeSettings.js";
+import { resolveMarketDataProvider } from "./marketData/index.js";
+import type { ChainId } from "../types/chain.js";
 
 export class LimitOrderService {
   private static instance: LimitOrderService;
@@ -38,7 +41,33 @@ export class LimitOrderService {
     const wallet = await db.findWalletById(data.walletId);
     if (!wallet) throw new Error(`Wallet ${data.walletId} not found`);
 
-    const tokens = await registry.getSwappableTokens(false, walletChainId(wallet));
+    const chainId = walletChainId(wallet);
+    const tokens = await registry.getSwappableTokens(false, chainId);
+
+    // Does this pair exist on this chain at all? Asked *before* the balance
+    // check, because the balance check answers the wrong question when it
+    // doesn't: a Celo wallet asked for STX reports "insufficient balance for
+    // STX, available 0", which reads as "add funds" when the real answer is
+    // "STX does not exist on Celo". Cheap, too — this is a list lookup, while
+    // the balance check is a chain round trip.
+    const known = (symbol: string): boolean =>
+      tokens.some(
+        (t) => t.symbol.toUpperCase() === symbol.toUpperCase() || t.contractId === symbol
+      );
+
+    // Skipped when the chain's token list is empty, which means the provider
+    // is unreachable rather than that nothing exists — refusing every order on
+    // an upstream hiccup would be worse than letting the route check decide.
+    if (tokens.length > 0) {
+      const missing = [data.tokenIn, data.tokenOut].filter((symbol) => !known(symbol));
+      if (missing.length > 0) {
+        throw new Error(
+          `${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} not available on ` +
+          `${chainId}. This wallet can only trade tokens on that chain.`
+        );
+      }
+    }
+
     const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, data.userId);
     const tokenBalanceObj = balances.find(b =>
       b.symbol.toUpperCase() === data.tokenIn.toUpperCase() || b.token === data.tokenIn
@@ -64,10 +93,19 @@ export class LimitOrderService {
       );
     }
 
-    // Validate a route exists before persisting
-    const quote = await registry.getBestQuote(data.tokenIn, data.tokenOut, data.amountIn);
+    // Validate a route exists before persisting — on *this wallet's* chain.
+    //
+    // Unscoped, this asked every registered provider, so a Base wallet's
+    // STX→USDCx order passed because a Stacks router answered. The order was
+    // then written, could never route at execution time, and the price trigger
+    // read 0 — so it sat there until `forceAfter` fired it into a failure.
+    // Naming the chain in the error matters too: "no route" on its own reads
+    // as a liquidity problem rather than a wrong-network one.
+    const quote = await registry.getBestQuote(data.tokenIn, data.tokenOut, data.amountIn, chainId);
     if (!quote) {
-      throw new Error(`No DEX route found for ${data.tokenIn} → ${data.tokenOut}`);
+      throw new Error(
+        `No DEX route found for ${data.tokenIn} → ${data.tokenOut} on ${chainId}`
+      );
     }
 
     return db.prisma.limitOrder.create({ data });
@@ -133,6 +171,54 @@ export class LimitOrderService {
     }
   }
 
+  /**
+   * A token's price in USD on one chain.
+   *
+   * `targetPrice` is a dollar figure, so this has to be one too. A direct
+   * quote against the chain's stablecoin is the obvious way to get it, and it
+   * returns 0 whenever that symbol can't be routed — which has happened twice
+   * now for different reasons: Base, when the symbol was hardcoded to Stacks'
+   * "USDCx", and Robinhood, when the descriptor named a real token that had no
+   * pools. Both times the visible symptom was orders sitting untriggered until
+   * `forceAfter` fired them.
+   *
+   * The market-data layer is the one that owns USD anchoring, including the
+   * fallback that prices a chain's native asset from *another* chain when
+   * there is no local path to a dollar. Ask it first; fall back to the direct
+   * quote only when it has nothing, which covers a chain the index hasn't
+   * warmed up on yet.
+   */
+  private async priceInUsd(
+    tokenIn: string,
+    wallet: { chainFamily?: string; chain?: string },
+    chainId: ChainId
+  ): Promise<number> {
+    const stableSymbol = walletStableSymbol(wallet);
+
+    // A stablecoin is worth a dollar; quoting it against itself has no route.
+    if (tokenIn.toUpperCase() === stableSymbol.toUpperCase()) return 1;
+
+    try {
+      const provider = resolveMarketDataProvider();
+      if (provider.supportsChain(chainId)) {
+        const data = await provider.getMarketData(chainId, [tokenIn.toLowerCase()]);
+        const priceUsd = data.get(tokenIn.toLowerCase())?.priceUsd;
+        if (priceUsd != null && priceUsd > 0) return priceUsd;
+      }
+    } catch (error) {
+      logger.debug("[limitOrder] market data price lookup failed, falling back to a quote", {
+        chainId,
+        tokenIn,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const priceQuote = await DEXRegistry.getInstance()
+      .getBestQuote(tokenIn, stableSymbol, 1, chainId)
+      .catch(() => null);
+    return priceQuote?.quote.amountOut ?? 0;
+  }
+
   async checkAndExecute(
     activeWallets: Array<{ id: number; userId: number; address: string; chainFamily?: string; chain?: string }>,
     _tokens: SwappableToken[]
@@ -155,23 +241,7 @@ export class LimitOrderService {
       const chainId = walletChainId(wallet);
 
       try {
-        // targetPrice is denominated in the wallet's chain's USD stablecoin —
-        // "USDCx" on Stacks, "USDC" on Base. Previously hardcoded to the Stacks
-        // symbol, which no Base provider can route, so every Base order read a
-        // current price of 0 and could only ever fire via forceAfter.
-        const stableSymbol = walletStableSymbol(wallet);
-
-        // Current price via a 1-unit quote. A stablecoin prices at 1 against
-        // itself; quoting it against itself has no route.
-        let currentPrice: number;
-        if (order.tokenIn.toUpperCase() === stableSymbol.toUpperCase()) {
-          currentPrice = 1;
-        } else {
-          const priceQuote = await registry
-            .getBestQuote(order.tokenIn, stableSymbol, 1, chainId)
-            .catch(() => null);
-          currentPrice = priceQuote?.quote.amountOut ?? 0;
-        }
+        const currentPrice = await this.priceInUsd(order.tokenIn, wallet, chainId);
 
         let shouldExecute = false;
         let reason = "";
@@ -218,8 +288,8 @@ export class LimitOrderService {
             throw new Error("Failed to build transaction payload");
           }
 
-          const settings = await db.findTradeSettings(order.userId, "personal");
-          const useGasless = settings?.useGasless ?? false;
+          const settings = await resolveTradeSettings(order.userId, "personal", chainId);
+          const useGasless = settings.useGasless;
 
           const result = await executeSwapPayload(payload, {
             action: {

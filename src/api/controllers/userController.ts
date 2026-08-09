@@ -8,7 +8,12 @@ import { PortfolioManager } from "../../services/portfolio.js";
 import { KMSService } from "../../services/kms.js";
 import { RiskManager } from "../../services/riskManager.js";
 import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
-import { walletChainId, walletDescriptor, groupByChainId } from "../../services/chains/walletChain.js";
+import {
+  walletChainId,
+  walletDescriptor,
+  groupByChainId,
+  explorerTxUrlFor,
+} from "../../services/chains/walletChain.js";
 import { resolveChainId } from "../../services/chains/executeSwap.js";
 import { executeSwapPayload } from "../../services/chains/executeSwap.js";
 import { logger } from "../../utils/logger.js";
@@ -19,6 +24,7 @@ import {
   type Timeframe,
 } from "../../services/portfolioAnalytics.js";
 import { sponsorshipAvailability } from "../../services/chains/gasSponsorship.js";
+import { resolveTradeSettings, DEFAULT_TRADE_SETTINGS } from "../../services/tradeSettings.js";
 import { SocialVerificationService } from "../../services/social/verification.js";
 import { SocialRegistry } from "../../services/social/socialRegistry.js";
 import { ConfigManager } from "../../config.js";
@@ -171,29 +177,39 @@ export class UserController {
           skip: (page - 1) * limit,
           take: limit,
           include: {
-            wallet: { select: { name: true, address: true } },
+            wallet: { select: { name: true, address: true, chain: true, chainFamily: true } },
           },
         }),
         db.prisma.trade.count({ where }),
       ]);
 
-      const items = trades.map((t) => ({
-        id: t.id,
-        walletName: t.wallet.name,
-        walletAddress: t.wallet.address,
-        direction: t.direction,
-        tokenIn: t.tokenIn,
-        tokenOut: t.tokenOut,
-        amountIn: t.amountIn,
-        amountOut: t.amountOut,
-        amountInUsd: t.amountInUsd,
-        amountOutUsd: t.amountOutUsd,
-        txId: t.txId,
-        status: t.status,
-        errorMessage: t.errorMessage,
-        createdAt: t.createdAt,
-        confirmedAt: t.confirmedAt,
-      }));
+      const items = trades.map((t) => {
+        // The trade's own chain, falling back to the wallet's for rows that
+        // predate the column.
+        const chainId = t.chain ?? walletChainId(t.wallet);
+        return {
+          id: t.id,
+          walletName: t.wallet.name,
+          walletAddress: t.wallet.address,
+          chain: chainId,
+          direction: t.direction,
+          tokenIn: t.tokenIn,
+          tokenOut: t.tokenOut,
+          amountIn: t.amountIn,
+          amountOut: t.amountOut,
+          amountInUsd: t.amountInUsd,
+          amountOutUsd: t.amountOutUsd,
+          txId: t.txId,
+          // Built here rather than in each client. Four separate surfaces were
+          // composing a Hiro URL by hand, so every non-Stacks trade linked to
+          // an explorer that has never heard of it.
+          explorerUrl: explorerTxUrlFor(chainId, t.txId),
+          status: t.status,
+          errorMessage: t.errorMessage,
+          createdAt: t.createdAt,
+          confirmedAt: t.confirmedAt,
+        };
+      });
 
       res.json({ items, total, page, limit });
     } catch (error) {
@@ -208,32 +224,42 @@ export class UserController {
       const context =
         (req.query.context as string) ?? "personal";
 
-      const settings = await db.findTradeSettings(req.userId!, context);
+      const [settings, chainPreferences] = await Promise.all([
+        db.findTradeSettings(req.userId!, context),
+        db.findChainPreferences(req.userId!),
+      ]);
 
-      res.json(
-        settings ?? {
-          context,
-          chain: "stacks:mainnet",
-          slippageBps: 100,
-          maxPositionPct: 25.0,
-          dailyLossLimit: 5.0,
-          rebalanceThreshold: 2.0,
-          useGasless: false,
-          gaslessFeeToken: "USDC",
-        }
+      // Per-chain overrides ride along, so the settings page can show which
+      // chains diverge from the account default without a second round trip.
+      // Only the chains this deployment runs are listed: a preference left over
+      // from a chain since removed from ENABLED_CHAINS is not something the
+      // user can act on.
+      const enabled = new Set(
+        ChainAdapterRegistry.getInstance().list().map((d) => d.chainId)
       );
+
+      res.json({
+        ...(settings ?? { context, ...DEFAULT_TRADE_SETTINGS }),
+        chains: chainPreferences
+          .filter((p) => enabled.has(p.chainId))
+          .map((p) => ({ chainId: p.chainId, slippageBps: p.slippageBps })),
+      });
     } catch (error) {
       logger.error("Failed to fetch settings", { error });
       next(new InternalError());
     }
   }
 
-  static async updateSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
+  static async updateSettings(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const db = DatabaseService.getInstance();
       const data = req.body as {
         context?: string;
-        chain?: string;
+        /**
+         * When present, slippage is stored as an override for this chain
+         * rather than as the account default. Null clears the override.
+         */
+        chainId?: string;
         slippageBps?: number;
         maxPositionPct?: number;
         dailyLossLimit?: number;
@@ -242,10 +268,32 @@ export class UserController {
         gaslessFeeToken?: string;
       };
 
+      if (data.chainId) {
+        const descriptor = ChainAdapterRegistry.getInstance().find(data.chainId);
+        if (!descriptor) {
+          return next(
+            new ValidationError(`Chain "${data.chainId}" is not enabled on this deployment`)
+          );
+        }
+
+        // Only slippage is per chain. Position and loss limits bound the
+        // account's total exposure, and expressing them per chain would let a
+        // user with three chains take three times the position they asked to
+        // be limited to.
+        await db.upsertChainPreference({
+          userId: req.userId!,
+          chainId: data.chainId,
+          slippageBps: data.slippageBps ?? null,
+        });
+
+        return res.json(
+          await resolveTradeSettings(req.userId!, data.context ?? "personal", data.chainId)
+        );
+      }
+
       const settings = await db.upsertTradeSettings({
         userId: req.userId!,
         context: data.context ?? "personal",
-        chain: data.chain,
         slippageBps: data.slippageBps,
         maxPositionPct: data.maxPositionPct,
         dailyLossLimit: data.dailyLossLimit,
@@ -589,7 +637,12 @@ export class UserController {
       });
 
       if ("txId" in result) {
-        return res.json({ ok: true, txId: result.txId });
+        return res.json({
+          ok: true,
+          txId: result.txId,
+          chain: chainId,
+          explorerUrl: explorerTxUrlFor(chainId, result.txId),
+        });
       }
 
       res.status(400).json({ error: result.error });
@@ -650,16 +703,16 @@ export class UserController {
         return res.status(400).json({ error: `Insufficient available balance for ${tokenIn}. Available: ${availableBalance}, Required: ${amountIn} (accounting for pending trades/orders)` });
       }
 
-      const settings = await db.findTradeSettings(req.userId!, "personal");
+      const settings = await resolveTradeSettings(req.userId!, "personal", chainId);
       const riskAction = { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason: "Manual trade via web" };
       const riskResult = await RiskManager.getInstance().evaluateTrade(
         req.userId!,
         riskAction,
         balances,
         {
-          slippageBps: settings?.slippageBps ?? 100,
-          maxPositionPct: settings?.maxPositionPct ?? 25.0,
-          dailyLossLimit: settings?.dailyLossLimit ?? 5.0,
+          slippageBps: settings.slippageBps,
+          maxPositionPct: settings.maxPositionPct,
+          dailyLossLimit: settings.dailyLossLimit,
         }
       );
       if (!riskResult.approved) {
@@ -729,7 +782,15 @@ export class UserController {
           feeAmount: est.feeAmount, feeBps: est.feeBps,
         });
         await db.updateTradeStatus(trade.id, "BROADCAST", result.txId);
-        return res.json({ ok: true, tradeId: trade.id, txId: result.txId, estimate: est, dex: selectedProviderName });
+        return res.json({
+          ok: true,
+          tradeId: trade.id,
+          txId: result.txId,
+          chain: chainId,
+          explorerUrl: explorerTxUrlFor(chainId, result.txId),
+          estimate: est,
+          dex: selectedProviderName,
+        });
       }
 
       res.status(500).json({ error: result.error });
@@ -847,11 +908,8 @@ export class UserController {
       const db = DatabaseService.getInstance();
       const chains = ChainAdapterRegistry.getInstance().list();
 
-      const settings = await db.prisma.tradeSettings.findMany({
-        where: { userId: req.userId! },
-        select: { chain: true, sponsorGas: true },
-      });
-      const chosen = new Map(settings.map((s) => [s.chain, s.sponsorGas]));
+      const preferences = await db.findChainPreferences(req.userId!);
+      const chosen = new Map(preferences.map((p) => [p.chainId, p.sponsorGas]));
 
       res.json({
         chains: chains.map((descriptor) => {
@@ -864,6 +922,8 @@ export class UserController {
             reason,
             // Defaults to on, matching how every 4337 wallet behaved before
             // the toggle existed.
+            // `?? true` covers both "no row" and "row with no opinion": null
+            // means inherit, and the inherited answer is sponsored.
             enabled: available && (chosen.get(descriptor.chainId) ?? true),
           };
         }),
@@ -896,22 +956,15 @@ export class UserController {
         return next(new ValidationError(reason ?? "This chain cannot sponsor gas"));
       }
 
-      const db = DatabaseService.getInstance();
-      const existing = await db.prisma.tradeSettings.findFirst({
-        where: { userId: req.userId!, chain: chainId },
-        select: { id: true },
+      // ChainPreference, not TradeSettings. Writing this into the account
+      // table by (userId, chain) is what used to insert a second
+      // (userId, "personal") row full of default risk limits, after which the
+      // unordered lookup every risk reader used could return either one.
+      await DatabaseService.getInstance().upsertChainPreference({
+        userId: req.userId!,
+        chainId,
+        sponsorGas: enabled,
       });
-
-      if (existing) {
-        await db.prisma.tradeSettings.update({
-          where: { id: existing.id },
-          data: { sponsorGas: enabled },
-        });
-      } else {
-        await db.prisma.tradeSettings.create({
-          data: { userId: req.userId!, chain: chainId, sponsorGas: enabled },
-        });
-      }
 
       res.json({ ok: true, chainId, enabled });
     } catch (error) {

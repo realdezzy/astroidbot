@@ -8,6 +8,7 @@ import type { RebalanceAction } from "../types.js";
 import { safeValidateStrategyConfig } from "./strategy/configValidation.js";
 import { executeSwapPayload } from "./chains/executeSwap.js";
 import { DEFAULT_CHAIN_ID } from "./chains/descriptors/index.js";
+import { resolveTradeSettings } from "./tradeSettings.js";
 
 // Exported for use by strategyWorker — handles DEX quoting, building, broadcasting,
 // and DB/WebSocket bookkeeping for a list of approved actions.
@@ -25,8 +26,8 @@ export async function executeApprovedActions(
   const db = DatabaseService.getInstance();
   const wss = WebSocketManager.getInstance();
 
-  const settings = await db.findTradeSettings(userId, "personal");
-  const useGasless = settings?.useGasless ?? false;
+  const settings = await resolveTradeSettings(userId, "personal", chainId);
+  const useGasless = settings.useGasless;
 
   for (const action of actions) {
     attempted++;

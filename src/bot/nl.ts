@@ -13,6 +13,7 @@ import { tradeScreen } from "./screens/tradeScreen.js";
 import { tradesScreen } from "./screens/tradesScreen.js";
 import { agentsScreen } from "./screens/agentsScreen.js";
 import { walletDescriptor } from "../services/chains/walletChain.js";
+import { activeChain } from "./chainContext.js";
 import type { BotContext } from "../types/bot.js";
 import { Prisma } from "@prisma/client";
 
@@ -35,9 +36,13 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
   if (!parsed || parsed.action === "unknown") {
     const greetingRegex = /^(hello|hi|hey|greetings|good morning|good afternoon|good evening|yo)\b/i;
     if (greetingRegex.test(text)) {
-      const reply = "👋 *Hello!* I am AstroidBot, your AI Stacks trading assistant.\n\n" +
+      // Examples follow the user's active chain, so a Base user isn't shown a
+      // pair their wallet cannot route.
+      const chain = await activeChain(ctx);
+      const pair = `${chain.nativeSymbol} for ${chain.stableSymbol}`;
+      const reply = "👋 *Hello!* I am AstroidBot, your AI multichain trading assistant.\n\n" +
         "I can help you with:\n" +
-        "• *Trades*: e.g. `buy 10 STX for USDCx`\n" +
+        `• *Trades*: e.g. \`buy 10 ${pair}\`\n` +
         "• *Automated strategies*: DCA, Grid, and Portfolio Rebalancing\n" +
         "• *Wallets*: e.g. `show my wallets` or create/import wallets\n" +
         "• *Limit Orders*: e.g. `open limit orders`\n\n" +
@@ -47,9 +52,10 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
       await ctx.reply(reply, { parse_mode: "Markdown" });
       return;
     }
+    const chain = await activeChain(ctx);
     const fallback = "🤖 *AstroidBot Assistant*\n\n" +
       "I didn't quite catch that. Here are some things I can do for you:\n" +
-      "• *Swaps*: `buy 10 STX`, `sell 5 ALEX`\n" +
+      `• *Swaps*: \`buy 10 ${chain.nativeSymbol}\`, \`sell 5 ${chain.stableSymbol}\`\n` +
       "• *Risk Limits*: `set slippage 200`\n" +
       "• *View Panels*: `show portfolio`, `list wallets`, `open orders`\n" +
       "• *Strategies*: `create rebalance strategy`\n\n" +

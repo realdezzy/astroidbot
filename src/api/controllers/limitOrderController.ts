@@ -3,6 +3,7 @@ import { LimitOrderService } from "../../services/limitOrder.js";
 import { DatabaseService } from "../../services/db.js";
 import { logger } from "../../utils/logger.js";
 import { ValidationError, NotFoundError, InternalError } from "../errors.js";
+import { walletChainId } from "../../services/chains/walletChain.js";
 
 export class LimitOrderController {
   static async getLimitOrders(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -54,27 +55,57 @@ export class LimitOrderController {
         return next(new ValidationError("walletIds or walletId is required"));
       }
 
+      // One submission may name wallets on different chains, and a token pair
+      // is only meaningful on one of them. Each wallet is attempted on its own
+      // chain and reported individually rather than skipped in silence — the
+      // old loop `continue`d past every failure and returned 201 with a
+      // shorter list than the user asked for, which reads as success.
       const orders = [];
+      const rejected: { walletId: number; chainId?: string; reason: string }[] = [];
 
       for (const wid of walletIds) {
         const wallet = await db.findWalletById(wid);
-        if (!wallet || wallet.userId !== req.userId) continue;
+        if (!wallet || wallet.userId !== req.userId) {
+          rejected.push({ walletId: wid, reason: "Wallet not found" });
+          continue;
+        }
 
-        const order = await service.create({
-          userId: req.userId!,
-          walletId: wid,
-          tokenIn: data.tokenIn,
-          tokenOut: data.tokenOut,
-          direction: data.direction,
-          targetPrice: data.targetPrice,
-          amountIn: data.amountIn,
-          forceAfter: data.forceAfter ? new Date(data.forceAfter) : undefined,
-          expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
-        });
-        orders.push(order);
+        const chainId = walletChainId(wallet);
+
+        try {
+          const order = await service.create({
+            userId: req.userId!,
+            walletId: wid,
+            tokenIn: data.tokenIn,
+            tokenOut: data.tokenOut,
+            direction: data.direction,
+            targetPrice: data.targetPrice,
+            amountIn: data.amountIn,
+            forceAfter: data.forceAfter ? new Date(data.forceAfter) : undefined,
+            expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
+          });
+          orders.push(order);
+        } catch (error) {
+          rejected.push({
+            walletId: wid,
+            chainId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
-      res.status(201).json({ orders });
+      // Nothing placed at all is a failed request, not a 201 with an empty
+      // array — the single-wallet case is the common one and it must surface
+      // the reason.
+      if (orders.length === 0) {
+        return next(
+          new ValidationError(
+            rejected[0]?.reason ?? "No limit orders could be created for the given wallets"
+          )
+        );
+      }
+
+      res.status(201).json({ orders, rejected });
     } catch (error) {
       logger.error("Failed to create limit order", { error });
       next(new InternalError());
