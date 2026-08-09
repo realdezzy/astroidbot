@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Layout } from "./components/Layout";
+import { TokensLayout } from "./components/TokensLayout";
 import { Landing } from "./pages/Landing";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
@@ -32,15 +33,17 @@ const queryClient = new QueryClient({
   },
 });
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+import { Outlet } from "react-router-dom";
+
+function ProtectedRoute({ children }: { children?: React.ReactNode }) {
   const { user, loading } = useAuth();
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+      <div className="min-h-screen flex items-center justify-center bg-main-bg">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-gray-400 text-sm">Loading...</p>
+          <p className="text-muted-text text-sm">Loading...</p>
         </div>
       </div>
     );
@@ -50,7 +53,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  return <>{children}</>;
+  return children ? <>{children}</> : <Outlet />;
 }
 
 function AppRoutes() {
@@ -63,33 +66,33 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/reset-password/:token" element={<ResetPassword />} />
         <Route path="/docs" element={<Docs />} />
-        {/* Public: discovery is the top of the funnel, so it must not require
-            a login. The Trade action carries the chain + token through auth. */}
-        <Route path="/tokens" element={<TokenDiscovery />} />
-        <Route path="/tokens/:chainId/:contractId" element={<TokenDetail />} />
         <Route path="/docs/:slug" element={<Docs />} />
-        <Route
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/portfolio" element={<Portfolio />} />
-          <Route path="/trade" element={<Trade />} />
-          <Route path="/perp" element={<Perp />} />
-          <Route path="/wallets" element={<Wallets />} />
-          <Route path="/trades" element={<Navigate to="/trade" replace />} />
-          <Route path="/limit-orders" element={<LimitOrders />} />
-          <Route path="/strategies" element={<Navigate to="/agents" replace />} />
-          <Route path="/agents" element={<Agents />} />
-          {/* The old /tokens page was a blocklist manager, not discovery. */}
-          <Route path="/settings/tokens" element={<Tokens />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/account" element={<Account />} />
+
+        {/* Dedicated Layout Shell for DexScreener Tokens Discovery & Detail views */}
+        <Route element={<TokensLayout />}>
+          <Route path="/tokens" element={<TokenDiscovery />} />
+          <Route path="/tokens/:chainId/:contractId" element={<TokenDetail />} />
         </Route>
+
+        {/* Protected authenticated routes using standard Dashboard Layout */}
+        <Route element={<ProtectedRoute />}>
+          <Route element={<Layout />}>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/trade" element={<Trade />} />
+            <Route path="/perp" element={<Perp />} />
+            <Route path="/wallets" element={<Wallets />} />
+            <Route path="/trades" element={<Navigate to="/trade" replace />} />
+            <Route path="/limit-orders" element={<LimitOrders />} />
+            <Route path="/strategies" element={<Navigate to="/agents" replace />} />
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/settings/tokens" element={<Tokens />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/account" element={<Account />} />
+          </Route>
+        </Route>
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

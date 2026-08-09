@@ -2,12 +2,10 @@ import { useState, useEffect } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
-  Receipt,
   Settings,
   LogOut,
   Bot,
   Clock,
-  ShieldBan,
   Coins,
   UserCog,
   ArrowRightLeft,
@@ -19,7 +17,6 @@ import {
   X,
   MessageSquare,
   TrendingUp,
-  BookOpen,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
@@ -37,7 +34,6 @@ const navItems = [
   { to: "/account", icon: UserCog, label: "Account" },
 ];
 
-
 export function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -49,7 +45,6 @@ export function Layout() {
     return "dark";
   });
 
-  // Apply theme class on mount and on change
   useEffect(() => {
     if (theme === "light") {
       document.documentElement.classList.add("light");
@@ -96,8 +91,8 @@ export function Layout() {
         </div>
       </header>
 
-      {/* Desktop Sidebar */}
-      <aside className="hidden md:flex w-64 bg-sidebar-bg border-r border-sidebar-border flex-col transition-colors duration-300">
+      {/* Standard Desktop Sidebar */}
+      <aside className="hidden md:flex w-64 bg-sidebar-bg border-r border-sidebar-border flex-col transition-colors duration-300 shrink-0">
         <div className="p-6 border-b border-sidebar-border flex items-center justify-between">
           <a href="/" className="flex items-center gap-3">
             <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
@@ -108,16 +103,17 @@ export function Layout() {
           </a>
         </div>
 
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {navItems.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
               to={to}
               end={to === "/dashboard"}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${isActive
-                  ? "bg-brand-500/20 text-brand-400 font-semibold"
-                  : "text-muted-text hover:text-title-text hover:bg-bg-hover"
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                  isActive
+                    ? "bg-brand-500/20 text-brand-400 font-semibold"
+                    : "text-muted-text hover:text-title-text hover:bg-bg-hover"
                 }`
               }
             >
@@ -128,10 +124,9 @@ export function Layout() {
         </nav>
 
         <div className="p-4 border-t border-sidebar-border space-y-4">
-          {/* Theme Toggle Button */}
           <button
             onClick={toggleTheme}
-            className="flex items-center justify-between w-full px-3 py-2 text-sm text-muted-text hover:text-title-text hover:bg-bg-hover rounded-lg transition-colors"
+            className="flex items-center justify-between w-full px-3 py-2 text-sm text-muted-text hover:text-title-text hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2">
               {theme === "dark" ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-indigo-500" />}
@@ -139,7 +134,6 @@ export function Layout() {
             </div>
           </button>
 
-          {/* User Account Info */}
           <div className="flex items-center gap-3 px-2">
             <div className="w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center text-sm font-bold text-white shrink-0">
               {user?.username?.[0]?.toUpperCase() ?? "U"}
@@ -154,7 +148,7 @@ export function Layout() {
 
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors"
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
             Logout
@@ -162,10 +156,9 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Slide-over Drawer for Mobile */}
+      {/* Mobile Drawer */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 flex md:hidden">
-          {/* Overlay backdrop */}
           <div
             onClick={() => setMobileOpen(false)}
             className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"
@@ -196,9 +189,10 @@ export function Layout() {
                   end={to === "/dashboard"}
                   onClick={() => setMobileOpen(false)}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${isActive
-                      ? "bg-brand-500/20 text-brand-400 font-semibold"
-                      : "text-muted-text hover:text-title-text hover:bg-gray-100/10 transition-colors"
+                    `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                      isActive
+                        ? "bg-brand-500/20 text-brand-400 font-semibold"
+                        : "text-muted-text hover:text-title-text hover:bg-gray-100/10"
                     }`
                   }
                 >
@@ -226,7 +220,7 @@ export function Layout() {
                   setMobileOpen(false);
                   handleLogout();
                 }}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors"
+                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
                 Logout

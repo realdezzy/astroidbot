@@ -1,12 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check, Wallet } from "lucide-react";
 import { classNames } from "../lib/utils";
+import { useChains, nativeSymbolOf } from "../hooks/useChains";
+import { ChainBadge } from "./ChainBadge";
 
 interface Wallet {
   id: number;
   address: string;
   name: string;
   balance: number;
+  /** ChainId. Present so each row can show its own native asset. */
+  chain?: string | null;
 }
 
 interface MultiWalletSelectProps {
@@ -21,6 +25,12 @@ interface MultiWalletSelectProps {
 export function MultiWalletSelect({ wallets, selectedIds, onChange, className, balances, tokenSymbol }: MultiWalletSelectProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { chains } = useChains();
+
+  // Whether the list spans chains at all. When it does, every row is labelled,
+  // because a picker that lets you tick a Stacks and a Base wallet together
+  // has to at least say which is which.
+  const multiChain = new Set(wallets.map((w) => w.chain)).size > 1;
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -84,10 +94,17 @@ export function MultiWalletSelect({ wallets, selectedIds, onChange, className, b
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="font-medium text-title-text">{w.name}</span>
+                    {multiChain && w.chain && (
+                      <ChainBadge chainId={w.chain} className="ml-2" />
+                    )}
                     <span className="text-muted-text ml-2 text-xs">
-                      {balances && tokenSymbol && tokenSymbol !== "STX"
+                      {/* `w.balance` is the wallet's *native* balance, so it is
+                        * labelled with that chain's native asset rather than
+                        * with STX. The token branch is used when the caller is
+                        * asking about a specific non-native token. */}
+                      {balances && tokenSymbol && tokenSymbol !== nativeSymbolOf(w.chain, chains)
                         ? `${(balances[w.id]?.[tokenSymbol.toUpperCase()] ?? 0).toFixed(4)} ${tokenSymbol}`
-                        : `${w.balance.toFixed(4)} STX`
+                        : `${w.balance.toFixed(4)} ${nativeSymbolOf(w.chain, chains)}`
                       }
                     </span>
                   </div>

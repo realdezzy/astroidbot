@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, CheckCircle2, Zap, Share2, Trash2, Plus, ShieldCheck, AtSign, Loader2, Fuel, Info } from "lucide-react";
+import { Save, AlertTriangle, CheckCircle2, Zap, Share2, Trash2, Plus, ShieldCheck, AtSign, Loader2, Fuel, Info, Sliders } from "lucide-react";
 import { apiFetch } from "../lib/api";
+import { useChains } from "../hooks/useChains";
 
 interface TradeSettings {
   context: string;
-  chain: string;
   slippageBps: number;
   maxPositionPct: number;
   dailyLossLimit: number;
   rebalanceThreshold: number;
   useGasless: boolean;
   gaslessFeeToken: string;
+  /** Chains that override the account default. Absent = inherits. */
+  chains?: { chainId: string; slippageBps: number | null }[];
 }
 
 interface GaslessToken {
@@ -166,7 +168,8 @@ export function Settings() {
                 )}
               </div>
               <p className="text-xs text-muted-text mt-0.5">
-                Pay transaction fees in SIP-010 tokens via the VelumX relayer instead of STX
+                Pay Stacks transaction fees in SIP-010 tokens via the VelumX relayer instead of
+                STX. Other chains use per-chain gas sponsorship, below.
               </p>
             </div>
             <button
@@ -232,6 +235,9 @@ export function Settings() {
             </p>
           </div>
         </div>
+
+        {/* Slippage overrides, per chain */}
+        <ChainSlippageSection accountSlippageBps={form.slippageBps} />
 
         {/* Gas sponsorship, per chain */}
         <GasSponsorshipSection />
@@ -328,6 +334,102 @@ interface GasSponsorshipChain {
  * wondering why Celo has no switch; "this chain uses EOA custody, which pays
  * its own gas" is a better answer than an absent row.
  */
+/**
+ * Per-chain slippage overrides.
+ *
+ * Slippage is the setting that differs most by chain — a Stacks AMM and a
+ * Solana aggregator are not the same trade at the same tolerance — so it is the
+ * one the account default can be overridden for. Position and loss limits stay
+ * account-wide on purpose: they bound total exposure, and per-chain copies
+ * would let someone with three chains take three times the position they asked
+ * to be limited to.
+ *
+ * A chain with no override inherits, and clearing one puts it back to
+ * inheriting rather than pinning it at today's value.
+ */
+function ChainSlippageSection({ accountSlippageBps }: { accountSlippageBps: number }) {
+  const queryClient = useQueryClient();
+  const { chains, isLoading } = useChains();
+  const { data: settings } = useQuery<TradeSettings>({
+    queryKey: ["settings"],
+    queryFn: () => apiFetch("/me/settings"),
+  });
+
+  const overrides = new Map(
+    (settings?.chains ?? []).map((c) => [c.chainId, c.slippageBps])
+  );
+
+  const mutation = useMutation({
+    mutationFn: ({ chainId, slippageBps }: { chainId: string; slippageBps: number | null }) =>
+      apiFetch("/me/settings", {
+        method: "PUT",
+        body: JSON.stringify({ chainId, slippageBps }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+  });
+
+  if (isLoading || chains.length <= 1) return null;
+
+  return (
+    <div className="bg-card-bg border border-card-border rounded-xl p-5">
+      <div className="flex items-start gap-3 mb-4">
+        <Sliders className="w-5 h-5 text-brand-400 flex-shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-semibold text-title-text">Slippage per chain</p>
+          <p className="text-xs text-body-text/60 mt-1">
+            Chains left on “Inherit” use your account default of {accountSlippageBps} bps.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {chains.map((chain) => {
+          const override = overrides.get(chain.chainId) ?? null;
+          return (
+            <div
+              key={chain.chainId}
+              className="flex items-center justify-between gap-3 py-2 border-t border-divider-color first:border-t-0"
+            >
+              <div className="min-w-0">
+                <p className="text-sm text-title-text">{chain.displayName}</p>
+                <p className="text-xs text-body-text/60 font-mono truncate">{chain.chainId}</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <input
+                  type="number"
+                  min={10}
+                  max={5000}
+                  step={10}
+                  value={override ?? ""}
+                  placeholder={`${accountSlippageBps}`}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    mutation.mutate({
+                      chainId: chain.chainId,
+                      // Empty clears the override rather than storing 0, which
+                      // would mean "accept no slippage" and fail every swap.
+                      slippageBps: raw === "" ? null : Number(raw),
+                    });
+                  }}
+                  className="w-24 px-2 py-1.5 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text text-right focus:border-brand-500 focus:outline-none"
+                />
+                <span className="text-xs text-body-text/60 w-8">bps</span>
+                <button
+                  onClick={() => mutation.mutate({ chainId: chain.chainId, slippageBps: null })}
+                  disabled={override === null}
+                  className="text-xs text-body-text/60 hover:text-title-text disabled:opacity-30 transition-colors"
+                >
+                  Inherit
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function GasSponsorshipSection() {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);

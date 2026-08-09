@@ -16,6 +16,7 @@ import {
 import { apiFetch } from "../lib/api";
 import { classNames } from "../lib/utils";
 import { AutoRefreshToggle } from "../components/AutoRefreshToggle";
+import { MarqueeTicker } from "../components/MarqueeTicker";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { TokenRow } from "./tokens/TokenRow";
 import { formatCount, formatUsdCompact } from "./tokens/format";
@@ -100,6 +101,14 @@ export function Tokens() {
     const all = chainData?.chains ?? [];
     return showTestnets ? all : all.filter((c) => !c.isTestnet);
   }, [chainData, showTestnets]);
+
+  // Looks up against the *unfiltered* list: a token's chain has to resolve
+  // even when testnets are hidden from the rail.
+  const byId = useCallback(
+    (chainId: string | null | undefined) =>
+      chainId ? chainData?.chains.find((c) => c.chainId === chainId) : undefined,
+    [chainData]
+  );
 
   // Selecting a testnet then hiding testnets would strand the filter on a
   // chain no longer offered, showing an empty table with no visible cause.
@@ -195,6 +204,19 @@ export function Tokens() {
 
   return (
     <div className="space-y-4">
+      {/* Top 24h Moving Marquee Ticker */}
+      <MarqueeTicker
+        tokens={tokens.map((t) => ({
+          symbol: t.symbol,
+          priceChange24h: t.priceChange.h24,
+          priceChange6h: t.priceChange.h6,
+          priceUsd: t.priceUsd,
+          chainId: t.chainId,
+          contractId: t.contractId,
+        }))}
+        isLoading={isLoading}
+      />
+
       {/* Summary strip */}
       <div className="glass-card p-4">
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
@@ -382,7 +404,14 @@ export function Tokens() {
                     rank={startIndex + i + 1}
                     timeframe={timeframe}
                     isBlocked={blocked.has(token.contractId)}
-                    canBlock={token.symbol.toUpperCase() !== "STX"}
+                    // A chain's own native asset can't be blocked — every pair
+                    // on that chain routes through it. Compared against the
+                    // token's own chain rather than the literal "STX", which
+                    // left ETH and SOL blockable.
+                    canBlock={
+                      token.symbol.toUpperCase() !==
+                      (byId(token.chainId)?.nativeSymbol ?? "").toUpperCase()
+                    }
                     onTrade={handleTrade}
                     onToggleBlock={handleToggleBlock}
                   />

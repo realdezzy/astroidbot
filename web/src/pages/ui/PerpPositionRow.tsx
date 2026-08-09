@@ -76,6 +76,11 @@ export function PerpPositionRow({ position, onClose, isClosing }: PerpPositionRo
       <td className="py-3.5 px-4 text-xs font-mono text-muted-text">
         {position.txId ? (
           <a
+            // Deliberately Stacks-only, unlike every other explorer link in
+            // the app. Perps are not shipped — the markets are mocks and the
+            // UI says "coming soon" — so there is no real position on any
+            // chain to link to yet. Route this through the API's explorerUrl
+            // when the feature becomes real.
             href={`https://explorer.stacks.co/txid/${position.txId}?chain=mainnet`}
             target="_blank"
             rel="noopener noreferrer"

@@ -19,6 +19,8 @@ interface DetailData {
     amountIn: number; amountOut: number;
     feeAmount: number; feeBps: number;
     txId: string | null; status: string;
+    /** Resolved server-side from the trade's chain; null when unresolvable. */
+    explorerUrl?: string | null;
     createdAt: string; confirmedAt: string | null;
   }>;
   pnl: number;
@@ -129,9 +131,9 @@ export function StrategyDetailModal({ strategyId, onClose }: StrategyDetailProps
                           <span className={STATUS_COLORS[t.status] ?? "text-muted-text"}>
                             {t.status}
                           </span>
-                          {t.txId && (
+                          {t.txId && t.explorerUrl && (
                             <a
-                              href={`https://explorer.hiro.so/txid/${t.txId}`}
+                              href={t.explorerUrl}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-brand-400 hover:text-brand-300"

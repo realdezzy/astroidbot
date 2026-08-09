@@ -170,7 +170,7 @@ export function Landing() {
       <section className="relative mx-auto px-6 pt-20 pb-28 text-center">
 
         <h1 className="text-4xl sm:text-6xl font-black text-title-text tracking-tight leading-tight max-w-4xl mx-auto">
-          AstroidBot: The <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-indigo-400 to-indigo-500">smart trading bot</span> for Stacks
+          AstroidBot: The <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-indigo-400 to-indigo-500">smart trading bot</span> for every chain you trade
         </h1>
 
         <p className="mt-6 text-lg text-muted-text max-w-2xl mx-auto leading-relaxed">
@@ -302,7 +302,7 @@ export function Landing() {
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text">Why automate with AstroidBot?</h2>
           <p className="mt-4 text-muted-text">
-            Engineered exclusively for the Stacks network, leveraging quick confirmations and low fees to run optimized trading models.
+            One engine across Stacks, Solana and the EVM chains you enable — the same strategies, risk limits and automation wherever your funds are.
           </p>
         </div>
 
@@ -313,7 +313,7 @@ export function Landing() {
             </div>
             <h3 className="text-xl font-bold text-title-text mb-3">AI-Driven Parameter Optimization</h3>
             <p className="text-muted-text text-sm leading-relaxed">
-              Our models dynamically evaluate Stacks trading pairs (e.g. STX/ALEX, STX/WELAR) to adjust grids based on volatility, ensuring optimized buy-low, sell-high setups.
+              Our models evaluate the pairs on each chain you trade and adjust grids to that market&apos;s volatility, ensuring optimized buy-low, sell-high setups.
             </p>
           </div>
 
@@ -345,7 +345,7 @@ export function Landing() {
           <div>
             <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text">Project your profits</h2>
             <p className="mt-4 text-muted-text leading-relaxed">
-              Choose your trading capital, specify the AI grid bot risk profile, and see how compounding performance performs over time on Stacks.
+              Choose your trading capital, specify the AI grid bot risk profile, and see how compounding performance performs over time.
             </p>
 
             <div className="mt-8 space-y-6">

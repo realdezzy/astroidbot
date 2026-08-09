@@ -15,6 +15,14 @@ interface TradesResponse {
     amountIn: number;
     amountOut: number;
     txId: string | null;
+    chain?: string;
+    /**
+     * Resolved by the API from the trade's own chain. Declared here because
+     * TradeRow renders a link only when it is present — omitting it from this
+     * type made every row look linkless at the type level while the API was
+     * sending one.
+     */
+    explorerUrl?: string | null;
     status: string;
     errorMessage: string | null;
     createdAt: string;

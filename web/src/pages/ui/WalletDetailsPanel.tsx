@@ -9,14 +9,33 @@ import {
   Send,
 } from "lucide-react";
 import { apiFetch } from "../../lib/api";
+import { ChainBadge } from "../../components/ChainBadge";
+import { useChains } from "../../hooks/useChains";
 
 export interface WalletRecord {
   id: number;
   address: string;
   name: string;
   balance: number;
+  /** ChainId. Decides the native asset, the address format and the explorer. */
+  chain?: string | null;
   createdAt: string;
 }
+
+/**
+ * An example address per family, so the recipient field shows the shape the
+ * user is expected to paste. A Stacks example on a Base transfer form is worse
+ * than no example: it suggests the wrong thing will be accepted.
+ *
+ * These are shape illustrations, not real destinations — each is a
+ * well-known documentation address, and they are checksum/length valid so they
+ * look like the thing they stand for. Never treat them as anything else.
+ */
+const ADDRESS_EXAMPLES: Record<string, string> = {
+  stacks: "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE",
+  evm: "0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
+  svm: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+};
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -45,12 +64,21 @@ export function WalletDetailsPanel({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const { byId } = useChains();
   const [activeTab, setActiveTab] = useState<"balances" | "transfer">("balances");
   const [transferAddress, setTransferAddress] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
-  const [transferToken, setTransferToken] = useState("STX");
   const [transferError, setTransferError] = useState<string | null>(null);
-  const [transferSuccessTxId, setTransferSuccessTxId] = useState<string | null>(null);
+  const [transferSuccess, setTransferSuccess] =
+    useState<{ txId: string; explorerUrl: string | null } | null>(null);
+
+  const chain = byId(wallet.chain);
+  // The wallet's own native asset. Hardcoding "STX" here meant a Base transfer
+  // posted token: "STX", which the backend could match to neither ETH nor any
+  // token on that chain, and passed through to the EVM adapter as a literal.
+  const nativeSymbol = chain?.nativeSymbol ?? "";
+  const [transferToken, setTransferToken] = useState<string | null>(null);
+  const selectedToken = transferToken ?? nativeSymbol;
 
   const { data: balances = [], isLoading: isBalancesLoading } = useQuery<
     Array<{ token: string; symbol: string; balance: number; usdValue: number }>
@@ -65,30 +93,30 @@ export function WalletDetailsPanel({
       apiFetch(`/me/wallets/${wallet.id}/transfer`, {
         method: "POST",
         body: JSON.stringify(vars),
-      }) as Promise<{ ok: boolean; txId: string }>,
+      }) as Promise<{ ok: boolean; txId: string; explorerUrl: string | null }>,
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["wallet-balances", wallet.id] });
       qc.invalidateQueries({ queryKey: ["wallets"] });
       setTransferAddress("");
       setTransferAmount("");
-      setTransferSuccessTxId(data.txId);
+      setTransferSuccess({ txId: data.txId, explorerUrl: data.explorerUrl ?? null });
       setTransferError(null);
     },
     onError: (err: Error) => {
       setTransferError(err.message);
-      setTransferSuccessTxId(null);
+      setTransferSuccess(null);
     },
   });
 
   const handleTransferSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferAddress.trim() || !transferAmount) return;
-    setTransferSuccessTxId(null);
+    if (!transferAddress.trim() || !transferAmount || !selectedToken) return;
+    setTransferSuccess(null);
     setTransferError(null);
     transferMut.mutate({
       toAddress: transferAddress.trim(),
       amount: parseFloat(transferAmount),
-      token: transferToken,
+      token: selectedToken,
     });
   };
 
@@ -96,7 +124,10 @@ export function WalletDetailsPanel({
     <div className="bg-card-bg border border-card-border rounded-2xl p-6 flex flex-col gap-6 h-full min-h-[400px]">
       <div className="flex items-center justify-between border-b border-divider-color pb-4">
         <div>
-          <h3 className="text-lg font-bold text-title-text">{wallet.name} Details</h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-lg font-bold text-title-text">{wallet.name} Details</h3>
+            {wallet.chain && <ChainBadge chainId={wallet.chain} />}
+          </div>
           <p className="text-xs font-mono text-muted-text mt-1 flex items-center gap-1.5 break-all">
             {wallet.address}
             <CopyButton text={wallet.address} />
@@ -109,7 +140,7 @@ export function WalletDetailsPanel({
 
       <div className="flex border-b border-divider-color">
         <button
-          onClick={() => { setActiveTab("balances"); setTransferSuccessTxId(null); setTransferError(null); }}
+          onClick={() => { setActiveTab("balances"); setTransferSuccess(null); setTransferError(null); }}
           className={`flex-1 pb-2 text-sm font-semibold border-b-2 transition-colors ${activeTab === "balances"
               ? "border-brand-500 text-brand-400"
               : "border-transparent text-muted-text hover:text-title-text"
@@ -118,7 +149,7 @@ export function WalletDetailsPanel({
           Balances
         </button>
         <button
-          onClick={() => { setActiveTab("transfer"); setTransferSuccessTxId(null); setTransferError(null); }}
+          onClick={() => { setActiveTab("transfer"); setTransferSuccess(null); setTransferError(null); }}
           className={`flex-1 pb-2 text-sm font-semibold border-b-2 transition-colors ${activeTab === "transfer"
               ? "border-brand-500 text-brand-400"
               : "border-transparent text-muted-text hover:text-title-text"
@@ -150,7 +181,9 @@ export function WalletDetailsPanel({
                     <div>
                       <p className="font-semibold text-sm text-title-text">{b.symbol}</p>
                       <p className="text-xs text-muted-text/80 font-mono mt-0.5 truncate max-w-[180px]" title={b.token}>
-                        {b.token === "STX" ? "Native STX Token" : b.token.split(".")[1] || b.token}
+                        {b.symbol === nativeSymbol
+                          ? `Native ${nativeSymbol} token`
+                          : b.token.split(".")[1] || b.token}
                       </p>
                     </div>
                   </div>
@@ -174,13 +207,15 @@ export function WalletDetailsPanel({
           <div>
             <label className="text-xs font-semibold text-muted-text block mb-1">Asset to Transfer</label>
             <select
-              value={transferToken}
+              value={selectedToken}
               onChange={(e) => setTransferToken(e.target.value)}
               className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text focus:border-brand-500 focus:outline-none"
             >
-              <option value="STX">STX (Native)</option>
+              {nativeSymbol && (
+                <option value={nativeSymbol}>{nativeSymbol} (Native)</option>
+              )}
               {balances
-                .filter((b) => b.symbol !== "STX" && b.balance > 0)
+                .filter((b) => b.symbol !== nativeSymbol && b.balance > 0)
                 .map((b) => (
                   <option key={b.token} value={b.token}>
                     {b.symbol} ({b.balance.toFixed(4)} available)
@@ -195,7 +230,11 @@ export function WalletDetailsPanel({
               type="text"
               value={transferAddress}
               onChange={(e) => setTransferAddress(e.target.value)}
-              placeholder="e.g. SP3FBR2AGK5H9QBDH3EEN6DF8..."
+              placeholder={
+                chain
+                  ? `${chain.displayName} address, e.g. ${ADDRESS_EXAMPLES[chain.family] ?? ""}`
+                  : "Recipient address"
+              }
               className="w-full px-3 py-2 bg-input-bg border border-divider-color rounded-lg text-sm text-title-text placeholder:text-muted-text focus:border-brand-500 focus:outline-none font-mono"
               required
             />
@@ -221,10 +260,22 @@ export function WalletDetailsPanel({
             </div>
           )}
 
-          {transferSuccessTxId && (
+          {transferSuccess && (
             <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-xs text-green-400 space-y-1">
               <p className="font-semibold">Transfer broadcasted successfully!</p>
-              <p className="font-mono break-all opacity-80">Tx ID: {transferSuccessTxId}</p>
+              <p className="font-mono break-all opacity-80">Tx ID: {transferSuccess.txId}</p>
+              {/* The link comes from the server, which knows the chain. Plain
+                * text when it can't be resolved beats a link that 404s. */}
+              {transferSuccess.explorerUrl && (
+                <a
+                  href={transferSuccess.explorerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block underline hover:no-underline"
+                >
+                  View on explorer
+                </a>
+              )}
             </div>
           )}
 

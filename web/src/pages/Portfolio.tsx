@@ -4,9 +4,11 @@ import { Wallet, PieChart } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { formatUSD, formatNumber, classNames } from "../lib/utils";
 import { PortfolioChart } from "../components/PortfolioChart";
-import { TradingViewChart } from "../components/TradingViewChart";
+import { ResponsiveContainer, AreaChart, Area, BarChart, Bar, Tooltip, XAxis, YAxis } from "recharts";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { AutoRefreshToggle } from "../components/AutoRefreshToggle";
+import { ChainBadge } from "../components/ChainBadge";
+import { useChains, chainLabel, nativeSymbolOf } from "../hooks/useChains";
 
 interface WalletType {
   id: number;
@@ -14,6 +16,8 @@ interface WalletType {
   name: string;
   balance: number;
   balanceUsd: number;
+  /** ChainId. Two wallets on different chains never share an asset row. */
+  chain?: string | null;
   balances?: Array<{
     token: string;
     symbol: string;
@@ -33,6 +37,7 @@ export function Portfolio() {
   const [activeTab, setActiveTab] = useState<number | "all">("all");
   const [timeframe, setTimeframe] = useState<"1d" | "7d" | "30d" | "all">("7d");
   const { isActive, toggle, timeLeft, interval } = useAutoRefresh("portfolio");
+  const { chains } = useChains();
 
   const { data: wallets } = useQuery<WalletType[]>({
     queryKey: ["wallets"],
@@ -57,24 +62,38 @@ export function Portfolio() {
 
   const totalBalance = filteredWallets.reduce((sum, w) => sum + (w.balanceUsd ?? 0), 0);
 
-  // Combine balances of the same token across all selected wallets
-  const assetBalances: Record<string, { symbol: string; balance: number; usdValue: number; token: string }> = {};
+  // Combine balances of the same token across the selected wallets.
+  //
+  // Keyed by `chainId:symbol`, never by the bare symbol. USDC on Base and USDC
+  // on Solana are different assets that cannot be moved between each other, and
+  // summing them produced a holding the user does not have — one row, one
+  // balance, no way to act on it. Same rule the backend catalogue follows.
+  const assetBalances: Record<
+    string,
+    { symbol: string; balance: number; usdValue: number; token: string; chain?: string | null }
+  > = {};
 
   filteredWallets.forEach((w) => {
     const wBalances = w.balances || [
-      { token: "STX", symbol: "STX", balance: w.balance, usdValue: w.balanceUsd }
+      {
+        token: nativeSymbolOf(w.chain, chains),
+        symbol: nativeSymbolOf(w.chain, chains),
+        balance: w.balance,
+        usdValue: w.balanceUsd,
+      },
     ];
     wBalances.forEach((b) => {
-      const sym = b.symbol.toUpperCase();
-      if (assetBalances[sym]) {
-        assetBalances[sym].balance += b.balance;
-        assetBalances[sym].usdValue += b.usdValue ?? 0;
+      const key = `${w.chain ?? "unknown"}:${b.symbol.toUpperCase()}`;
+      if (assetBalances[key]) {
+        assetBalances[key].balance += b.balance;
+        assetBalances[key].usdValue += b.usdValue ?? 0;
       } else {
-        assetBalances[sym] = {
+        assetBalances[key] = {
           token: b.token,
           symbol: b.symbol,
           balance: b.balance,
           usdValue: b.usdValue ?? 0,
+          chain: w.chain,
         };
       }
     });
@@ -86,8 +105,11 @@ export function Portfolio() {
 
   const totalAssetValue = assetsList.reduce((sum, a) => sum + a.usdValue, 0);
 
+  // Slice labels carry the chain when more than one is in play, so two USDC
+  // wedges are tellable apart.
+  const multiChain = new Set(filteredWallets.map((w) => w.chain)).size > 1;
   const chartData = assetsList.map((a, i) => ({
-    name: a.symbol,
+    name: multiChain ? `${a.symbol} · ${chainLabel(a.chain, chains)}` : a.symbol,
     value: a.usdValue,
     color: COLORS[i % COLORS.length],
   }));
@@ -159,10 +181,11 @@ export function Portfolio() {
             {assetsList.map((a, i) => {
               const allocationPct = totalAssetValue > 0 ? (a.usdValue / totalAssetValue) * 100 : 0;
               return (
-                <div key={a.token} className="flex items-center justify-between text-sm">
+                <div key={`${a.chain}:${a.token}`} className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
                     <span className="text-muted-text font-medium">{a.symbol}</span>
+                    {multiChain && a.chain && <ChainBadge chainId={a.chain} />}
                   </div>
                   <span className="text-title-text font-bold">
                     {formatUSD(a.usdValue)} ({allocationPct.toFixed(1)}%)
@@ -193,7 +216,30 @@ export function Portfolio() {
               ))}
             </div>
           </div>
-          <TradingViewChart type="area" data={pnlData} height={300} color="#4f46e5" />
+          <div className="h-[260px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={pnlData}>
+                <defs>
+                  <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="time" stroke="#64748b" fontSize={10} tickLine={false} />
+                <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#1e293b",
+                    borderColor: "#334155",
+                    borderRadius: "8px",
+                    color: "#f8fafc",
+                  }}
+                  formatter={(val: number) => [`$${val.toFixed(2)}`, "PnL"]}
+                />
+                <Area type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={2} fillOpacity={1} fill="url(#pnlGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
 
@@ -203,7 +249,24 @@ export function Portfolio() {
           <h3 className="text-sm font-bold text-title-text uppercase tracking-wider">Trade Volume</h3>
           <span className="text-xs text-muted-text font-semibold uppercase">{timeframe} Timeframe</span>
         </div>
-        <TradingViewChart type="histogram" data={volumeData} height={200} color="#34d399" />
+        <div className="h-[180px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={volumeData}>
+              <XAxis dataKey="time" stroke="#64748b" fontSize={10} tickLine={false} />
+              <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#1e293b",
+                  borderColor: "#334155",
+                  borderRadius: "8px",
+                  color: "#f8fafc",
+                }}
+                formatter={(val: number) => [`$${val.toFixed(2)}`, "Volume"]}
+              />
+              <Bar dataKey="value" fill="#34d399" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </div>
 
       {/* Asset Breakdown Table */}
@@ -226,13 +289,16 @@ export function Portfolio() {
                   const allocationPct = totalAssetValue > 0 ? (a.usdValue / totalAssetValue) * 100 : 0;
                   const tokenPrice = a.balance > 0 ? a.usdValue / a.balance : 0;
                   return (
-                    <tr key={a.token} className="text-title-text hover:bg-bg-hover transition-colors">
+                    <tr key={`${a.chain}:${a.token}`} className="text-title-text hover:bg-bg-hover transition-colors">
                       <td className="py-4 pr-4 font-medium flex items-center gap-2">
                         <div className="w-8 h-8 rounded-full bg-brand-500/10 text-brand-400 flex items-center justify-center font-bold text-xs uppercase">
                           {a.symbol.slice(0, 3)}
                         </div>
                         <div>
-                          <div className="font-semibold">{a.symbol}</div>
+                          <div className="font-semibold flex items-center gap-1.5">
+                            {a.symbol}
+                            {multiChain && a.chain && <ChainBadge chainId={a.chain} />}
+                          </div>
                           <div className="text-xs text-muted-text max-w-[150px] truncate font-mono" title={a.token}>
                             {a.token.includes("::") ? `${a.token.slice(0, 6)}...${a.token.split("::")[1]}` : a.token}
                           </div>
@@ -260,8 +326,9 @@ export function Portfolio() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredWallets.map((w) => (
               <div key={w.id} className="p-4 rounded-xl border border-divider-color bg-bg-hover">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-2 gap-2">
                   <span className="font-semibold text-title-text text-sm">{w.name}</span>
+                  {w.chain && <ChainBadge chainId={w.chain} />}
                 </div>
                 <div className="flex items-center gap-1 mb-1">
                   <span className="text-xs text-muted-text font-mono">
@@ -270,7 +337,9 @@ export function Portfolio() {
                 </div>
                 <div className="flex items-baseline gap-2 mt-2">
                   <span className="text-2xl font-bold text-title-text">{formatUSD(w.balanceUsd ?? 0)}</span>
-                  <span className="text-xs text-muted-text">({w.balance.toFixed(2)} STX)</span>
+                  <span className="text-xs text-muted-text">
+                    ({w.balance.toFixed(2)} {nativeSymbolOf(w.chain, chains)})
+                  </span>
                 </div>
               </div>
             ))}

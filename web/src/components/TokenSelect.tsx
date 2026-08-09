@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Search, ChevronDown, Globe, AlertTriangle } from "lucide-react";
 import { classNames } from "../lib/utils";
 import { apiFetch } from "../lib/api";
+import { useChains } from "../hooks/useChains";
 
 interface Token {
   contractId: string;
@@ -32,7 +33,19 @@ interface DiscoveredToken {
   isVerified: boolean;
 }
 
-const POPULAR_SYMBOLS = ["STX", "USDCx", "USDA", "ALEX", "WELSH"];
+/**
+ * Symbols surfaced first in the picker, per chain family.
+ *
+ * A single flat list was Stacks-only, so on Base the "popular" row promoted
+ * five tokens that chain has never heard of and buried the ones it does. Keyed
+ * by family rather than chain because the majors are shared across an EVM
+ * fleet; anything more specific belongs in the descriptor, not here.
+ */
+const POPULAR_BY_FAMILY: Record<string, string[]> = {
+  stacks: ["STX", "USDCx", "USDA", "ALEX", "WELSH"],
+  evm: ["ETH", "WETH", "USDC", "USDT", "DAI"],
+  svm: ["SOL", "USDC", "USDT", "JUP", "BONK"],
+};
 
 export function TokenSelect({
   tokens,
@@ -45,6 +58,7 @@ export function TokenSelect({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const { byId } = useChains();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -57,6 +71,11 @@ export function TokenSelect({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // The picker already receives a chainId for its remote search; the same value
+  // decides which majors to promote.
+  const family = byId(chainId)?.family;
+  const popularSymbols = (family && POPULAR_BY_FAMILY[family]) ?? [];
+
   const filtered = tokens.filter(
     (t) =>
       t.symbol.toLowerCase().includes(search.toLowerCase()) ||
@@ -65,8 +84,8 @@ export function TokenSelect({
   );
 
   const sortedFiltered = [...filtered].sort((a, b) => {
-    const idxA = POPULAR_SYMBOLS.indexOf(a.symbol);
-    const idxB = POPULAR_SYMBOLS.indexOf(b.symbol);
+    const idxA = popularSymbols.indexOf(a.symbol);
+    const idxB = popularSymbols.indexOf(b.symbol);
     const isPopA = idxA !== -1;
     const isPopB = idxB !== -1;
 
@@ -101,7 +120,7 @@ export function TokenSelect({
 
   const remoteResults = needsRemote ? (remote?.items ?? []) : [];
 
-  const popularTokens = tokens.filter((t) => POPULAR_SYMBOLS.includes(t.symbol));
+  const popularTokens = tokens.filter((t) => popularSymbols.includes(t.symbol));
   const selectedToken = tokens.find((t) => t.symbol === value);
 
   return (

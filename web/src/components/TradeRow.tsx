@@ -17,6 +17,13 @@ interface TradeRowProps {
     createdAt: string;
     confirmedAt: string | null;
     walletName?: string;
+    chain?: string;
+    /**
+     * Resolved by the API from the trade's own chain. Null when the chain
+     * isn't one this deployment runs — in which case the tx id renders as
+     * plain text rather than as a link that 404s.
+     */
+    explorerUrl?: string | null;
   };
 }
 
@@ -73,9 +80,12 @@ export function TradeRow({ trade }: TradeRowProps) {
         </span>
       </td>
       <td className="py-3 px-4 text-sm text-muted-text">
-        {trade.txId ? (
+        {/* The link comes from the server, which knows which chain the trade
+          * executed on. Composing a Hiro URL here meant every Base and Solana
+          * trade linked to an explorer that has never heard of it. */}
+        {trade.txId && trade.explorerUrl ? (
           <a
-            href={`https://explorer.hiro.so/txid/${trade.txId}`}
+            href={trade.explorerUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-brand-400 hover:text-brand-300"
@@ -83,6 +93,10 @@ export function TradeRow({ trade }: TradeRowProps) {
             <ExternalLink className="w-3 h-3" />
             {trade.txId.slice(0, 8)}...
           </a>
+        ) : trade.txId ? (
+          <span className="font-mono" title={trade.txId}>
+            {trade.txId.slice(0, 8)}...
+          </span>
         ) : (
           "-"
         )}

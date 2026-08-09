@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { Lock, Unlock, ShieldCheck, ArrowUpRight } from "lucide-react";
 import { classNames } from "../../lib/utils";
+import { ChainDexBadge } from "../../components/ChainDexBadge";
 import {
   formatAge,
   formatCount,
@@ -151,6 +152,7 @@ export const TokenRow = memo(function TokenRow({
               </span>
             </div>
             <div className="flex items-center gap-1 mt-0.5">
+              <ChainDexBadge chainId={token.chainId} dexId={token.dexId} />
               <ChainPill chainId={token.chainId} label={token.chainName} />
               <span className="px-1.5 py-0.5 text-[9px] font-medium rounded bg-badge-bg text-muted-text uppercase">
                 {token.dexId}

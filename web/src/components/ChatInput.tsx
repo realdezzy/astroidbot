@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Send, Loader2, Sparkles, Mic } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
+import { useChains } from "../hooks/useChains";
 import { WEB_INFO_LINK_MAP } from "@shared/navigation";
 
 interface ChatInputProps {
@@ -11,6 +13,17 @@ interface ChatInputProps {
 
 export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
   const navigate = useNavigate();
+  const { chains } = useChains();
+
+  // Used only to phrase the example command; the trade path re-reads wallets
+  // at submit time so a stale cache can never pick the wallet to spend from.
+  const { data: wallets } = useQuery<{ id: number; chain?: string | null; isDefault?: boolean }[]>({
+    queryKey: ["wallets"],
+    queryFn: () => apiFetch("/me/wallets"),
+    staleTime: 60_000,
+  });
+  const defaultWallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
+  const defaultChain = chains.find((c) => c.chainId === defaultWallet?.chain);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<string | null>(null);
@@ -35,9 +48,17 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
     }, 2000);
   };
 
+  // The example pair comes from the user's default wallet's chain, so the
+  // suggestion is something this account can actually execute rather than a
+  // Stacks pair shown to a Base-only user.
+  const example =
+    defaultChain
+      ? `buy 10 ${defaultChain.nativeSymbol} with ${defaultChain.stableSymbol}`
+      : "buy 10 of a token";
+
   const placeholder = contextHint
     ? `Ask about ${contextHint}... e.g. "what are agents?"`
-    : "Type a command... e.g. 'buy 10 STX with USDCx' or 'show portfolio'";
+    : `Type a command... e.g. '${example}' or 'show portfolio'`;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,14 +76,27 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
       const action = result.action as string;
 
       if (action === "trade") {
-        const wallets = await apiFetch<{ id: number }[]>("/me/wallets");
-        const walletId = wallets?.[0]?.id ?? 0;
+        const wallets = await apiFetch<
+          { id: number; chain?: string | null; isDefault?: boolean }[]
+        >("/me/wallets");
+        // The default wallet, and its chain's pair as the fallback — not
+        // whichever wallet came back first and a Stacks pair.
+        const wallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
+        const walletChain = chains.find((c) => c.chainId === wallet?.chain);
+        const tokenIn = result.tokenIn ?? walletChain?.nativeSymbol;
+        const tokenOut = result.tokenOut ?? walletChain?.stableSymbol;
+
+        if (!wallet || !tokenIn || !tokenOut) {
+          setResponse("⚠️ I need a wallet on a tradable chain before I can do that.");
+          return;
+        }
+
         const tradeResp = await apiFetch<{ ok: boolean; txId: string }>("/me/trades/execute", {
           method: "POST",
           body: JSON.stringify({
-            walletId,
-            tokenIn: result.tokenIn ?? "STX",
-            tokenOut: result.tokenOut ?? "USDCx",
+            walletId: wallet.id,
+            tokenIn,
+            tokenOut,
             amountIn: result.amountIn ?? 1,
             direction: result.direction ?? "BUY",
           }),
@@ -89,7 +123,7 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
       } else if (action === "halt" || action === "resume") {
         setResponse(`✅ Bot ${action === "halt" ? "halted" : "resumed"}`);
       } else {
-        setResponse("🤔 I didn't understand that. Try: 'buy 10 STX for USDCx' or 'show portfolio'");
+        setResponse(`🤔 I didn't understand that. Try: '${example}' or 'show portfolio'`);
       }
     } catch {
       setResponse("❌ Something went wrong. Try again.");

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUp,
@@ -32,6 +32,7 @@ interface WalletItem {
   address: string;
   name: string;
   balance: number;
+  isDefault?: boolean;
   chainId?: string;
   chain?: string;
   chainFamily?: string;
@@ -127,7 +128,13 @@ export function Trade() {
   });
 
   const { data: chainData } = useQuery<{
-    chains: { chainId: string; displayName: string; nativeSymbol: string; stableSymbol: string; tradable: boolean }[];
+    chains: {
+      chainId: string;
+      displayName: string;
+      nativeSymbol: string;
+      stableSymbol: string;
+      tradable: boolean;
+    }[];
   }>({
     queryKey: ["chains"],
     queryFn: () => apiFetch("/chains"),
@@ -145,7 +152,7 @@ export function Trade() {
     enabled: chainId !== null,
   });
 
-  const { data: wallets } = useQuery<WalletItem[]>({
+  const { data: wallets, isLoading: walletsLoading } = useQuery<WalletItem[]>({
     queryKey: ["wallets"],
     queryFn: () => apiFetch("/me/wallets"),
   });
@@ -164,14 +171,32 @@ export function Trade() {
    */
   useEffect(() => {
     if (chainId || !wallets?.length) return;
-    const preferred = wallets[0]!;
+    // The user's default wallet, not whichever the API listed first — that is
+    // an arbitrary chain to open the trade form on.
+    const preferred = wallets.find((w) => w.isDefault) ?? wallets[0]!;
     setChainId(preferred.chain ?? null);
   }, [chainId, wallets]);
 
   useEffect(() => {
     if (!activeChain) return;
-    setTokenIn((current) => current || activeChain.nativeSymbol);
-    setTokenOut((current) => current || activeChain.stableSymbol);
+    const { nativeSymbol, stableSymbol } = activeChain;
+
+    // Fill only the side the deep link left empty, and never with the token
+    // already on the other side. Arriving from the token pages with
+    // `tokenOut=CELO` — the chain's own native asset, which the discovery
+    // table lists like any other — used to default `tokenIn` to CELO as well
+    // and render a CELO → CELO swap the form was happy to quote.
+    setTokenIn((current) => {
+      if (current) return current;
+      return tokenOut === nativeSymbol ? stableSymbol : nativeSymbol;
+    });
+    setTokenOut((current) => {
+      if (current) return current;
+      return tokenIn === stableSymbol ? nativeSymbol : stableSymbol;
+    });
+    // tokenIn/tokenOut are read to avoid colliding, but adding them as
+    // dependencies would re-run this on every user edit and fight the input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChain]);
 
   // Selecting a chain drops a wallet that isn't on it, rather than leaving a
@@ -277,13 +302,18 @@ export function Trade() {
     );
   };
 
-  const totalSelectedStxBalance =
-    wallets
-      ?.filter((w) => selectedWalletIds.includes(w.id))
+  // Summed only over the wallets on the selected chain — `chainWallets` is
+  // already filtered, so this cannot add an ETH balance to an STX one.
+  const totalSelectedNativeBalance =
+    chainWallets
+      .filter((w) => selectedWalletIds.includes(w.id))
       .reduce((sum, w) => sum + w.balance, 0) ?? 0;
 
-  const combinedBalance = tokenIn === "STX"
-    ? totalSelectedStxBalance
+  // The native leg is whatever this chain calls it, not "STX". On Base the
+  // literal sent every native-ETH trade down the token-balance branch, which
+  // looked right only because the balances map happens to carry ETH too.
+  const combinedBalance = tokenIn === activeChain?.nativeSymbol
+    ? totalSelectedNativeBalance
     : selectedWalletIds.reduce((sum, id) => {
       const wBalances = walletsBalances[id];
       if (!wBalances) return sum;
@@ -452,9 +482,16 @@ export function Trade() {
             </div>
           )}
 
-          {chainId && chainWallets.length === 0 && (
+          {/* Only once the query has settled. The wallets endpoint reads live
+            * balances per chain and takes seconds, and rendering the empty
+            * state meanwhile told users to create a wallet they already had —
+            * then swapped it for their wallet a moment later. */}
+          {chainId && !walletsLoading && chainWallets.length === 0 && (
             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
-              No wallet on {activeChain?.displayName ?? chainId}. Create one before trading here.
+              No wallet on {activeChain?.displayName ?? chainId}. Create one before trading here.{" "}
+              <Link to="/wallets" className="underline hover:no-underline">
+                Go to Wallets
+              </Link>
             </div>
           )}
 
