@@ -154,16 +154,22 @@ export class DatabaseService {
 
   // ---------- TradeSettings ----------
 
+  /**
+   * The account-wide row. One per (user, context), enforced by the schema.
+   *
+   * Prefer `resolveTradeSettings()` (`tradeSettings.ts`) on any path that knows
+   * which chain it is acting on — this returns the account defaults before a
+   * chain has had its say.
+   */
   async findTradeSettings(userId: number, context: string) {
-    return this.prisma.tradeSettings.findFirst({
-      where: { userId, context },
+    return this.prisma.tradeSettings.findUnique({
+      where: { userId_context: { userId, context } },
     });
   }
 
   async upsertTradeSettings(data: {
     userId: number;
     context: string;
-    chain?: string;
     slippageBps?: number;
     maxPositionPct?: number;
     dailyLossLimit?: number;
@@ -172,15 +178,14 @@ export class DatabaseService {
     gaslessFeeToken?: string;
   }) {
     return this.prisma.tradeSettings.upsert({
-      where: {
-        id: (
-          (await this.findTradeSettings(data.userId, data.context))?.id ?? 0
-        ),
-      },
+      // Keyed by the unique constraint rather than by an id looked up a moment
+      // earlier. The old form read the row, then wrote to `id: found ?? 0`,
+      // which raced with itself and — while duplicates were possible — could
+      // update whichever of them the read happened to return.
+      where: { userId_context: { userId: data.userId, context: data.context } },
       create: {
         userId: data.userId,
         context: data.context,
-        chain: data.chain ?? "stacks:mainnet",
         slippageBps: data.slippageBps ?? 100,
         maxPositionPct: data.maxPositionPct ?? 25.0,
         dailyLossLimit: data.dailyLossLimit ?? 5.0,
@@ -189,7 +194,6 @@ export class DatabaseService {
         gaslessFeeToken: data.gaslessFeeToken ?? "USDC",
       },
       update: {
-        chain: data.chain,
         slippageBps: data.slippageBps,
         maxPositionPct: data.maxPositionPct,
         dailyLossLimit: data.dailyLossLimit,
@@ -200,11 +204,53 @@ export class DatabaseService {
     });
   }
 
+  // ---------- ChainPreference ----------
+
+  async findChainPreference(userId: number, chainId: string) {
+    return this.prisma.chainPreference.findUnique({
+      where: { userId_chainId: { userId, chainId } },
+    });
+  }
+
+  async findChainPreferences(userId: number) {
+    return this.prisma.chainPreference.findMany({ where: { userId } });
+  }
+
+  /**
+   * Records an override for one chain.
+   *
+   * Undefined leaves a field alone; explicit null clears the override so the
+   * chain goes back to inheriting. Those are different operations and the
+   * settings UI needs both.
+   */
+  async upsertChainPreference(data: {
+    userId: number;
+    chainId: string;
+    sponsorGas?: boolean | null;
+    slippageBps?: number | null;
+  }) {
+    return this.prisma.chainPreference.upsert({
+      where: { userId_chainId: { userId: data.userId, chainId: data.chainId } },
+      create: {
+        userId: data.userId,
+        chainId: data.chainId,
+        sponsorGas: data.sponsorGas ?? null,
+        slippageBps: data.slippageBps ?? null,
+      },
+      update: {
+        ...(data.sponsorGas !== undefined ? { sponsorGas: data.sponsorGas } : {}),
+        ...(data.slippageBps !== undefined ? { slippageBps: data.slippageBps } : {}),
+      },
+    });
+  }
+
   // ---------- Trade ----------
 
   async createTrade(data: {
     walletId: number;
     userId: number;
+    /** The wallet's ChainId. Looked up from the wallet when omitted. */
+    chain?: string;
     direction: string;
     tokenIn: string;
     tokenOut: string;
@@ -218,18 +264,48 @@ export class DatabaseService {
     let amountInUsd = data.amountInUsd;
     let amountOutUsd = data.amountOutUsd;
 
+    // The trade's chain, recorded rather than left to be inferred later. The
+    // wallet is authoritative; a caller may pass it to save the lookup.
+    const wallet = data.chain
+      ? null
+      : await this.prisma.wallet.findUnique({
+          where: { id: data.walletId },
+          select: { chain: true, chainFamily: true },
+        });
+    const { walletChainId } = await import("./chains/walletChain.js");
+    const chain = data.chain ?? (wallet ? walletChainId(wallet) : undefined);
+
     if (amountInUsd === undefined || amountOutUsd === undefined) {
       try {
         const { DEXRegistry } = await import("./dex/dexRegistry.js");
+        const { findDescriptor } = await import("./chains/descriptors/index.js");
         const registry = DEXRegistry.getInstance();
-        const priceIn = await registry.getTokenPrice(data.tokenIn);
-        const priceOut = await registry.getTokenPrice(data.tokenOut);
+
+        // Scoped to the trade's own chain. Unscoped, a USDC price could come
+        // from whichever provider answered first — a different network's pool
+        // for a same-ticker token, which is the mismatch chainId keys exist to
+        // prevent.
+        const priceIn = await registry.getTokenPrice(data.tokenIn, chain);
+        const priceOut = await registry.getTokenPrice(data.tokenOut, chain);
+
+        // A stablecoin with no quotable price is worth a dollar. Which symbol
+        // that is comes from the chain — "USDCx" on Stacks, "USDC" on Base —
+        // rather than the hardcoded Stacks pair this used to check, under
+        // which every other chain's stable leg was valued at zero.
+        const stable = chain ? findDescriptor(chain)?.stableSymbol : undefined;
+        const isStable = (symbol: string): boolean => {
+          const upper = symbol.toUpperCase();
+          return (
+            (stable !== undefined && upper === stable.toUpperCase()) ||
+            ["USDC", "USDT", "DAI", "USDCX", "USDA"].includes(upper)
+          );
+        };
 
         if (amountInUsd === undefined) {
-          amountInUsd = data.amountIn * (priceIn || (data.tokenIn.toUpperCase() === "USDCX" || data.tokenIn.toUpperCase() === "USDA" ? 1 : 0));
+          amountInUsd = data.amountIn * (priceIn || (isStable(data.tokenIn) ? 1 : 0));
         }
         if (amountOutUsd === undefined) {
-          amountOutUsd = data.amountOut * (priceOut || (data.tokenOut.toUpperCase() === "USDCX" || data.tokenOut.toUpperCase() === "USDA" ? 1 : 0));
+          amountOutUsd = data.amountOut * (priceOut || (isStable(data.tokenOut) ? 1 : 0));
         }
       } catch {
         // ignore errors
@@ -240,6 +316,7 @@ export class DatabaseService {
       data: {
         walletId: data.walletId,
         userId: data.userId,
+        chain,
         direction: data.direction,
         tokenIn: data.tokenIn,
         tokenOut: data.tokenOut,

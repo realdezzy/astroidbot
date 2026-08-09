@@ -23,9 +23,10 @@ model User {
   isAdmin       Boolean  @default(false)
   createdAt     DateTime @default(now())
 
-  wallets        Wallet[]
-  tradeSettings  TradeSettings[]
-  trades         Trade[]
+  wallets          Wallet[]
+  tradeSettings    TradeSettings[]
+  chainPreferences ChainPreference[]
+  trades           Trade[]
   perpPositions  PerpPosition[]
   socialAccounts SocialAccount[]
 }
@@ -51,25 +52,64 @@ model Wallet {
   @@index([userId, chain])
 }
 
+// Account-wide trading preferences, one row per (user, context).
+//
+// This table used to carry a `chain` column and a per-chain `sponsorGas`,
+// which made it two tables wearing one name — and the collision was not
+// theoretical. The gas-sponsorship endpoint keyed rows by (userId, chain)
+// while every other reader looked them up by (userId, context) with an
+// unordered findFirst, and nothing constrained either shape. Toggling
+// sponsorship for a second chain therefore inserted a *duplicate*
+// (userId, "personal") row carrying default risk limits, after which which
+// row RiskManager got was up to the query planner.
+//
+// Per-chain overrides now live in ChainPreference, and the unique constraint
+// below makes the duplicate unrepresentable.
 model TradeSettings {
   id                 Int      @id @default(autoincrement())
   userId             Int
   user               User     @relation(fields: [userId], references: [id])
   context            String   @default("personal")
-  chain              String   @default("stacks:mainnet")
-  slippageBps        Int      @default(100)
+  // Portfolio-level limits: these are about the account's exposure, not about
+  // any one network, so they are deliberately not per chain.
   maxPositionPct     Float    @default(25.0)
   dailyLossLimit     Float    @default(5.0)
   rebalanceThreshold Float    @default(2.0)
+  // The account-wide default. A chain may override it — see ChainPreference.
+  slippageBps        Int      @default(100)
   useGasless         Boolean  @default(false)
   gaslessFeeToken    String   @default("USDC")
-  // ERC-4337 paymaster sponsorship, per chain (this row is already keyed by
-  // one). Default true preserves the behaviour every 4337 chain had before
-  // the toggle existed. Ignored on chains that can't sponsor at all — EOA
-  // custody has no paymaster to ask.
-  sponsorGas         Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  @@unique([userId, context])
+}
+
+// What one user wants done differently on one chain.
+//
+// Every column but the key is nullable, and that is the whole design: a row
+// states only what it overrides. A chain with no row, or a null column,
+// inherits from TradeSettings — so enabling a chain never silently resets a
+// preference to a product default, which is exactly what the old shape did
+// when a sponsorship toggle wrote a fresh row.
+model ChainPreference {
+  id      Int    @id @default(autoincrement())
+  userId  Int
+  user    User   @relation(fields: [userId], references: [id])
+  chainId String
+
+  // ERC-4337 paymaster sponsorship. Null means sponsored, which is how every
+  // 4337 wallet behaved before the toggle existed. Ignored on chains that
+  // cannot sponsor at all — EOA custody has no paymaster to ask.
+  sponsorGas  Boolean?
+  // Slippage differs by chain more than any other setting: a Stacks AMM and a
+  // Solana aggregator are not the same trade at the same tolerance.
+  slippageBps Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, chainId])
 }
 
 model Trade {
@@ -78,6 +118,15 @@ model Trade {
   wallet           Wallet    @relation(fields: [walletId], references: [id])
   userId           Int
   user             User      @relation(fields: [userId], references: [id])
+  // The ChainId this trade executed on, denormalized from the wallet at
+  // creation. Not a join away for a reason: a txId only means something
+  // alongside the network it was broadcast to, and every surface that renders
+  // an explorer link needs both. Without it the web app had no way to build a
+  // correct link and hardcoded the Stacks explorer for all of them.
+  //
+  // Nullable because trades that predate the column genuinely have no recorded
+  // chain; readers fall back to the wallet's current chain.
+  chain            String?
   direction        String
   tokenIn          String
   tokenOut         String
@@ -97,6 +146,7 @@ model Trade {
   confirmedAt      DateTime?
 
   @@index([userId, status, createdAt])
+  @@index([chain, createdAt])
 }
 
 model MarketMakingGrid {
@@ -438,6 +488,15 @@ model IndexedPool {
   // times.
   lastSignature String?
 
+  // The other end of the same walk: where this pool's *downward* history pass
+  // has reached. Separate from lastSignature because the two move in opposite
+  // directions and meet in the middle — one cursor could not say whether a
+  // pool is behind the head or still filling in its past, and the responses to
+  // those are opposite. `backfillDone` distinguishes "reached the window" from
+  // "never started", which look identical once the signature stops moving.
+  backfillSignature String?
+  backfillDone      Boolean @default(false)
+
   candles PoolCandle[]
 
   @@unique([chainId, poolAddress])
@@ -448,9 +507,6 @@ model IndexedPool {
   @@index([chainId, token1])
 }
 
-// Five-minute OHLCV buckets — the aggregation primitive every window is
-// derived from. Raw swaps are deliberately *not* stored: a busy chain produces
-// millions a day, and no question the UI asks needs finer resolution than the
 // One row per swap we ingested, keyed by the swap's own identity on its chain.
 //
 // This table is what makes ingestion idempotent, and its absence is what made
@@ -500,7 +556,10 @@ model IndexedSwap {
   @@index([bucketStart])
 }
 
-// 5M column it renders. 288 rows/pool/day compacts ~4 orders of magnitude.
+// Five-minute OHLCV buckets — the aggregation primitive every window is
+// derived from. No question the UI asks needs finer resolution than the 5M
+// column it renders, and 288 rows/pool/day compacts the raw swap stream by
+// roughly four orders of magnitude.
 model PoolCandle {
   id          BigInt      @id @default(autoincrement())
   poolId      Int
@@ -550,6 +609,18 @@ model IndexerCursor {
   // Set when the walk reaches the floor. Distinguishes "done" from "not
   // started", which otherwise look identical once backfillBlock == floor.
   backfillDone  Boolean  @default(false)
+
+  // Opaque per-source paging state, written and read only by the chain's own
+  // indexer. Stacks needs it: its API is address-paged by offset rather than
+  // queryable by block range, so resuming a downward walk means remembering
+  // where in each contract's transaction list we had got to — and doing so per
+  // contract, since ALEX and Velar are walked independently. Deriving that
+  // offset instead would cost a page-by-page seek from the head every tick,
+  // whose cost grows with how far the walk has already come.
+  //
+  // Json rather than columns because the shape is the chain's business and
+  // nothing joins or filters on it. See StacksBackfillState in stacksIndexer.
+  backfillState Json?
 
   updatedAt     DateTime @updatedAt
 }
