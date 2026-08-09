@@ -9,7 +9,7 @@ import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { BlockTimeOracle } from "../blockTimeOracle.js";
 import { resolveNativeUsd } from "../nativePricing.js";
 import { bucketStartOf, type ChainIndexer, type IndexRunResult, type TrackedPool } from "../types.js";
-import type { IndexerSettings } from "../settings.js";
+import { backfillEnabled, type IndexerSettings } from "../settings.js";
 
 /**
  * The two events that define V3 ingestion. Declared as ABI items rather than
@@ -229,7 +229,7 @@ export class UniswapV3Indexer implements ChainIndexer {
     safeHead: bigint
   ): Promise<{ swapsIngested: number; bucketsWritten: number }> {
     const none = { swapsIngested: 0, bucketsWritten: 0 };
-    if (this.settings.backfillWindowHours <= 0) return none;
+    if (!backfillEnabled(this.settings)) return none;
 
     const db = DatabaseService.getInstance();
     const cursor = await db.prisma.indexerCursor.findUnique({
@@ -291,6 +291,13 @@ export class UniswapV3Indexer implements ChainIndexer {
    * Two block reads, once per chain, cached on the cursor row.
    */
   private async computeBackfillFloor(safeHead: bigint): Promise<bigint | null> {
+    // Full history has a floor that needs no measuring. It is genesis rather
+    // than the factory's deployment block because the factory address is the
+    // only thing this class knows and reading its creation block is another
+    // round trip for a bound the per-tick budget already enforces — the walk
+    // simply finds nothing below the factory and finishes.
+    if (this.settings.backfillFullHistory) return 0n;
+
     try {
       const SAMPLE_SPAN = 1_000n;
       if (safeHead <= SAMPLE_SPAN) return 0n;

@@ -55,6 +55,8 @@ function loadConfig(extra: Record<string, string> = {}) {
   process.env.JWT_SECRET = "change-me-in-production-to-32-char-min-xyz";
   if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
   if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
+  delete process.env.INDEXER_BACKFILL_FULL_HISTORY;
+  delete process.env.INDEXER_BACKFILL_WINDOW_HOURS;
   Object.assign(process.env, extra);
   ConfigManager.reset();
   ConfigManager.load();
@@ -160,6 +162,29 @@ describe("indexer backfill", () => {
     // One tick moved the mark down by the configured budget and no further.
     expect(cursorRow.backfillBlock).toBe(999_999n - 1000n);
     expect(cursorRow.backfillDone).toBeUndefined();
+  });
+
+  it("walks to genesis when asked for all of history", async () => {
+    // The explicit switch beats the tuning knob: a window of zero would
+    // otherwise read as "disabled" and silently ignore the request.
+    loadConfig({
+      INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN: "1000",
+      INDEXER_BACKFILL_WINDOW_HOURS: "0",
+      INDEXER_BACKFILL_FULL_HISTORY: "true",
+    });
+    cursor.findUnique.mockResolvedValue({
+      chainId: "base:mainnet",
+      lastBlock: 1_000_000n,
+      backfillBlock: 1_000_000n,
+      backfillFloor: null,
+      backfillDone: false,
+    });
+
+    await indexer().backfillStep(1_000_000n);
+
+    expect(cursorRow.backfillFloor).toBe(0n);
+    // A floor that needs no measuring needs no block reads either.
+    expect(getBlock).not.toHaveBeenCalled();
   });
 
   it("can be turned off entirely", async () => {

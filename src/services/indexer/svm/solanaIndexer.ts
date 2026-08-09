@@ -7,8 +7,8 @@ import {
   probeDecodable,
   type SolanaTransactionMeta,
 } from "./balanceDeltas.js";
-import type { ChainIndexer, IndexRunResult } from "../types.js";
-import type { IndexerSettings } from "../settings.js";
+import type { BackfillRun, ChainIndexer, IndexRunResult } from "../types.js";
+import { backfillCutoffMs, backfillEnabled, type IndexerSettings } from "../settings.js";
 import type { ChainDescriptor, ChainId } from "../../../types/chain.js";
 import { requireSvmConfig } from "../../../types/chain.js";
 
@@ -54,6 +54,32 @@ interface SolanaPool {
   token1: string;
   decimals0: number;
   decimals1: number;
+}
+
+/**
+ * Signatures per `getSignaturesForAddress` call. The RPC caps this at 1000, and
+ * listing is cheap — it is fetching each transaction's body that costs.
+ */
+const SIGNATURE_PAGE_SIZE = 1_000;
+
+/**
+ * Pages the forward pass will walk to reach its `until` mark.
+ *
+ * A pool that has produced more than a million signatures since the last tick
+ * is not one this indexer can catch up on within a tick anyway, and the bound
+ * stops a misconfigured cursor from paging an account's entire history.
+ */
+const MAX_SIGNATURE_PAGES = 20;
+
+/** What one pool's forward pass learned, written back after the batch. */
+interface PoolProgress {
+  /** Newest signature *read* this pass, decodable or not. */
+  signature: string;
+  /** Newest price decoded, or null if nothing in the batch priced. */
+  price: number | null;
+  at: Date | null;
+  /** Where the downward walk starts. Set only on a pool's first pass. */
+  backfillSeed?: string;
 }
 
 export class SolanaIndexer implements ChainIndexer {
@@ -163,10 +189,15 @@ export class SolanaIndexer implements ChainIndexer {
 
     const { swapsIngested, bucketsWritten } = await this.ingest(pools, BigInt(slot));
 
+    // History is walked only after the live pass has been served: the forward
+    // pass is what the product is for, and a chain catching up must not spend
+    // its request budget walking backwards.
+    const backfilled = await this.backfillStep();
+
     return this.result(
       poolsDiscovered,
-      swapsIngested,
-      bucketsWritten,
+      swapsIngested + backfilled.swapsIngested,
+      bucketsWritten + backfilled.bucketsWritten,
       cursor?.lastBlock ?? BigInt(slot),
       BigInt(slot)
     );
@@ -403,15 +434,15 @@ export class SolanaIndexer implements ChainIndexer {
     const usd = await this.usdPrices(pools);
 
     const rawSwaps: RawSwap[] = [];
-    const poolState = new Map<number, { price: number; at: Date; signature: string }>();
+    const poolState = new Map<number, PoolProgress>();
     let swapsIngested = 0;
 
     for (const pool of pools) {
       try {
         const result = await this.ingestPool(pool, usd, rawSwaps);
         swapsIngested += result.swaps;
-        if (result.newest) {
-          poolState.set(pool.id, result.newest);
+        if (result.progress) {
+          poolState.set(pool.id, result.progress);
         }
       } catch (error) {
         logger.debug("[indexer] solana pool ingest failed", {
@@ -429,9 +460,17 @@ export class SolanaIndexer implements ChainIndexer {
         db.prisma.indexedPool.update({
           where: { id: poolId },
           data: {
-            lastPrice0: state.price,
-            lastSwapAt: state.at,
             lastSignature: state.signature,
+            // Only when something actually decoded. A tick that processed
+            // signatures without finding a priceable swap still advances the
+            // cursor — it has genuinely read them — but it has learned nothing
+            // about the pool's price, and writing a zero here would erase one.
+            ...(state.price !== null ? { lastPrice0: state.price, lastSwapAt: state.at } : {}),
+            // Seeded once, on the pass that had no cursor to resume from:
+            // that pass reads the newest page, so its oldest signature is
+            // exactly where a downward walk has to start. Later passes leave
+            // it alone.
+            ...(state.backfillSeed ? { backfillSignature: state.backfillSeed } : {}),
           },
         })
       ),
@@ -449,7 +488,7 @@ export class SolanaIndexer implements ChainIndexer {
     pool: SolanaPool,
     usd: Map<string, number>,
     rawSwaps: RawSwap[]
-  ): Promise<{ swaps: number; newest: { price: number; at: Date; signature: string } | null }> {
+  ): Promise<{ swaps: number; progress: PoolProgress | null }> {
     const db = DatabaseService.getInstance();
 
     const stored = await db.prisma.indexedPool.findUnique({
@@ -457,38 +496,119 @@ export class SolanaIndexer implements ChainIndexer {
       select: { lastSignature: true },
     });
 
-    const params: Record<string, unknown> = { limit: this.settings.maxTxPerRun };
-    if (stored?.lastSignature) params.until = stored.lastSignature;
-
-    const signatures = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
-      pool.poolAddress,
-      params,
-    ]);
-
-    if (signatures.length === 0) return { swaps: 0, newest: null };
+    const signatures = await this.newSignatures(pool.poolAddress, stored?.lastSignature ?? null);
+    if (signatures.length === 0) return { swaps: 0, progress: null };
 
     // Newest first from the RPC; applied oldest-first so a bucket's `open` is
     // the first trade in it rather than the last.
+    //
+    // The budget is applied to the *oldest* end, so progress is contiguous with
+    // where the last tick stopped. Taking the newest instead — which is what a
+    // bare `limit` on the RPC call does — leaves the middle unread and no
+    // cursor able to describe the hole, so a pool busier than one tick's budget
+    // silently loses every swap in between.
     const ordered = [...signatures].reverse().filter((info) => !info.err);
-    let swaps = 0;
-    let newest: { price: number; at: Date; signature: string } | null = null;
+    const batch = ordered.slice(0, this.settings.maxTxPerRun);
 
+    const newestRead = batch.at(-1);
+    if (!newestRead) return { swaps: 0, progress: null };
+
+    const decoded = await this.decodeBatch(pool, batch, usd, rawSwaps);
+
+    return {
+      swaps: decoded.swaps,
+      progress: {
+        // Every signature in the batch has been read, whether or not it held a
+        // decodable swap, so the cursor advances past all of them. Advancing
+        // only on a decoded swap would leave a pool of undecodable traffic
+        // re-reading the same page every tick, forever.
+        signature: newestRead.signature,
+        price: decoded.price,
+        at: decoded.at,
+        // Only meaningful on the first pass; `undefined` on every later one so
+        // the write is skipped rather than resetting the walk.
+        backfillSeed: stored?.lastSignature ? undefined : signatures.at(-1)?.signature,
+      },
+    };
+  }
+
+  /**
+   * Every signature newer than `until`, newest first.
+   *
+   * Paged, because `getSignaturesForAddress` returns at most `limit` of the
+   * *newest* signatures and silently omits the rest. Listing is one request per
+   * thousand signatures; the expense is fetching transaction bodies, which the
+   * caller bounds separately.
+   *
+   * With no `until` there is nothing to page towards — that is a pool's first
+   * pass, and the newest page is the intended starting window rather than an
+   * invitation to walk its entire history.
+   */
+  private async newSignatures(poolAddress: string, until: string | null): Promise<SignatureInfo[]> {
+    if (!until) {
+      return this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
+        poolAddress,
+        { limit: this.settings.maxTxPerRun },
+      ]);
+    }
+
+    const all: SignatureInfo[] = [];
+    let before: string | undefined;
+
+    for (let page = 0; page < MAX_SIGNATURE_PAGES; page++) {
+      const params: Record<string, unknown> = { limit: SIGNATURE_PAGE_SIZE, until };
+      if (before) params.before = before;
+
+      const batch = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
+        poolAddress,
+        params,
+      ]);
+
+      const oldest = batch.at(-1);
+      if (!oldest) break;
+
+      all.push(...batch);
+      if (batch.length < SIGNATURE_PAGE_SIZE) break;
+
+      before = oldest.signature;
+    }
+
+    return all;
+  }
+
+  /**
+   * Fetches, decodes and prices a batch of signatures, oldest first.
+   *
+   * Returns the newest price it managed to decode, which is what the caller
+   * writes back as the pool's current state — and nothing, rather than zero,
+   * when none of them priced.
+   */
+  private async decodeBatch(
+    pool: SolanaPool,
+    batch: SignatureInfo[],
+    usd: Map<string, number>,
+    rawSwaps: RawSwap[]
+  ): Promise<{ swaps: number; price: number | null; at: Date | null }> {
     const transactions = await this.rpcBatch<{ meta?: SolanaTransactionMeta; blockTime?: number }>(
-      ordered.map((info) => ({
+      batch.map((info) => ({
         method: "getTransaction",
         params: [info.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }],
       }))
     );
 
-    for (const [index, info] of ordered.entries()) {
+    let swaps = 0;
+    let price: number | null = null;
+    let at: Date | null = null;
+
+    for (const [index, info] of batch.entries()) {
       const tx = transactions[index];
       if (!tx?.meta) continue;
 
-      const decoded = decodeSolanaSwap(tx.meta, pool.poolAddress, pool.token0, pool.token1);
-      if (!decoded) continue;
+      const swap = decodeSolanaSwap(tx.meta, pool.poolAddress, pool.token0, pool.token1);
+      if (!swap) continue;
 
-      const amount0 = Number(decoded.amount0) / 10 ** pool.decimals0;
-      const amount1 = Number(decoded.amount1) / 10 ** pool.decimals1;
+      const amount0 = Number(swap.amount0) / 10 ** pool.decimals0;
+      const amount1 = Number(swap.amount1) / 10 ** pool.decimals1;
       if (amount0 <= 0 || amount1 <= 0) continue;
 
       const price0 = usd.get(pool.token0);
@@ -509,20 +629,166 @@ export class SolanaIndexer implements ChainIndexer {
         bucketStart: bucketStartOf(timestampMs),
         priceUsd,
         volumeUsd,
-        isBuy: !decoded.zeroForOne,
+        isBuy: !swap.zeroForOne,
       });
       swaps++;
 
       if (priceUsd > 0) {
-        newest = { price: priceUsd, at: new Date(timestampMs), signature: info.signature };
-      } else if (!newest) {
-        newest = { price: 0, at: new Date(timestampMs), signature: info.signature };
-      } else {
-        newest.signature = info.signature;
+        price = priceUsd;
+        at = new Date(timestampMs);
       }
     }
 
-    return { swaps, newest };
+    return { swaps, price, at };
+  }
+
+  // ─── Backfill ──────────────────────────────────────────────────────────────
+
+  /**
+   * Walks each pool's signature history downward, into the past.
+   *
+   * Per pool rather than per chain, for the same reason `lastSignature` is:
+   * `getSignaturesForAddress` is an account-level query, and pools discovered
+   * at different times reach the window at different times. A chain-wide mark
+   * could not say which of them still has walking to do.
+   *
+   * Bounded to `maxBackfillSourcesPerRun` pools per tick, deepest first — a
+   * chain tracking three hundred pools would otherwise multiply its request
+   * count by the moment backfill started, and the deep pools are the ones whose
+   * history the columns are actually reporting.
+   */
+  private async backfillStep(): Promise<BackfillRun> {
+    const none: BackfillRun = { swapsIngested: 0, bucketsWritten: 0, poolsDiscovered: 0 };
+    if (!backfillEnabled(this.settings)) return none;
+
+    const db = DatabaseService.getInstance();
+    const rows = await db.prisma.indexedPool.findMany({
+      where: { chainId: this.chainId, backfillDone: false },
+      orderBy: [{ liquidityUsd: { sort: "desc", nulls: "last" } }, { id: "asc" }],
+      take: this.settings.maxBackfillSourcesPerRun,
+    });
+    if (rows.length === 0) return none;
+
+    const cutoffMs = backfillCutoffMs(this.settings);
+    const usd = await this.usdPrices([]);
+    const rawSwaps: RawSwap[] = [];
+    const updates: { id: number; backfillSignature: string; backfillDone: boolean }[] = [];
+    let swapsIngested = 0;
+
+    for (const row of rows) {
+      // Pools that predate this feature have no seed, and seeding from
+      // `lastSignature` would walk down through everything already ingested.
+      // The oldest swap we hold for the pool is the same boundary, recorded.
+      const from = row.backfillSignature ?? (await this.oldestStoredSignature(row.id));
+      if (!from) continue;
+
+      try {
+        const walked = await this.backfillPool(
+          {
+            id: row.id,
+            poolAddress: row.poolAddress,
+            token0: row.token0,
+            token1: row.token1,
+            decimals0: row.decimals0,
+            decimals1: row.decimals1,
+          },
+          from,
+          cutoffMs,
+          usd,
+          rawSwaps
+        );
+
+        swapsIngested += walked.swaps;
+        updates.push({
+          id: row.id,
+          backfillSignature: walked.signature ?? from,
+          backfillDone: walked.done,
+        });
+      } catch (error) {
+        // The pool keeps its resume point, so the same page is retried next
+        // tick rather than skipped.
+        logger.debug("[indexer] solana backfill failed", {
+          chainId: this.chainId,
+          pool: row.poolAddress,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const bucketsWritten = await persistSwaps(rawSwaps);
+
+    if (updates.length > 0) {
+      await db.prisma.$transaction(
+        updates.map((u) =>
+          db.prisma.indexedPool.update({
+            where: { id: u.id },
+            // Nothing here means *latest*: a walk through last week's trades
+            // must not move a pool's current price, liquidity or last-traded
+            // time backwards. The EVM walk skips the same fields.
+            data: { backfillSignature: u.backfillSignature, backfillDone: u.backfillDone },
+          })
+        )
+      );
+    }
+
+    const finished = updates.filter((u) => u.backfillDone).length;
+    if (swapsIngested > 0 || finished > 0) {
+      logger.info("[indexer] backfilled", {
+        chainId: this.chainId,
+        pools: updates.length,
+        swaps: swapsIngested,
+        finished,
+      });
+    }
+
+    return { swapsIngested, bucketsWritten, poolsDiscovered: 0 };
+  }
+
+  /** One pool's downward step: the page below `before`, priced and stored. */
+  private async backfillPool(
+    pool: SolanaPool,
+    before: string,
+    cutoffMs: number | null,
+    usd: Map<string, number>,
+    rawSwaps: RawSwap[]
+  ): Promise<{ swaps: number; signature: string | null; done: boolean }> {
+    const signatures = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
+      pool.poolAddress,
+      { before, limit: this.settings.maxTxPerRun },
+    ]);
+
+    // Newest first from the RPC, so the last entry is the oldest — and it is
+    // the one that decides whether the window has been reached. Nothing below
+    // this point means the pool's history is exhausted, which is as finished as
+    // a walk can be.
+    const oldest = signatures.at(-1);
+    if (!oldest) return { swaps: 0, signature: null, done: true };
+
+    const inWindow = (info: SignatureInfo): boolean =>
+      cutoffMs === null || (info.blockTime ?? 0) * 1000 >= cutoffMs;
+
+    const done = !inWindow(oldest) || signatures.length < this.settings.maxTxPerRun;
+
+    const batch = signatures
+      .filter((info) => !info.err && inWindow(info))
+      .reverse();
+
+    const decoded =
+      batch.length > 0
+        ? await this.decodeBatch(pool, batch, usd, rawSwaps)
+        : { swaps: 0, price: null, at: null };
+
+    return { swaps: decoded.swaps, signature: oldest.signature, done };
+  }
+
+  /** The oldest swap we already hold for a pool, by its on-chain signature. */
+  private async oldestStoredSignature(poolId: number): Promise<string | null> {
+    const oldest = await DatabaseService.getInstance().prisma.indexedSwap.findFirst({
+      where: { poolId },
+      orderBy: { blockNumber: "asc" },
+      select: { txKey: true },
+    });
+    return oldest?.txKey ?? null;
   }
 
   /**

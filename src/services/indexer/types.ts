@@ -40,6 +40,20 @@ export interface DecodedSwap {
   price0In1: number;
 }
 
+/**
+ * What one downward history pass ingested.
+ *
+ * Deliberately not an `IndexRunResult`: a backfill has no `fromBlock`/`toBlock`
+ * to report, because on the two transaction-shaped chains it isn't a block
+ * range at all — it is a position in a list of transactions. The counts are
+ * folded into the tick's result so the rollup sees a chain that moved.
+ */
+export interface BackfillRun {
+  swapsIngested: number;
+  bucketsWritten: number;
+  poolsDiscovered: number;
+}
+
 /** An in-progress 5-minute bucket for one pool. */
 export interface CandleBucket {
   poolId: number;

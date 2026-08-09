@@ -4,8 +4,8 @@ import { logger } from "../../../utils/logger.js";
 import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { bucketStartOf } from "../types.js";
 import { decodeStacksSwapPrint, canDecodeStacksDex } from "./printDecoder.js";
-import type { ChainIndexer, IndexRunResult } from "../types.js";
-import type { IndexerSettings } from "../settings.js";
+import type { BackfillRun, ChainIndexer, IndexRunResult } from "../types.js";
+import { backfillCutoffMs, backfillEnabled, type IndexerSettings } from "../settings.js";
 import type { ChainDescriptor, ChainId, StacksSwapContract } from "../../../types/chain.js";
 import { requireStacksConfig } from "../../../types/chain.js";
 
@@ -51,6 +51,39 @@ interface StacksEvent {
   event_type: string;
   contract_log?: { contract_id?: string; value?: { repr?: string } };
 }
+
+/** One page of an address's transaction list. */
+interface TxPage {
+  results?: { tx?: StacksTx }[];
+  /** List length. Absent on older API versions, in which case drift is not corrected. */
+  total?: number;
+}
+
+/**
+ * Where the downward walk has got to in one contract's transaction list.
+ *
+ * A *type alias* rather than an interface so it satisfies Prisma's
+ * `InputJsonValue`, which an interface cannot because it has no implicit index
+ * signature.
+ *
+ * `total` is not informational — it is the drift anchor. The API pages an
+ * address by offset from the newest transaction, so every transaction that
+ * arrives at the head shifts a stored offset down by one. Recording the list
+ * length alongside the offset makes the correction exact: the same logical
+ * position is later at `offset + (totalNow - total)`. Without it, a busy
+ * contract's walk would slip backwards by however many trades happened between
+ * ticks and could stall entirely.
+ */
+type ContractBackfill = {
+  offset: number;
+  total: number;
+  done: boolean;
+};
+
+type StacksBackfillState = Record<string, ContractBackfill>;
+
+/** Transactions per page when walking history. Matches the forward pass. */
+const BACKFILL_PAGE_SIZE = 50;
 
 /** A pool row as this indexer needs it in memory. */
 interface StacksPool {
@@ -132,25 +165,47 @@ export class StacksIndexer implements ChainIndexer {
     }
 
     const fromBlock = cursor.lastBlock;
-    if (BigInt(tip) <= fromBlock) return this.empty(fromBlock, BigInt(tip));
+    if (BigInt(tip) <= fromBlock) {
+      const backfilled = await this.backfillStep();
+      return this.merge(this.empty(fromBlock, BigInt(tip)), backfilled);
+    }
 
     const swaps = await this.collectSwaps(fromBlock);
     if (swaps.length === 0) {
       // Nothing traded. The cursor still advances — leaving it behind would
       // re-walk the same empty range every tick forever.
-      await this.saveCursor(BigInt(tip));
-      return this.empty(fromBlock, BigInt(tip));
+      await this.saveCursor({ lastBlock: BigInt(tip) });
+      const backfilled = await this.backfillStep();
+      return this.merge(this.empty(fromBlock, BigInt(tip)), backfilled);
     }
 
     const { bucketsWritten, poolsDiscovered } = await this.ingest(swaps, BigInt(tip));
 
+    // History is walked only after the live pass has been served. The forward
+    // pass is what the product is for; backfill is a correctness nicety, and a
+    // chain catching up must not spend its request budget walking backwards.
+    const backfilled = await this.backfillStep();
+
+    return this.merge(
+      {
+        chainId: this.chainId,
+        poolsDiscovered,
+        swapsIngested: swaps.length,
+        bucketsWritten,
+        fromBlock,
+        toBlock: BigInt(tip),
+      },
+      backfilled
+    );
+  }
+
+  /** Folds a backfill pass's counts into the run result the forward pass built. */
+  private merge(result: IndexRunResult, backfilled: BackfillRun): IndexRunResult {
     return {
-      chainId: this.chainId,
-      poolsDiscovered,
-      swapsIngested: swaps.length,
-      bucketsWritten,
-      fromBlock,
-      toBlock: BigInt(tip),
+      ...result,
+      poolsDiscovered: result.poolsDiscovered + backfilled.poolsDiscovered,
+      swapsIngested: result.swapsIngested + backfilled.swapsIngested,
+      bucketsWritten: result.bucketsWritten + backfilled.bucketsWritten,
     };
   }
 
@@ -310,7 +365,40 @@ export class StacksIndexer implements ChainIndexer {
 
     const { pools, discovered } = await this.resolvePools(swaps);
     const usd = await this.usdPrices(pools, swaps);
+    const { rawSwaps, poolState } = this.valueSwaps(swaps, pools, usd);
 
+    const bucketsWritten = await persistSwaps(rawSwaps);
+
+    await db.prisma.$transaction([
+      ...[...poolState.entries()].map(([poolId, state]) =>
+        db.prisma.indexedPool.update({
+          where: { id: poolId },
+          data: { lastPrice0: state.price, lastSwapAt: state.at },
+        })
+      ),
+      db.prisma.indexerCursor.upsert({
+        where: { chainId: this.chainId },
+        create: { chainId: this.chainId, lastBlock: toBlock, lastPoolBlock: toBlock },
+        update: { lastBlock: toBlock },
+      }),
+    ]);
+
+    await this.refreshLiquidity(pools, swaps, usd);
+
+    return { bucketsWritten, poolsDiscovered: discovered };
+  }
+
+  /**
+   * Prices decoded swaps and shapes them for storage.
+   *
+   * Shared by the forward pass and the history walk; what the two do with
+   * `poolState` is where they differ. See `ingestHistory`.
+   */
+  private valueSwaps(
+    swaps: DecodedSwapAt[],
+    pools: Map<string, StacksPool>,
+    usd: Map<string, number>
+  ): { rawSwaps: RawSwap[]; poolState: Map<number, { price: number; at: Date }> } {
     const rawSwaps: RawSwap[] = [];
     const poolState = new Map<number, { price: number; at: Date }>();
 
@@ -356,25 +444,188 @@ export class StacksIndexer implements ChainIndexer {
       if (priceUsd > 0) poolState.set(pool.id, { price: priceUsd, at });
     }
 
+    return { rawSwaps, poolState };
+  }
+
+  // ─── Backfill ──────────────────────────────────────────────────────────────
+
+  /**
+   * Walks each swap contract's transaction list downward, into history.
+   *
+   * The EVM indexer backfills by asking for an earlier block range. Nothing
+   * here can: the Stacks API pages an address's transactions by offset from the
+   * newest, with no way to address a height, so "walk backwards" means "keep
+   * paging and remember where you stopped". That per-contract offset is what
+   * `IndexerCursor.backfillState` holds, and why this family needed a cursor
+   * shape of its own rather than a second bigint.
+   *
+   * Bounded twice over: `maxBackfillSourcesPerRun` contracts per tick, and
+   * `maxTxPerRun` transactions within each. Neither the walk nor the forward
+   * pass can starve the other.
+   */
+  private async backfillStep(): Promise<BackfillRun> {
+    const none: BackfillRun = { swapsIngested: 0, bucketsWritten: 0, poolsDiscovered: 0 };
+    if (!backfillEnabled(this.settings)) return none;
+
+    const db = DatabaseService.getInstance();
+    const cursor = await db.prisma.indexerCursor.findUnique({
+      where: { chainId: this.chainId },
+    });
+    if (!cursor || cursor.backfillDone) return none;
+
+    const state = readBackfillState(cursor.backfillState);
+    const cutoffMs = backfillCutoffMs(this.settings);
+
+    const pending = this.stacks.swapContracts
+      .filter((contract) => !state[contract.contractId]?.done)
+      .slice(0, this.settings.maxBackfillSourcesPerRun);
+
+    if (pending.length === 0) {
+      await this.saveCursor({ backfillDone: true });
+      logger.info("[indexer] backfill complete", { chainId: this.chainId });
+      return none;
+    }
+
+    const collected: DecodedSwapAt[] = [];
+    let lowestBlock: number | null = null;
+
+    for (const contract of pending) {
+      const entry = state[contract.contractId] ?? { offset: 0, total: 0, done: false };
+
+      try {
+        const walked = await this.backfillContract(contract, entry, cutoffMs);
+        collected.push(...walked.swaps);
+        state[contract.contractId] = walked.next;
+        if (walked.lowestBlock !== null) {
+          lowestBlock =
+            lowestBlock === null ? walked.lowestBlock : Math.min(lowestBlock, walked.lowestBlock);
+        }
+      } catch (error) {
+        // One contract's history failing must not cost the others theirs. The
+        // entry keeps its old offset, so the same page is retried next tick.
+        logger.warn("[indexer] stacks backfill read failed", {
+          chainId: this.chainId,
+          contract: contract.contractId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const ingested =
+      collected.length > 0
+        ? await this.ingestHistory(collected)
+        : { swapsIngested: 0, bucketsWritten: 0, poolsDiscovered: 0 };
+
+    const allDone = this.stacks.swapContracts.every((c) => state[c.contractId]?.done);
+
+    await this.saveCursor({
+      backfillState: state,
+      backfillDone: allDone,
+      // Purely observability: how deep the walk has reached. Nothing resumes
+      // from it, since the resume point is an offset rather than a height.
+      ...(lowestBlock !== null ? { backfillBlock: BigInt(lowestBlock) } : {}),
+    });
+
+    if (allDone) logger.info("[indexer] backfill complete", { chainId: this.chainId });
+    else if (ingested.swapsIngested > 0) {
+      logger.info("[indexer] backfilled", {
+        chainId: this.chainId,
+        swaps: ingested.swapsIngested,
+        lowestBlock,
+      });
+    }
+
+    return ingested;
+  }
+
+  /**
+   * One contract's page walk for this tick.
+   *
+   * Stops on any of: the transaction budget, a transaction older than the
+   * window, or the end of the list. The first is a pause and the other two are
+   * terminal.
+   */
+  private async backfillContract(
+    contract: StacksSwapContract,
+    entry: ContractBackfill,
+    cutoffMs: number | null
+  ): Promise<{ swaps: DecodedSwapAt[]; next: ContractBackfill; lowestBlock: number | null }> {
+    const path = `/extended/v2/addresses/${contract.contractId}/transactions`;
+
+    // A one-row probe, purely to read the list length before committing to a
+    // page. Correcting the offset afterwards would mean fetching a page from
+    // the wrong position first — fifty transaction bodies for nothing.
+    const probe = await this.fetchJson<TxPage>(`${path}?limit=1&offset=0`);
+    const total = typeof probe.total === "number" ? probe.total : 0;
+
+    // Everything new arrives at the head, so it shifts a stored position down
+    // by exactly however much arrived.
+    let offset =
+      entry.total > 0 && total > entry.total ? entry.offset + (total - entry.total) : entry.offset;
+
+    const pending: StacksTx[] = [];
+    let inspected = 0;
+    let done = false;
+    let lowestBlock: number | null = null;
+
+    while (inspected < this.settings.maxTxPerRun && !done) {
+      const page = await this.fetchJson<TxPage>(
+        `${path}?limit=${BACKFILL_PAGE_SIZE}&offset=${offset}`
+      );
+      const rows = page.results ?? [];
+
+      // Walked off the end of the list: there is no more history to have.
+      if (rows.length === 0) {
+        done = true;
+        break;
+      }
+
+      for (const row of rows) {
+        const tx = row.tx ?? (row as unknown as StacksTx);
+        if (!tx?.tx_id) continue;
+
+        offset++;
+        inspected++;
+
+        // The list is newest-first, so the first transaction below the cutoff
+        // means every one after it is older still.
+        if (cutoffMs !== null && tx.block_time * 1000 < cutoffMs) {
+          done = true;
+          break;
+        }
+
+        if (tx.tx_status !== "success") continue;
+
+        pending.push(tx);
+        lowestBlock =
+          lowestBlock === null ? tx.block_height : Math.min(lowestBlock, tx.block_height);
+      }
+
+      if (rows.length < BACKFILL_PAGE_SIZE) done = true;
+    }
+
+    const swaps = pending.length > 0 ? await this.swapsInTxs(pending, contract) : [];
+
+    return { swaps, next: { offset, total, done }, lowestBlock };
+  }
+
+  /**
+   * Stores historical swaps, and touches nothing that means *latest*.
+   *
+   * `lastPrice0`, `lastSwapAt` and pool liquidity are all statements about the
+   * present. Writing them from a walk through last week's trades moves a pool's
+   * current price backwards in time — and since the deepest pool sets a token's
+   * displayed price, that surfaces as the quoted price jumping to a stale one.
+   * The EVM walk skips them for the same reason.
+   */
+  private async ingestHistory(swaps: DecodedSwapAt[]): Promise<BackfillRun> {
+    const { pools, discovered } = await this.resolvePools(swaps);
+    const usd = await this.usdPrices(pools, swaps);
+    const { rawSwaps } = this.valueSwaps(swaps, pools, usd);
+
     const bucketsWritten = await persistSwaps(rawSwaps);
 
-    await db.prisma.$transaction([
-      ...[...poolState.entries()].map(([poolId, state]) =>
-        db.prisma.indexedPool.update({
-          where: { id: poolId },
-          data: { lastPrice0: state.price, lastSwapAt: state.at },
-        })
-      ),
-      db.prisma.indexerCursor.upsert({
-        where: { chainId: this.chainId },
-        create: { chainId: this.chainId, lastBlock: toBlock, lastPoolBlock: toBlock },
-        update: { lastBlock: toBlock },
-      }),
-    ]);
-
-    await this.refreshLiquidity(pools, swaps, usd);
-
-    return { bucketsWritten, poolsDiscovered: discovered };
+    return { swapsIngested: rawSwaps.length, bucketsWritten, poolsDiscovered: discovered };
   }
 
   /** `contract#poolKey` — unique per pool and stable across restarts. */
@@ -654,14 +905,50 @@ export class StacksIndexer implements ChainIndexer {
     }
   }
 
-  private async saveCursor(lastBlock: bigint): Promise<void> {
+  private async saveCursor(data: {
+    lastBlock?: bigint;
+    backfillBlock?: bigint;
+    backfillState?: StacksBackfillState;
+    backfillDone?: boolean;
+  }): Promise<void> {
     const db = DatabaseService.getInstance();
     await db.prisma.indexerCursor.upsert({
       where: { chainId: this.chainId },
-      create: { chainId: this.chainId, lastBlock, lastPoolBlock: lastBlock },
-      update: { lastBlock },
+      create: {
+        chainId: this.chainId,
+        lastBlock: data.lastBlock ?? 0n,
+        lastPoolBlock: data.lastBlock ?? 0n,
+      },
+      update: data,
     });
   }
+}
+
+/**
+ * Reads the stored paging state, treating anything unrecognised as empty.
+ *
+ * A Json column has no schema, so this is where one is imposed. An entry that
+ * doesn't parse restarts that contract's walk from the head rather than
+ * throwing: re-reading history is a no-op now that swaps are stored under their
+ * on-chain identity, so the failure mode is wasted requests rather than
+ * inflated volume.
+ */
+function readBackfillState(value: unknown): StacksBackfillState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const out: StacksBackfillState = {};
+  for (const [contractId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { offset, total, done } = entry as Partial<ContractBackfill>;
+    if (typeof offset !== "number" || !Number.isFinite(offset) || offset < 0) continue;
+
+    out[contractId] = {
+      offset,
+      total: typeof total === "number" && total >= 0 ? total : 0,
+      done: done === true,
+    };
+  }
+  return out;
 }
 
 interface DecodedSwapAt {

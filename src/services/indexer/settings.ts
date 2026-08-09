@@ -33,6 +33,33 @@ export interface IndexerSettings {
   backfillWindowHours: number;
   /** Ceiling on blocks the backfill may walk per tick. */
   maxBackfillBlocksPerRun: number;
+  /** Pools or contracts backfilled per tick on transaction-shaped chains. */
+  maxBackfillSourcesPerRun: number;
+  /** Walk all of history instead of `backfillWindowHours` of it. */
+  backfillFullHistory: boolean;
+}
+
+/**
+ * Whether the downward walk should run at all.
+ *
+ * Full history overrides the window rather than adding to it, so
+ * `INDEXER_BACKFILL_FULL_HISTORY=true` with a window of 0 means "everything"
+ * rather than "nothing" — the explicit switch beats the tuning knob.
+ */
+export function backfillEnabled(settings: IndexerSettings): boolean {
+  return settings.backfillFullHistory || settings.backfillWindowHours > 0;
+}
+
+/**
+ * The oldest timestamp the walk aims to reach, or null for all of history.
+ *
+ * A moving target on purpose: the window is *rolling*, so as the clock advances
+ * so does the point at which enough history exists. A walk that stops there
+ * stays stopped.
+ */
+export function backfillCutoffMs(settings: IndexerSettings, now = Date.now()): number | null {
+  if (settings.backfillFullHistory) return null;
+  return now - settings.backfillWindowHours * 3_600_000;
 }
 
 export function indexerSettings(): IndexerSettings {
@@ -49,5 +76,7 @@ export function indexerSettings(): IndexerSettings {
     retryBackoffMs: config.INDEXER_RETRY_BACKOFF_MS,
     backfillWindowHours: config.INDEXER_BACKFILL_WINDOW_HOURS,
     maxBackfillBlocksPerRun: config.INDEXER_MAX_BACKFILL_BLOCKS_PER_RUN,
+    maxBackfillSourcesPerRun: config.INDEXER_MAX_BACKFILL_SOURCES_PER_RUN,
+    backfillFullHistory: config.INDEXER_BACKFILL_FULL_HISTORY,
   };
 }

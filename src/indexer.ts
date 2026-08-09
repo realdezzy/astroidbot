@@ -12,32 +12,6 @@ import { runMarketDataIngestion } from "./services/indexer/ingestionCycle.js";
 /**
  * The market-data indexer, as its own process.
  *
- * It shares a database and a Redis with the API process and nothing else: no
- * HTTP API, no Telegram, no queue workers, no trading cycle. It reads chain
- * logs and writes candles, pool rows and the rolled-up Token metrics the
- * discovery pages render.
- *
- * Why it is not a thread of the main process, which is where it started:
- *
- *  - **Blast radius.** Ingestion is the heaviest RPC consumer in the codebase
- *    and the one most exposed to third-party failure. Sharing an event loop
- *    with trade execution means a provider having a bad day competes with
- *    signing a swap.
- *  - **Scale shape.** The two have unrelated cost curves. Indexing more chains
- *    is RPC- and CPU-bound; serving more users is not. Together they can only
- *    be scaled by the larger of the two needs.
- *  - **Restart cost.** Adding a chain to the index restarts the indexer. It
- *    should not also drop WebSocket connections and Telegram polling.
- *
- * What it costs: mutual exclusion is now a cross-process problem. See the
- * per-chain Redis lock in IndexerService — without it, two processes reading
- * the same cursor would both ingest the same blocks and both add the volume.
- *
- * **This is the only process that ingests.** There is no flag to move
- * ingestion back into the API process, because there is no ingestion code
- * path there to enable — `runCycle()` does not call the indexer at all. A
- * deployment that doesn't want market data doesn't run this container, and
- * points MARKET_DATA_PROVIDER at something else.
  */
 
 interface IndexerHealth {
