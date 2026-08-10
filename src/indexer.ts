@@ -9,11 +9,6 @@ import { ChainHealthMonitor } from "./services/chains/chainHealth.js";
 import { IndexerService } from "./services/indexer/indexerService.js";
 import { runMarketDataIngestion } from "./services/indexer/ingestionCycle.js";
 
-/**
- * The market-data indexer, as its own process.
- *
- */
-
 interface IndexerHealth {
   startedAt: Date;
   lastRunAt: Date | null;
@@ -34,19 +29,8 @@ const health: IndexerHealth = {
   consecutiveFailures: 0,
 };
 
-/**
- * Consecutive failures before the container reports unhealthy.
- *
- * Not one: a single failed pass is the normal response to an RPC endpoint
- * hiccuping, and restarting on it would turn a recoverable blip into a restart
- * loop that ingests nothing. Three consecutive failures is a real fault.
- */
 const UNHEALTHY_AFTER_CONSECUTIVE_FAILURES = 3;
 
-/**
- * Health endpoint. Serves the container healthcheck and nothing else — this
- * process deliberately exposes no API surface.
- */
 function createHealthServer(): http.Server {
   return http.createServer((req, res) => {
     if (req.url !== "/health" && req.url !== "/") {
@@ -54,10 +38,6 @@ function createHealthServer(): http.Server {
       return;
     }
 
-    // Healthy until proven otherwise, including before the first pass
-    // completes: a fresh container catching up on a cold chain can take
-    // several minutes, and reporting unhealthy meanwhile would restart it
-    // forever without ever finishing a pass.
     const healthy = health.consecutiveFailures < UNHEALTHY_AFTER_CONSECUTIVE_FAILURES;
 
     res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
@@ -66,10 +46,6 @@ function createHealthServer(): http.Server {
         status: healthy ? "ok" : "degraded",
         service: "indexer",
         chains: IndexerService.getInstance().indexedChains(),
-        // Per-chain detail, so "the indexer is up but Celo has been failing
-        // for an hour" is answerable without reading logs. It does not affect
-        // the status code: one unreachable chain is degraded capability, not a
-        // reason to restart a container that is ingesting four others fine.
         chainHealth: ChainHealthMonitor.getInstance().snapshot(),
         uptimeSeconds: Math.round((Date.now() - health.startedAt.getTime()) / 1000),
         lastRunAt: health.lastRunAt,
@@ -112,9 +88,6 @@ async function main(): Promise<void> {
 
   await connectDatabase();
 
-  // Same registration path as the API process. The indexer needs descriptors
-  // to know which chains are indexable, and the EVM DEX providers because
-  // resolving a native asset's USD price can fall back to a live router quote.
   registerEnabledChains();
 
   const config = ConfigManager.getInstance().config;
@@ -131,9 +104,6 @@ async function main(): Promise<void> {
 
   await runPass();
 
-  // A pass that overruns the interval does not stack: runMarketDataIngestion
-  // is guarded per chain, in-process and in Redis, so a late pass is skipped
-  // rather than queued behind the one still running.
   const timer = setInterval(() => {
     void runPass();
   }, intervalSeconds * 1000);

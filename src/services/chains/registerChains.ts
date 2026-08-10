@@ -11,10 +11,6 @@ import { BUILT_IN_DESCRIPTORS, parseCustomEvmChains } from "./descriptors/index.
 import type { ChainAdapter } from "../../types/chainAdapter.js";
 import type { ChainDescriptor } from "../../types/chain.js";
 
-/**
- * Builds the adapter for a descriptor. One switch on family — the only place
- * in the codebase that needs to know which class implements which shape.
- */
 function adapterFor(descriptor: ChainDescriptor): ChainAdapter {
   switch (descriptor.family) {
     case "stacks":
@@ -28,13 +24,6 @@ function adapterFor(descriptor: ChainDescriptor): ChainAdapter {
   }
 }
 
-/**
- * Registers a DEX provider for a chain, if it has one configured.
- *
- * A chain with no `dex` block is registered as a wallet/balance chain only —
- * DEXRegistry never offers it a quote, which is exactly right for a network
- * whose router deployments don't exist yet.
- */
 function registerProviderFor(descriptor: ChainDescriptor): void {
   if (!descriptor.tradable) {
     logger.info(`[chains] ${descriptor.chainId} registered as non-tradable (no DEX configured)`);
@@ -48,28 +37,8 @@ function registerProviderFor(descriptor: ChainDescriptor): void {
   if (descriptor.family === "svm" && descriptor.svm?.jupiterApiUrl) {
     DEXRegistry.getInstance().registerProvider(new JupiterProvider(descriptor));
   }
-  // Stacks providers (ALEX/Bitflow/Velar) are registered directly by
-  // bootstrap: they are per-DEX rather than per-chain and predate descriptors.
 }
 
-/**
- * The custody mode a chain will actually run in, given what this deployment
- * has configured.
- *
- * A descriptor's `custody` states a *preference*, not a hard requirement.
- * ERC-4337 buys atomic batching and sponsorable gas, and it needs a paymaster
- * key to do either; without one, the same chain runs perfectly well as a plain
- * EOA — the adapter has supported both modes from the start precisely so that
- * "EVM support" would not collapse into "support for the chains Pimlico
- * serves".
- *
- * Treating a missing key as fatal made that principle untrue in practice: it
- * meant Base could not be enabled at all without a Pimlico account, which is
- * an unreasonable thing to require of someone starting the platform up for the
- * first time. Degrading is loud, not silent — the warning names the
- * consequence, and `sponsorshipAvailability()` already surfaces the same fact
- * in Settings, where each chain that cannot sponsor says why.
- */
 function effectiveDescriptor(descriptor: ChainDescriptor, hasPaymasterKey: boolean): ChainDescriptor {
   if (descriptor.evm?.custody !== "erc4337" || hasPaymasterKey) return descriptor;
 
@@ -84,18 +53,6 @@ function effectiveDescriptor(descriptor: ChainDescriptor, hasPaymasterKey: boole
   return { ...descriptor, evm: { ...descriptor.evm, custody: "eoa" } };
 }
 
-/**
- * Registers every chain named in ENABLED_CHAINS.
- *
- * Failures are fatal, deliberately. A chain that fails to register is
- * indistinguishable from one that was never configured — the user just sees
- * "chain not enabled" and no error anywhere — and that is precisely the class
- * of invisible failure the family-keyed registry used to produce.
- *
- * Missing *sponsorship* credentials are the one exception, and not a weakening
- * of that rule: the chain still registers, still trades, and announces the
- * difference. See `effectiveDescriptor`.
- */
 export function registerEnabledChains(): void {
   const config = ConfigManager.getInstance().config;
   const registry = ChainAdapterRegistry.getInstance();
@@ -125,9 +82,6 @@ export function registerEnabledChains(): void {
       );
     }
 
-    // A 4337 chain with no paymaster key runs as an EOA rather than refusing
-    // to boot. The old behaviour made Base unreachable without a Pimlico
-    // account, which is not a reasonable prerequisite for enabling a chain.
     const effective = effectiveDescriptor(descriptor, Boolean(config.PIMLICO_API_KEY));
 
     registry.register(adapterFor(effective));

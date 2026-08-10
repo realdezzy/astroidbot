@@ -2,20 +2,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ConfigManager } from "../../../src/config.js";
 import type { ChainDescriptor } from "../../../src/types/chain.js";
 
-/**
- * Gas sponsorship is a per-chain, per-user choice — but only on chains that
- * can sponsor at all.
- *
- * Keeping "can this chain sponsor" and "does this user want it to" separate is
- * the point. Collapsed into one boolean, a chain with EOA custody would show a
- * toggle that silently does nothing, and the user would find out when a swap
- * reverted for want of gas.
- */
-
-// The preference lives in ChainPreference, reached through the db helper.
-// It used to be read off TradeSettings by (userId, chain), which is what
-// created duplicate account-settings rows and left RiskManager reading
-// whichever one the planner returned.
 const findChainPreference = vi.fn();
 vi.mock("../../../src/services/db.js", () => ({
   DatabaseService: {
@@ -68,7 +54,6 @@ describe("gas sponsorship availability", () => {
   });
 
   it("is unavailable under EOA custody, and says why", () => {
-    // An EOA pays its own gas by construction — there is no paymaster to ask.
     const { available, reason } = sponsorshipAvailability(eoaChain);
     expect(available).toBe(false);
     expect(reason).toMatch(/EOA/i);
@@ -84,8 +69,6 @@ describe("gas sponsorship availability", () => {
   });
 
   it("is unavailable without a paymaster key, however the chain is configured", () => {
-    // The deployment, not the chain, is what's missing — and the message has
-    // to say that, or an operator debugs the descriptor instead of the env.
     loadConfig(undefined);
     const { available, reason } = sponsorshipAvailability(smartAccountChain);
     expect(available).toBe(false);
@@ -105,15 +88,11 @@ describe("sponsorGasFor", () => {
   });
 
   it("defaults to sponsored when the user has never chosen", async () => {
-    // Every 4337 wallet created before this toggle existed was funded on the
-    // assumption gas was paid for it. Defaulting to off would strand exactly
-    // those wallets: holding tokens they can't sell for want of native asset.
     findChainPreference.mockResolvedValue(null);
     expect(await sponsorGasFor(1, "base:mainnet")).toBe(true);
   });
 
   it("defaults to sponsored when the lookup fails", async () => {
-    // A database blip must not turn into "your swap reverted for want of gas".
     findChainPreference.mockRejectedValue(new Error("db down"));
     expect(await sponsorGasFor(1, "base:mainnet")).toBe(true);
   });
@@ -125,8 +104,6 @@ describe("sponsorGasFor", () => {
   });
 
   it("inherits when the chain has a row but no opinion on sponsorship", async () => {
-    // A row can exist purely to hold a slippage override. Null means inherit,
-    // and the inherited answer is sponsored — not "the user said no".
     findChainPreference.mockResolvedValue({ sponsorGas: null, slippageBps: 250 });
     expect(await sponsorGasFor(1, "base:mainnet")).toBe(true);
   });

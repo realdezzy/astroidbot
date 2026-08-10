@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ConfigManager } from "../../../src/config.js";
 
-/**
- * ENABLED_CHAINS is the deployment's chain list. The rule it enforces: a chain
- * that fails to register must be a startup failure, never a silent skip. A
- * silently-missing chain looks identical to one that was never configured,
- * which is exactly how the family-keyed registry hid a dropped adapter.
- */
 describe("registerEnabledChains", { timeout: 30_000 }, () => {
   let registerEnabledChains: typeof import("../../../src/services/chains/registerChains.js").registerEnabledChains;
   let ChainAdapterRegistry: typeof import("../../../src/services/chains/chainAdapterRegistry.js").ChainAdapterRegistry;
@@ -20,7 +14,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     if (process.env.TELEGRAM_WEBHOOK_URL === "") delete process.env.TELEGRAM_WEBHOOK_URL;
     if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
     Object.assign(process.env, env);
-    // load() is idempotent in production; reset so each case sees its own env.
     ConfigManager.reset();
     ConfigManager.load();
     ({ registerEnabledChains } = await import("../../../src/services/chains/registerChains.js"));
@@ -32,8 +25,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     delete process.env.ENABLED_CHAINS;
     delete process.env.CUSTOM_EVM_CHAINS;
     delete process.env.PIMLICO_API_KEY;
-    // Reset here as well as in loadWith: a test that times out or throws
-    // part-way through must not leave registrations behind for the next one.
     if (ChainAdapterRegistry) ChainAdapterRegistry.getInstance().reset();
   });
 
@@ -42,9 +33,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("defaults to a multichain deployment", async () => {
-    // Was Stacks-only, to keep pre-multichain deployments byte-identical. That
-    // debt is paid: the product is multichain, so configuring nothing gets you
-    // a multichain deployment rather than one chain and a lot of dead UI.
     await loadWith({});
     registerEnabledChains();
     expect(ChainAdapterRegistry.getInstance().list().map((d) => d.chainId))
@@ -52,9 +40,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("ships two EVM chains by default, not one", async () => {
-    // The family-keyed registry used to drop the second EVM chain silently. A
-    // default with only one EVM chain would never exercise that, and the
-    // product is aimed at Robinhood Chain specifically.
     await loadWith({});
     registerEnabledChains();
 
@@ -66,11 +51,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("names each chain's actually-traded stablecoin", async () => {
-    // Verified against the chains themselves, not from memory. The failure
-    // this guards is subtle: a *real* token that simply isn't the one being
-    // traded passes every existence check while making every price 0.
-    //   robinhood — USDG (Global Dollar), not the poolless rUSDC
-    //   celo      — USDm, since Mento renamed cUSD
     await loadWith({});
     registerEnabledChains();
 
@@ -80,8 +60,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("declares a token entry for every chain's stablecoin", async () => {
-    // A stableSymbol with no matching token entry resolves to nothing, and
-    // getTokenPrice returns 0 for the whole chain without erroring.
     await loadWith({ ENABLED_CHAINS: "base:mainnet,robinhood:mainnet,celo:mainnet" });
     registerEnabledChains();
 
@@ -98,7 +76,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     const registry = ChainAdapterRegistry.getInstance();
     expect(registry.has("stacks:mainnet")).toBe(true);
     expect(registry.has("celo:mainnet")).toBe(true);
-    // USDm, not cUSD — Mento renamed it, same contract.
     expect(registry.get("celo:mainnet").stableSymbol).toBe("USDm");
   });
 
@@ -108,11 +85,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("runs an ERC-4337 chain as an EOA when there is no paymaster key", async () => {
-    // Sponsorship is an enhancement, not a prerequisite for the chain
-    // existing. Refusing to boot meant Base could not be enabled at all
-    // without a Pimlico account — an unreasonable thing to require of a first
-    // start, and untrue to the adapter, which has always supported both modes
-    // so that "EVM support" would not mean "the chains Pimlico serves".
     await loadWith({ ENABLED_CHAINS: "base:mainnet" });
     registerEnabledChains();
 
@@ -131,10 +103,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("does not mutate the shared descriptor when it downgrades custody", async () => {
-    // The catalogue is module-level and shared. Editing it in place would
-    // leave Base stuck on EOA for the rest of the process — including after a
-    // key was added — and the symptom would be unsponsored gas with nothing
-    // in the config to explain it.
     await loadWith({ ENABLED_CHAINS: "base:mainnet" });
     registerEnabledChains();
 
@@ -146,10 +114,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("is multichain by default — one chain per execution family", async () => {
-    // The platform is multichain, so a deployment that configures nothing gets
-    // a multichain deployment. A single-chain default hid every surface that
-    // only exists with more than one: pickers rendered one option, and the
-    // cross-chain aggregation bugs could not appear at all.
     await loadWith({});
     registerEnabledChains();
 
@@ -160,8 +124,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("boots with no credentials configured at all", async () => {
-    // The default list must never require a key. If it does, the first thing
-    // a new operator sees is a crash loop.
     await loadWith({});
     expect(() => registerEnabledChains()).not.toThrow();
   });
@@ -172,8 +134,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
   });
 
   it("registers a chain supplied entirely through CUSTOM_EVM_CHAINS", async () => {
-    // The supported path for networks whose parameters aren't settled enough
-    // to hardcode — no code change, no release.
     await loadWith({
       ENABLED_CHAINS: "stacks:mainnet,arc:mainnet",
       CUSTOM_EVM_CHAINS: JSON.stringify([
@@ -191,7 +151,6 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
 
     const registry = ChainAdapterRegistry.getInstance();
     expect(registry.has("arc:mainnet")).toBe(true);
-    // No DEX configured: wallets and balances work, quoting does not.
     expect(registry.tradable().map((d) => d.chainId)).not.toContain("arc:mainnet");
     expect(registry.list().map((d) => d.chainId)).toContain("arc:mainnet");
   });
@@ -205,13 +164,10 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     expect(registry.forFamily("evm")).toHaveLength(1);
     expect(registry.forFamily("svm")).toHaveLength(1);
     expect(registry.get("solana:mainnet").nativeSymbol).toBe("SOL");
-    // 9 decimals, not the EVM 18 or Stacks 6.
     expect(registry.get("solana:mainnet").nativeDecimals).toBe(9);
   });
 
   it("registers Solana devnet as listable but not tradable", async () => {
-    // Jupiter does not serve devnet, so wallets and balances work there but
-    // quoting does not — exactly the listable/tradable split.
     await loadWith({ ENABLED_CHAINS: "solana:devnet" });
     registerEnabledChains();
 
