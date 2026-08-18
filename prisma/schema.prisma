@@ -23,12 +23,13 @@ model User {
   isAdmin       Boolean  @default(false)
   createdAt     DateTime @default(now())
 
-  wallets          Wallet[]
-  tradeSettings    TradeSettings[]
-  chainPreferences ChainPreference[]
-  trades           Trade[]
-  perpPositions  PerpPosition[]
-  socialAccounts SocialAccount[]
+  wallets           Wallet[]
+  tradeSettings     TradeSettings[]
+  chainPreferences  ChainPreference[]
+  trades            Trade[]
+  perpPositions     PerpPosition[]
+  socialAccounts    SocialAccount[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Wallet {
@@ -321,6 +322,19 @@ model Notification {
   @@index([userId, read])
 }
 
+model PushSubscription {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
 model Candle {
   id        Int      @id @default(autoincrement())
   // Network the token lives on. Without it the unique key collides across
@@ -474,6 +488,8 @@ model IndexedPool {
   lastSwapAt   DateTime?
   lastPrice0   Float? // token0 priced in token1, from the last swap's sqrtPriceX96
 
+  lifecycleState String    @default("ACTIVE") // "DISCOVERED" | "ACTIVE" | "INACTIVE" | "DEAD"
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -501,6 +517,7 @@ model IndexedPool {
 
   @@unique([chainId, poolAddress])
   @@index([chainId, dexId])
+  @@index([chainId, lifecycleState])
   // Rollups walk pools by the token they price.
   @@index([chainId, baseToken])
   @@index([chainId, token0])
@@ -544,16 +561,17 @@ model IndexedSwap {
   // Zero means "we saw this trade but could not price it" — distinct from a
   // trade at a price of zero, which is why the recompute filters it out of
   // OHLC rather than letting it drag the low to nothing.
-  priceUsd    Float
-  volumeUsd   Float
-  isBuy       Boolean
+  priceUsd      Float
+  volumeUsd     Float
+  isBuy         Boolean
+  traderAddress String?
 
   createdAt DateTime @default(now())
 
   @@unique([poolId, txKey])
-  // The recompute reads exactly this shape: one pool's swaps in one bucket.
   @@index([poolId, bucketStart])
   @@index([bucketStart])
+  @@index([traderAddress])
 }
 
 // Five-minute OHLCV buckets — the aggregation primitive every window is

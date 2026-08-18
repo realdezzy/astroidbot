@@ -28,27 +28,16 @@ import { logger } from "../../utils/logger.js";
 
 export interface RawSwap {
   poolId: number;
-  /**
-   * The swap's identity on its own chain. This is the idempotency key, so it
-   * must be stable across re-reads: `txHash:logIndex` on EVM, `txId:eventIndex`
-   * on Stacks, the signature on Solana.
-   */
   txKey: string;
-  /** Block number, slot or block height — whatever orders swaps on this chain. */
   blockNumber: bigint;
   logIndex: number;
   bucketStart: Date;
-  /** Zero means "seen but unpriceable", which is not the same as a zero price. */
   priceUsd: number;
   volumeUsd: number;
   isBuy: boolean;
+  traderAddress?: string;
 }
 
-/**
- * Writes swaps and rebuilds every bucket they land in.
- *
- * Returns the number of candles written, which is what the run result reports.
- */
 export async function persistSwaps(swaps: RawSwap[]): Promise<number> {
   if (swaps.length === 0) return 0;
 
@@ -64,9 +53,8 @@ export async function persistSwaps(swaps: RawSwap[]): Promise<number> {
       priceUsd: s.priceUsd,
       volumeUsd: s.volumeUsd,
       isBuy: s.isBuy,
+      traderAddress: s.traderAddress ?? null,
     })),
-    // The whole point. A re-read of the same range is a no-op rather than a
-    // conflict to handle or a duplicate to double-count.
     skipDuplicates: true,
   });
 

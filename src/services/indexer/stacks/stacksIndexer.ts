@@ -221,8 +221,12 @@ export class StacksIndexer implements ChainIndexer {
   }
 
   private async chainTip(): Promise<number> {
-    const info = await this.fetchJson<{ stacks_tip_height: number }>("/extended/v1/status");
-    return info.stacks_tip_height;
+    const info = await this.fetchJson<{ stacks_tip_height?: number; chain_tip?: { block_height?: number } }>("/extended/v1/status");
+    const height = info.stacks_tip_height ?? info.chain_tip?.block_height;
+    if (typeof height !== "number" || isNaN(height)) {
+      throw new Error(`Invalid or missing tip height from Stacks API: ${JSON.stringify(info)}`);
+    }
+    return height;
   }
 
   /**
@@ -277,7 +281,7 @@ export class StacksIndexer implements ChainIndexer {
 
       for (const row of rows) {
         const tx = row.tx ?? (row as unknown as StacksTx);
-        if (!tx?.tx_id) continue;
+        if (!tx?.tx_id || typeof tx.block_height !== "number") continue;
 
         // The API returns newest first, so the first transaction at or below
         // the cursor means everything after it is already ingested.

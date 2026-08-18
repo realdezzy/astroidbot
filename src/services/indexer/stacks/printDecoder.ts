@@ -124,9 +124,35 @@ function decodeVelar(repr: string): DecodedStacksSwap | null {
   };
 }
 
+function decodeBitflow(repr: string): DecodedStacksSwap | null {
+  const action = stringField(repr, "action") ?? stringField(repr, "op");
+  if (action !== "swap" && action !== "swap-x-for-y" && action !== "swap-y-for-x" && action !== "swap-tokens") return null;
+
+  const token0 = principalField(repr, "token-x") ?? principalField(repr, "token0") ?? principalField(repr, "token-in");
+  const token1 = principalField(repr, "token-y") ?? principalField(repr, "token1") ?? principalField(repr, "token-out");
+  const amount0 = uintField(repr, "dx") ?? uintField(repr, "amt-in") ?? uintField(repr, "amount-in");
+  const amount1 = uintField(repr, "dy") ?? uintField(repr, "amt-out") ?? uintField(repr, "amount-out");
+
+  if (!token0 || !token1 || amount0 === null || amount1 === null) return null;
+
+  const zeroForOne = action === "swap-x-for-y" || principalField(repr, "token-in") === token0;
+
+  return {
+    poolKey: uintField(repr, "pool-id")?.toString() ?? `${token0}/${token1}`,
+    token0,
+    token1,
+    amount0,
+    amount1,
+    zeroForOne,
+    reserve0: uintField(repr, "reserve-x") ?? uintField(repr, "b0"),
+    reserve1: uintField(repr, "reserve-y") ?? uintField(repr, "b1"),
+  };
+}
+
 const DIALECTS: Record<string, (repr: string) => DecodedStacksSwap | null> = {
   alex: decodeAlex,
   velar: decodeVelar,
+  bitflow: decodeBitflow,
 };
 
 /** True when a dialect exists for this DEX. */

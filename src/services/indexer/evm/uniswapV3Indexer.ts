@@ -530,11 +530,12 @@ export class UniswapV3Indexer implements ChainIndexer {
         const pool = byAddress.get(log.address.toLowerCase());
         if (!pool) continue;
 
-        const { amount0, amount1, sqrtPriceX96 } = log.args;
+        const { amount0, amount1, sqrtPriceX96, recipient, sender } = log.args;
         if (amount0 === undefined || amount1 === undefined || sqrtPriceX96 === undefined) {
           continue;
         }
 
+        const traderAddress = (recipient ?? sender ?? "").toLowerCase();
         const timestamp = log.blockNumber != null ? clock.timeOf(log.blockNumber) : Date.now();
         const price0In1 = priceFromSqrtX96(sqrtPriceX96, pool.decimals0, pool.decimals1);
 
@@ -542,8 +543,6 @@ export class UniswapV3Indexer implements ChainIndexer {
 
         rawSwaps.push({
           poolId: pool.id,
-          // The log's own identity on chain, so re-reading this range inserts
-          // nothing rather than double-counting it.
           txKey: `${log.transactionHash}:${log.logIndex ?? 0}`,
           blockNumber: log.blockNumber ?? 0n,
           logIndex: log.logIndex ?? 0,
@@ -551,6 +550,7 @@ export class UniswapV3Indexer implements ChainIndexer {
           priceUsd,
           volumeUsd,
           isBuy,
+          traderAddress: traderAddress || undefined,
         });
         poolState.set(pool.id, { price: price0In1, at: new Date(timestamp) });
         swapsIngested++;
