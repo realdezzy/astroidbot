@@ -356,9 +356,42 @@ export class TokenDiscoveryService {
 
   async getToken(chainId: ChainId, contractId: string) {
     const db = DatabaseService.getInstance();
-    return db.prisma.token.findUnique({
-      where: { chainId_contractId: { chainId, contractId } },
+    let token = await db.prisma.token.findFirst({
+      where: {
+        chainId,
+        contractId: { equals: contractId, mode: "insensitive" },
+      },
     });
+
+    if (!token) {
+      const registry = DEXRegistry.getInstance();
+      const swappables = await registry.getSwappableTokens(false, chainId).catch(() => []);
+      const match = swappables.find(
+        (t) =>
+          t.contractId.toLowerCase() === contractId.toLowerCase() ||
+          t.symbol.toLowerCase() === contractId.toLowerCase()
+      );
+
+      if (match) {
+        const spotPrice = await registry.getTokenPrice(match.symbol, chainId).catch(() => 0);
+        token = await db.prisma.token.upsert({
+          where: { chainId_contractId: { chainId, contractId: match.contractId } },
+          create: {
+            chainId,
+            contractId: match.contractId,
+            symbol: match.symbol,
+            name: match.name,
+            decimals: match.decimals,
+            priceUsd: spotPrice > 0 ? spotPrice : null,
+          },
+          update: {
+            priceUsd: spotPrice > 0 ? spotPrice : undefined,
+          },
+        });
+      }
+    }
+
+    return token;
   }
 }
 

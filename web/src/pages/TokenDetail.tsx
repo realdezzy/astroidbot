@@ -471,13 +471,19 @@ export function TokenDetail() {
                           </span>
                         </td>
                         <td className="py-2 px-3 text-right font-semibold text-title-text">
-                          ${swap.amountUsd.toFixed(2)}
+                          {swap.amountUsd != null ? `$${swap.amountUsd.toFixed(2)}` : "—"}
                         </td>
                         <td className="py-2 px-3 text-right text-muted-text">
-                          {swap.tokenAmount.toLocaleString()}
+                          {swap.tokenAmount != null
+                            ? swap.tokenAmount.toLocaleString()
+                            : swap.amountUsd && swap.priceUsd
+                            ? Math.round(swap.amountUsd / swap.priceUsd).toLocaleString()
+                            : "—"}
                         </td>
                         <td className="py-2 px-3 text-right text-muted-text">
-                          {swap.nativeAmount.toFixed(4)}
+                          {swap.nativeAmount != null
+                            ? swap.nativeAmount.toFixed(4)
+                            : "—"}
                         </td>
                         <td
                           className={classNames(
@@ -649,7 +655,7 @@ export function TokenDetail() {
                           </span>
                         </td>
                         <td className="py-2 px-3 text-right font-bold text-title-text">
-                          {h.amount.toLocaleString()}
+                          {h.amount != null ? h.amount.toLocaleString() : "—"}
                         </td>
                         <td className="py-2 px-3 text-right font-bold text-emerald-400">
                           {h.percentage}%
@@ -711,10 +717,10 @@ export function TokenDetail() {
           <div className="glass-card p-4">
             <div className="text-xs text-muted-text uppercase font-semibold">Price USD</div>
             <div className="text-2xl font-black text-title-text tracking-tight mt-0.5">
-              ${formatNumber(token.priceUsd ?? 0.0003179)}
+              {token.priceUsd != null ? `$${formatNumber(token.priceUsd)}` : "N/A"}
             </div>
             <div className="text-xs font-mono text-muted-text mt-1">
-              PRICE: <span className="text-title-text">{(token.priceNative ?? 0.054348).toFixed(6)} {nativeSymbol}</span>
+              PRICE: <span className="text-title-text">{token.priceNative != null ? `${token.priceNative.toFixed(6)} ${nativeSymbol}` : "—"}</span>
             </div>
           </div>
 
@@ -723,19 +729,19 @@ export function TokenDetail() {
             <div className="glass-card p-3">
               <div className="text-[10px] text-muted-text uppercase font-bold">Liquidity</div>
               <div className="text-xs font-bold text-title-text mt-1">
-                ${formatNumber(token.liquidityUsd ?? 55000)}
+                {token.liquidityUsd != null ? `$${formatNumber(token.liquidityUsd)}` : "—"}
               </div>
             </div>
             <div className="glass-card p-3">
               <div className="text-[10px] text-muted-text uppercase font-bold">FDV</div>
               <div className="text-xs font-bold text-title-text mt-1">
-                ${formatNumber(token.fdvUsd ?? 320000)}
+                {token.fdvUsd != null ? `$${formatNumber(token.fdvUsd)}` : (token.marketCapUsd != null ? `$${formatNumber(token.marketCapUsd)}` : "—")}
               </div>
             </div>
             <div className="glass-card p-3">
               <div className="text-[10px] text-muted-text uppercase font-bold">Mkt Cap</div>
               <div className="text-xs font-bold text-title-text mt-1">
-                ${formatNumber(token.marketCapUsd ?? 320000)}
+                {token.marketCapUsd != null ? `$${formatNumber(token.marketCapUsd)}` : "—"}
               </div>
             </div>
           </div>
@@ -746,11 +752,34 @@ export function TokenDetail() {
               Performance
             </div>
             <div className="grid grid-cols-4 gap-2 text-center font-mono text-xs">
-              <PerfPill label="5M" value={token.priceChange5m ?? 7.34} />
-              <PerfPill label="1H" value={token.priceChange1h ?? -57.25} />
-              <PerfPill label="6H" value={token.priceChange6h ?? -10.10} />
-              <PerfPill label="24H" value={token.priceChange24h ?? 965.0} />
+              <PerfPill label="5M" value={token.priceChange5m ?? 0} />
+              <PerfPill label="1H" value={token.priceChange1h ?? 0} />
+              <PerfPill label="6H" value={token.priceChange6h ?? 0} />
+              <PerfPill label="24H" value={token.priceChange24h ?? 0} />
             </div>
+          </div>
+
+          {/* Action Card */}
+          <div className="glass-card p-4 flex flex-col space-y-3 bg-brand-500/5 border border-brand-500/20 rounded-xl">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-title-text uppercase">Instant Route</span>
+              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded font-bold">
+                {token.tradable ? "Swappable" : "Indexed Only"}
+              </span>
+            </div>
+            <button
+              onClick={() =>
+                navigate(
+                  `/trade?chainId=${encodeURIComponent(token.chainId)}&tokenOut=${encodeURIComponent(
+                    token.contractId
+                  )}`
+                )
+              }
+              className="w-full py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-sm shadow-lg shadow-brand-500/25 transition-all flex items-center justify-center space-x-2 cursor-pointer"
+            >
+              <span>Trade {token.symbol}</span>
+              <ExternalLink className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>

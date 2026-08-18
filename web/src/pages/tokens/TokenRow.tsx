@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { Link } from "react-router-dom";
 import { Lock, Unlock, ShieldCheck, ArrowUpRight } from "lucide-react";
 import { classNames } from "../../lib/utils";
 import { ChainDexBadge } from "../../components/ChainDexBadge";
@@ -122,7 +123,10 @@ export const TokenRow = memo(function TokenRow({
 
       {/* Token identity */}
       <td className="py-2.5 px-3">
-        <div className="flex items-center gap-2.5 min-w-0">
+        <Link
+          to={`/tokens/${encodeURIComponent(token.chainId)}/${encodeURIComponent(token.contractId)}`}
+          className="flex items-center gap-2.5 min-w-0 group/link"
+        >
           {token.icon ? (
             <img
               src={token.icon}
@@ -141,7 +145,7 @@ export const TokenRow = memo(function TokenRow({
 
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="font-bold text-title-text text-[13px] truncate max-w-[9rem]">
+              <span className="font-bold text-title-text text-[13px] truncate max-w-[9rem] group-hover/link:text-brand-400 transition-colors">
                 {token.symbol}
               </span>
               {token.isVerified && (
@@ -159,7 +163,7 @@ export const TokenRow = memo(function TokenRow({
               </span>
             </div>
           </div>
-        </div>
+        </Link>
       </td>
 
       <td className="py-2.5 px-3 text-right font-semibold text-title-text tabular-nums">
