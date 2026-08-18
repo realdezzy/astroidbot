@@ -58,7 +58,7 @@ RUN chmod +x /docker-entrypoint.sh /docker-entrypoint-indexer.sh
 
 EXPOSE 8006 8007
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:8006/api/health || exit 1
 
 USER botuser
