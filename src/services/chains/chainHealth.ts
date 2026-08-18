@@ -46,6 +46,7 @@ export interface ChainHealthSnapshot {
   consecutiveFailures: number;
   successes: number;
   failures: number;
+  latencyMs: number | null;
   lastOkAt: string | null;
   lastFailureAt: string | null;
   lastError: string | null;
@@ -55,6 +56,7 @@ interface ChainCounters {
   successes: number;
   failures: number;
   consecutiveFailures: number;
+  latencyMs: number | null;
   lastOkAt: Date | null;
   lastFailureAt: Date | null;
   lastError: string | null;
@@ -75,6 +77,7 @@ function emptyCounters(): ChainCounters {
     successes: 0,
     failures: 0,
     consecutiveFailures: 0,
+    latencyMs: null,
     lastOkAt: null,
     lastFailureAt: null,
     lastError: null,
@@ -101,11 +104,14 @@ export class ChainHealthMonitor {
     return c;
   }
 
-  recordSuccess(chainId: ChainId | string): void {
+  recordSuccess(chainId: ChainId | string, latencyMs?: number): void {
     const c = this.countersFor(chainId);
     c.successes++;
     c.consecutiveFailures = 0;
     c.lastOkAt = new Date();
+    if (typeof latencyMs === "number") {
+      c.latencyMs = latencyMs;
+    }
 
     if (c.alerted) {
       c.alerted = false;
@@ -118,12 +124,15 @@ export class ChainHealthMonitor {
     }
   }
 
-  recordFailure(chainId: ChainId | string, error: unknown): void {
+  recordFailure(chainId: ChainId | string, error: unknown, latencyMs?: number): void {
     const c = this.countersFor(chainId);
     c.failures++;
     c.consecutiveFailures++;
     c.lastFailureAt = new Date();
     c.lastError = error instanceof Error ? error.message : String(error);
+    if (typeof latencyMs === "number") {
+      c.latencyMs = latencyMs;
+    }
 
     if (c.consecutiveFailures >= UNHEALTHY_AFTER && !c.alerted) {
       c.alerted = true;
@@ -137,12 +146,13 @@ export class ChainHealthMonitor {
 
   /** Wraps a chain-bound call so success and failure are both counted. */
   async track<T>(chainId: ChainId | string, fn: () => Promise<T>): Promise<T> {
+    const start = Date.now();
     try {
       const result = await fn();
-      this.recordSuccess(chainId);
+      this.recordSuccess(chainId, Date.now() - start);
       return result;
     } catch (error) {
-      this.recordFailure(chainId, error);
+      this.recordFailure(chainId, error, Date.now() - start);
       throw error;
     }
   }
@@ -153,9 +163,6 @@ export class ChainHealthMonitor {
 
   /**
    * One row per registered chain, whether or not it has been exercised yet.
-   *
-   * Reporting only chains that have been called would make a chain that is
-   * failing at *registration* invisible, which is the case most worth seeing.
    */
   snapshot(): ChainHealthSnapshot[] {
     return ChainAdapterRegistry.getInstance()
@@ -170,6 +177,7 @@ export class ChainHealthMonitor {
           consecutiveFailures: c.consecutiveFailures,
           successes: c.successes,
           failures: c.failures,
+          latencyMs: c.latencyMs,
           lastOkAt: c.lastOkAt?.toISOString() ?? null,
           lastFailureAt: c.lastFailureAt?.toISOString() ?? null,
           lastError: c.lastError,

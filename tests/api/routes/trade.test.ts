@@ -88,7 +88,7 @@ describe("POST /api/me/trades/execute — RiskManager gating", () => {
   });
 
   afterAll(() => {
-    server.close();
+    server?.close?.();
   });
 
   beforeEach(() => {

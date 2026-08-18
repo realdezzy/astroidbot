@@ -31,6 +31,7 @@ import agentsRoutes from "./routes/agents.js";
 import perpRoutes from "./routes/perp/perp.js";
 import docsRoutes from "./routes/docs.js";
 import contactRoutes from "./routes/contact.js";
+import pushRoutes from "./routes/push.js";
 import { QueueManager, QUEUES } from "../services/queue.js";
 import { AIOrchestrator } from "../services/ai.js";
 import OpenAI, { toFile } from "openai";
@@ -57,7 +58,8 @@ export function createServer(): HttpServer {
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
-          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://telegram.org"],
+          frameSrc: ["'self'", "https://oauth.telegram.org", "https://telegram.org"],
           styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
           fontSrc: ["'self'", "https://fonts.gstatic.com"],
           imgSrc: ["'self'", "data:", "https:"],
@@ -202,6 +204,7 @@ export function createServer(): HttpServer {
   app.use("/api/me/agents", agentsRoutes);
   app.use("/api/me/perp", perpRoutes);
   app.use("/api/docs", docsRoutes);
+  app.use("/api/push", pushRoutes);
 
 
   app.post("/api/ai/command", authenticate, async (req: Request, res: Response) => {
@@ -271,6 +274,10 @@ export function createServer(): HttpServer {
   // contractId="price".
   app.use("/api", discoveryRoutes);
   app.use("/api", chainRoutes);
+
+  app.use("/api/{*path}", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+  });
 
   const webDistPath = path.resolve(__dirname, "../../web/dist");
   if (fs.existsSync(webDistPath)) {

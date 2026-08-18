@@ -17,8 +17,11 @@ import {
   X,
   MessageSquare,
   TrendingUp,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import { usePushNotifications } from "../hooks/usePushNotifications";
 
 const navItems = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -37,6 +40,7 @@ const navItems = [
 export function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const { isSubscribed, subscribe, unsubscribe, isSupported, loading: pushLoading } = usePushNotifications();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const stored = localStorage.getItem("theme") as "light" | "dark" | null;
@@ -59,6 +63,14 @@ export function Layout() {
     localStorage.setItem("theme", nextTheme);
   };
 
+  const handleTogglePush = async () => {
+    if (isSubscribed) {
+      await unsubscribe();
+    } else {
+      await subscribe();
+    }
+  };
+
   const handleLogout = async () => {
     await logout();
     navigate("/login");
@@ -76,6 +88,18 @@ export function Layout() {
           </div>
         </a>
         <div className="flex items-center gap-3">
+          {isSupported && (
+            <button
+              onClick={handleTogglePush}
+              disabled={pushLoading}
+              title={isSubscribed ? "Push Notifications Active" : "Enable Push Notifications"}
+              className={`p-2 rounded-lg bg-bg-hover hover:bg-input-bg transition-colors ${
+                isSubscribed ? "text-emerald-400" : "text-muted-text hover:text-title-text"
+              }`}
+            >
+              {isSubscribed ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
+            </button>
+          )}
           <button
             onClick={toggleTheme}
             className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors"
@@ -124,6 +148,20 @@ export function Layout() {
         </nav>
 
         <div className="p-4 border-t border-sidebar-border space-y-4">
+          {isSupported && (
+            <button
+              onClick={handleTogglePush}
+              disabled={pushLoading}
+              className="flex items-center justify-between w-full px-3 py-2 text-sm text-muted-text hover:text-title-text hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                {isSubscribed ? <Bell className="w-4 h-4 text-emerald-400" /> : <BellOff className="w-4 h-4 text-muted-text" />}
+                <span>{isSubscribed ? "Push Enabled" : "Enable Push"}</span>
+              </div>
+              {pushLoading && <span className="text-xs text-brand-400 animate-pulse">...</span>}
+            </button>
+          )}
+
           <button
             onClick={toggleTheme}
             className="flex items-center justify-between w-full px-3 py-2 text-sm text-muted-text hover:text-title-text hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"

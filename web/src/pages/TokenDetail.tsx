@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -13,7 +13,7 @@ import {
   TrendingUp,
   TrendingDown,
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, getAccessToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { classNames, formatNumber } from "../lib/utils";
 import { ChainDexBadge } from "../components/ChainDexBadge";
@@ -64,9 +64,92 @@ interface SwapTx {
   nativeAmount: number;
   priceUsd: number;
   traderAddress: string;
+  fullAddress?: string;
+}
+
+interface TraderItem {
+  rank: number;
+  address: string;
+  fullAddress?: string;
+  tag: string;
+  pnlUsd: number;
+  pnlPercent: number;
+  winRate: number;
+  volumeUsd: number;
+  buys: number;
+  sells: number;
+}
+
+interface KolItem {
+  rank: number;
+  handle: string;
+  fullAddress?: string;
+  name: string;
+  badge: string;
+  winRate: number;
+  totalPnlUsd: number;
+  holdingsPercent: number;
+  status: string;
+}
+
+interface HolderItem {
+  rank: number;
+  address: string;
+  fullAddress?: string;
+  label: string;
+  category: string;
+  amount: number;
+  percentage: number;
+  valueUsd: number;
 }
 
 const TIMEFRAMES = ["1s", "1m", "5m", "15m", "1h", "4h", "D"] as const;
+
+function getExplorerTxUrl(chain: TokenDetailData["chain"], txHash: string, paramChainId?: string) {
+  if (!txHash) return "#";
+  const chainId = (chain?.chainId ?? paramChainId ?? "").toLowerCase();
+  if (chainId.includes("stacks")) {
+    const isTestnet = chainId.includes("testnet");
+    return `https://explorer.hiro.so/txid/${txHash}${isTestnet ? "?chain=testnet" : "?chain=mainnet"}`;
+  }
+  if (chainId.includes("solana")) {
+    const isDevnet = chainId.includes("devnet");
+    return `https://solscan.io/tx/${txHash}${isDevnet ? "?cluster=devnet" : ""}`;
+  }
+  if (chainId.includes("base")) {
+    return `https://basescan.org/tx/${txHash}`;
+  }
+  if (chainId.includes("celo")) {
+    return `https://celoscan.io/tx/${txHash}`;
+  }
+  if (chainId.includes("ethereum") || chainId.includes("eth")) {
+    return `https://etherscan.io/tx/${txHash}`;
+  }
+  return `https://blockscan.com/tx/${txHash}`;
+}
+
+function getExplorerAddressUrl(chain: TokenDetailData["chain"], address: string, paramChainId?: string) {
+  if (!address) return "#";
+  const chainId = (chain?.chainId ?? paramChainId ?? "").toLowerCase();
+  if (chainId.includes("stacks")) {
+    const isTestnet = chainId.includes("testnet");
+    return `https://explorer.hiro.so/address/${address}${isTestnet ? "?chain=testnet" : "?chain=mainnet"}`;
+  }
+  if (chainId.includes("solana")) {
+    const isDevnet = chainId.includes("devnet");
+    return `https://solscan.io/account/${address}${isDevnet ? "?cluster=devnet" : ""}`;
+  }
+  if (chainId.includes("base")) {
+    return `https://basescan.org/address/${address}`;
+  }
+  if (chainId.includes("celo")) {
+    return `https://celoscan.io/address/${address}`;
+  }
+  if (chainId.includes("ethereum") || chainId.includes("eth")) {
+    return `https://etherscan.io/address/${address}`;
+  }
+  return `https://blockscan.com/address/${address}`;
+}
 
 export function TokenDetail() {
   const { chainId = "", contractId = "" } = useParams();
@@ -77,6 +160,7 @@ export function TokenDetail() {
   const [activeTab, setActiveTab] = useState<"transactions" | "traders" | "kols" | "holders">("transactions");
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isWatchlisted, setIsWatchlisted] = useState(false);
+  const [liveSwaps, setLiveSwaps] = useState<SwapTx[]>([]);
 
   const { data: token, isLoading, error } = useQuery<TokenDetailData>({
     queryKey: ["token-detail", chainId, contractId],
@@ -84,6 +168,43 @@ export function TokenDetail() {
       apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}`),
     refetchInterval: 10_000,
   });
+
+  useEffect(() => {
+    if (!token?.symbol) return;
+    const tokenStr = getAccessToken();
+    if (!tokenStr) return;
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(tokenStr)}`;
+    let ws: WebSocket | null = null;
+
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "swap_update" && msg.payload?.symbol === token.symbol) {
+            const s = msg.payload.swap;
+            const newSwap: SwapTx = {
+              txHash: s.txKey || `0x${Math.random().toString(16).slice(2, 10)}`,
+              timestamp: "Just now",
+              type: s.isBuy ? "BUY" : "SELL",
+              amountUsd: s.volumeUsd || 0,
+              tokenAmount: s.volumeUsd && s.priceUsd ? Math.round(s.volumeUsd / s.priceUsd) : 0,
+              nativeAmount: s.volumeUsd ? s.volumeUsd / 2.0 : 0,
+              priceUsd: s.priceUsd || 0,
+              traderAddress: s.trader ? `${s.trader.slice(0, 4)}...${s.trader.slice(-2)}` : "LiveWS",
+            };
+            setLiveSwaps((prev) => [newSwap, ...prev.slice(0, 20)]);
+          }
+        } catch { }
+      };
+    } catch { }
+
+    return () => {
+      if (ws) ws.close();
+    };
+  }, [token?.symbol]);
 
   const { data: candleData } = useQuery<{ candles: CandleData[] }>({
     queryKey: ["token-candles", chainId, contractId, selectedTimeframe],
@@ -100,7 +221,31 @@ export function TokenDetail() {
     queryFn: () =>
       apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/swaps`),
     enabled: !!token,
-    refetchInterval: 5_000,
+    refetchInterval: 10_000,
+  });
+
+  const { data: tradersData } = useQuery<{ traders: TraderItem[] }>({
+    queryKey: ["token-traders", chainId, contractId],
+    queryFn: () =>
+      apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/traders`),
+    enabled: !!token && activeTab === "traders",
+    refetchInterval: 15_000,
+  });
+
+  const { data: kolsData } = useQuery<{ kols: KolItem[] }>({
+    queryKey: ["token-kols", chainId, contractId],
+    queryFn: () =>
+      apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/kols`),
+    enabled: !!token && activeTab === "kols",
+    refetchInterval: 15_000,
+  });
+
+  const { data: holdersData } = useQuery<{ holders: HolderItem[] }>({
+    queryKey: ["token-holders", chainId, contractId],
+    queryFn: () =>
+      apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/holders`),
+    enabled: !!token && activeTab === "holders",
+    refetchInterval: 15_000,
   });
 
   const copyToClipboard = (text: string, label: string) => {
@@ -116,7 +261,10 @@ export function TokenDetail() {
     return generateSyntheticCandles(token?.priceUsd ?? 0.0003179);
   }, [candleData, token]);
 
-  const swaps = useMemo(() => swapData?.swaps ?? generateMockSwaps(token), [swapData, token]);
+  const swaps = useMemo(() => {
+    const fetched = swapData?.swaps ?? generateMockSwaps(token);
+    return [...liveSwaps, ...fetched];
+  }, [swapData, liveSwaps, token]);
 
   if (isLoading) {
     return (
@@ -143,7 +291,6 @@ export function TokenDetail() {
   const nativeSymbol = token.chain?.nativeSymbol ?? "SOL";
   const dexName = token.dexId ?? "DexScreener";
   const totalTxns = (token.txns24h?.buys ?? 0) + (token.txns24h?.sells ?? 0);
-  const totalTraders = (token.traders24h?.buyers ?? 0) + (token.traders24h?.sellers ?? 0);
 
   return (
     <div className="space-y-4">
@@ -180,6 +327,16 @@ export function TokenDetail() {
               {token.contractId.slice(0, 6)}...{token.contractId.slice(-4)}
             </span>
           </button>
+          <a
+            href={getExplorerAddressUrl(token.chain, token.contractId, chainId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-input-bg border border-card-border hover:bg-bg-hover text-brand-400 font-semibold transition-colors cursor-pointer"
+            title="View on Explorer"
+          >
+            <span>Explorer</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
         </div>
       </div>
 
@@ -223,13 +380,12 @@ export function TokenDetail() {
               </div>
             </div>
 
-            {/* TradingView Lightweight Charts Canvas */}
             <div className="h-[400px] w-full relative">
               <TradingViewChart candles={candles} timeframe={selectedTimeframe} />
             </div>
           </div>
 
-          {/* Bottom Tabs Section: Transactions */}
+          {/* Bottom Tabs Section */}
           <div className="glass-card p-4 flex flex-col space-y-3">
             <div className="flex items-center border-b border-card-border space-x-4 text-xs font-semibold">
               <button
@@ -278,76 +434,234 @@ export function TokenDetail() {
               </button>
             </div>
 
-            {/* Live Swap Transactions Table */}
-            <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
-              <table className="w-full text-left border-collapse text-xs font-mono">
-                <thead>
-                  <tr className="text-[10px] text-muted-text uppercase border-b border-card-border">
-                    <th className="py-2 px-3">Date</th>
-                    <th className="py-2 px-3">Type</th>
-                    <th className="py-2 px-3 text-right">USD</th>
-                    <th className="py-2 px-3 text-right">{token.symbol}</th>
-                    <th className="py-2 px-3 text-right">{nativeSymbol}</th>
-                    <th className="py-2 px-3 text-right">Price</th>
-                    <th className="py-2 px-3 text-right">Trader</th>
-                    <th className="py-2 px-3 text-center">Txn</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-card-border/50">
-                  {swaps.map((swap, idx) => (
-                    <tr key={idx} className="hover:bg-bg-hover transition-colors">
-                      <td className="py-2 px-3 text-muted-text">{swap.timestamp}</td>
-                      <td className="py-2 px-3">
-                        <span
-                          className={classNames(
-                            "inline-flex items-center font-bold px-1.5 py-0.5 rounded text-[10px]",
-                            swap.type === "BUY"
-                              ? "bg-emerald-500/15 text-emerald-400"
-                              : "bg-red-500/15 text-red-400"
-                          )}
-                        >
-                          {swap.type === "BUY" ? (
-                            <TrendingUp className="w-3 h-3 mr-1" />
-                          ) : (
-                            <TrendingDown className="w-3 h-3 mr-1" />
-                          )}
-                          {swap.type}
-                        </span>
-                      </td>
-                      <td className="py-2 px-3 text-right font-semibold text-title-text">
-                        ${swap.amountUsd.toFixed(2)}
-                      </td>
-                      <td className="py-2 px-3 text-right text-muted-text">
-                        {swap.tokenAmount.toLocaleString()}
-                      </td>
-                      <td className="py-2 px-3 text-right text-muted-text">
-                        {swap.nativeAmount.toFixed(4)}
-                      </td>
-                      <td
-                        className={classNames(
-                          "py-2 px-3 text-right font-bold",
-                          swap.type === "BUY" ? "text-emerald-400" : "text-red-400"
-                        )}
-                      >
-                        ${formatNumber(swap.priceUsd)}
-                      </td>
-                      <td className="py-2 px-3 text-right text-brand-400 hover:underline cursor-pointer">
-                        {swap.traderAddress}
-                      </td>
-                      <td className="py-2 px-3 text-center">
-                        <a
-                          href={`${token.chain?.explorerUrl ?? "https://explorer.stacks.co"}/txid/${swap.txHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-muted-text hover:text-title-text"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5 inline" />
-                        </a>
-                      </td>
+            <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
+              {activeTab === "transactions" && (
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="text-[10px] text-muted-text uppercase border-b border-card-border">
+                      <th className="py-2 px-3">Date</th>
+                      <th className="py-2 px-3">Type</th>
+                      <th className="py-2 px-3 text-right">USD</th>
+                      <th className="py-2 px-3 text-right">{token.symbol}</th>
+                      <th className="py-2 px-3 text-right">{nativeSymbol}</th>
+                      <th className="py-2 px-3 text-right">Price</th>
+                      <th className="py-2 px-3 text-right">Trader</th>
+                      <th className="py-2 px-3 text-center">Txn</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-card-border/50">
+                    {swaps.map((swap, idx) => (
+                      <tr key={idx} className="hover:bg-bg-hover transition-colors">
+                        <td className="py-2 px-3 text-muted-text">{swap.timestamp}</td>
+                        <td className="py-2 px-3">
+                          <span
+                            className={classNames(
+                              "inline-flex items-center font-bold px-1.5 py-0.5 rounded text-[10px]",
+                              swap.type === "BUY"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : "bg-red-500/15 text-red-400"
+                            )}
+                          >
+                            {swap.type === "BUY" ? (
+                              <TrendingUp className="w-3 h-3 mr-1" />
+                            ) : (
+                              <TrendingDown className="w-3 h-3 mr-1" />
+                            )}
+                            {swap.type}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right font-semibold text-title-text">
+                          ${swap.amountUsd.toFixed(2)}
+                        </td>
+                        <td className="py-2 px-3 text-right text-muted-text">
+                          {swap.tokenAmount.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right text-muted-text">
+                          {swap.nativeAmount.toFixed(4)}
+                        </td>
+                        <td
+                          className={classNames(
+                            "py-2 px-3 text-right font-bold",
+                            swap.type === "BUY" ? "text-emerald-400" : "text-red-400"
+                          )}
+                        >
+                          ${formatNumber(swap.priceUsd)}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <a
+                            href={getExplorerAddressUrl(token.chain, swap.fullAddress || swap.traderAddress, chainId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-brand-400 hover:underline cursor-pointer"
+                          >
+                            {swap.traderAddress}
+                          </a>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <a
+                            href={getExplorerTxUrl(token.chain, swap.txHash, chainId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-muted-text hover:text-title-text"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 inline" />
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {activeTab === "traders" && (
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="text-[10px] text-muted-text uppercase border-b border-card-border">
+                      <th className="py-2 px-3">#</th>
+                      <th className="py-2 px-3">Trader Address</th>
+                      <th className="py-2 px-3">Category</th>
+                      <th className="py-2 px-3 text-right">24h PnL</th>
+                      <th className="py-2 px-3 text-right">Win Rate</th>
+                      <th className="py-2 px-3 text-right">Volume</th>
+                      <th className="py-2 px-3 text-right">Buys / Sells</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-card-border/50">
+                    {(tradersData?.traders ?? []).map((trader) => (
+                      <tr key={trader.rank} className="hover:bg-bg-hover transition-colors">
+                        <td className="py-2 px-3 text-muted-text font-bold">#{trader.rank}</td>
+                        <td className="py-2 px-3 font-semibold">
+                          <a
+                            href={getExplorerAddressUrl(token.chain, trader.fullAddress || trader.address, chainId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-brand-400 hover:underline"
+                          >
+                            {trader.address}
+                          </a>
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="bg-brand-500/10 border border-brand-500/20 text-brand-400 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                            {trader.tag}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right font-bold text-emerald-400">
+                          +${formatNumber(trader.pnlUsd)} ({trader.pnlPercent}%)
+                        </td>
+                        <td className="py-2 px-3 text-right font-semibold text-title-text">
+                          {trader.winRate}%
+                        </td>
+                        <td className="py-2 px-3 text-right text-muted-text">
+                          ${formatNumber(trader.volumeUsd)}
+                        </td>
+                        <td className="py-2 px-3 text-right text-muted-text">
+                          <span className="text-emerald-400">{trader.buys}B</span> / <span className="text-red-400">{trader.sells}S</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {activeTab === "kols" && (
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="text-[10px] text-muted-text uppercase border-b border-card-border">
+                      <th className="py-2 px-3">#</th>
+                      <th className="py-2 px-3">KOL Wallet</th>
+                      <th className="py-2 px-3">Badge</th>
+                      <th className="py-2 px-3 text-right">Win Rate</th>
+                      <th className="py-2 px-3 text-right">Est. PnL</th>
+                      <th className="py-2 px-3 text-right">Holdings %</th>
+                      <th className="py-2 px-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-card-border/50">
+                    {(kolsData?.kols ?? []).map((kol) => (
+                      <tr key={kol.rank} className="hover:bg-bg-hover transition-colors">
+                        <td className="py-2 px-3 text-muted-text font-bold">#{kol.rank}</td>
+                        <td className="py-2 px-3">
+                          <a
+                            href={getExplorerAddressUrl(token.chain, kol.fullAddress || kol.handle, chainId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-bold text-brand-400 hover:underline"
+                          >
+                            {kol.handle}
+                          </a>
+                          <div className="text-[10px] text-muted-text">{kol.name}</div>
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="bg-purple-500/15 text-purple-400 border border-purple-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                            {kol.badge}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right font-bold text-emerald-400">
+                          {kol.winRate}%
+                        </td>
+                        <td className="py-2 px-3 text-right font-bold text-title-text">
+                          +${formatNumber(kol.totalPnlUsd)}
+                        </td>
+                        <td className="py-2 px-3 text-right font-semibold text-brand-400">
+                          {kol.holdingsPercent}%
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 rounded-full text-[10px] font-bold">
+                            {kol.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {activeTab === "holders" && (
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="text-[10px] text-muted-text uppercase border-b border-card-border">
+                      <th className="py-2 px-3">#</th>
+                      <th className="py-2 px-3">Holder Address</th>
+                      <th className="py-2 px-3">Tag</th>
+                      <th className="py-2 px-3 text-right">Amount ({token.symbol})</th>
+                      <th className="py-2 px-3 text-right">Supply %</th>
+                      <th className="py-2 px-3 text-right">Value USD</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-card-border/50">
+                    {(holdersData?.holders ?? []).map((h) => (
+                      <tr key={h.rank} className="hover:bg-bg-hover transition-colors">
+                        <td className="py-2 px-3 text-muted-text font-bold">#{h.rank}</td>
+                        <td className="py-2 px-3 font-semibold">
+                          <a
+                            href={getExplorerAddressUrl(token.chain, h.fullAddress || h.address, chainId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-brand-400 hover:underline"
+                          >
+                            {h.address}
+                          </a>
+                          <span className="block text-[10px] text-muted-text">{h.label}</span>
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="bg-amber-500/15 border border-amber-500/30 text-amber-400 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                            {h.category}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right font-bold text-title-text">
+                          {h.amount.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right font-bold text-emerald-400">
+                          {h.percentage}%
+                        </td>
+                        <td className="py-2 px-3 text-right text-muted-text">
+                          ${formatNumber(h.valueUsd)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>
@@ -426,7 +740,7 @@ export function TokenDetail() {
             </div>
           </div>
 
-          {/* Timeframe Performance Breakdown */}
+          {/* Performance Pill */}
           <div className="glass-card p-3.5">
             <div className="text-xs font-bold text-title-text mb-2 uppercase tracking-wide">
               Performance
@@ -438,83 +752,6 @@ export function TokenDetail() {
               <PerfPill label="24H" value={token.priceChange24h ?? 965.0} />
             </div>
           </div>
-
-          {/* Transaction Activity Metrics */}
-          <div className="glass-card p-3.5 space-y-2.5 text-xs font-mono">
-            <div className="flex justify-between border-b border-card-border pb-2">
-              <span className="text-muted-text">TXNS</span>
-              <span className="font-bold text-title-text">{totalTxns || "111,966"}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-input-bg p-2.5 rounded-lg">
-                <div className="text-[10px] text-emerald-400 font-bold">BUYS</div>
-                <div className="font-bold text-title-text mt-0.5">{token.txns24h?.buys ?? 61098}</div>
-              </div>
-              <div className="bg-input-bg p-2.5 rounded-lg">
-                <div className="text-[10px] text-red-400 font-bold">SELLS</div>
-                <div className="font-bold text-title-text mt-0.5">{token.txns24h?.sells ?? 50868}</div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-input-bg p-2.5 rounded-lg">
-                <div className="text-[10px] text-emerald-400 font-bold">BUY VOL</div>
-                <div className="font-bold text-title-text mt-0.5">${formatNumber(token.buyVolume24h ?? 5100000)}</div>
-              </div>
-              <div className="bg-input-bg p-2.5 rounded-lg">
-                <div className="text-[10px] text-red-400 font-bold">SELL VOL</div>
-                <div className="font-bold text-title-text mt-0.5">${formatNumber(token.sellVolume24h ?? 5000000)}</div>
-              </div>
-            </div>
-            <div className="flex justify-between border-t border-card-border pt-2">
-              <span className="text-muted-text">TRADERS</span>
-              <span className="font-bold text-title-text">{totalTraders || "11,724"}</span>
-            </div>
-          </div>
-
-          {/* Quick Trade Execution Buttons & Actions */}
-          <div className="space-y-2 pt-1">
-            <div className="flex space-x-2">
-              <button
-                onClick={() => setIsWatchlisted(!isWatchlisted)}
-                className={classNames(
-                  "flex-1 py-2 px-3 rounded-lg border font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer",
-                  isWatchlisted
-                    ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-                    : "bg-input-bg border-card-border text-title-text hover:bg-bg-hover"
-                )}
-              >
-                <Star className="w-3.5 h-3.5" />
-                <span>{isWatchlisted ? "Watchlisted" : "Watchlist"}</span>
-              </button>
-              <button className="flex-1 py-2 px-3 rounded-lg bg-input-bg border border-card-border text-title-text hover:bg-bg-hover font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer">
-                <Bell className="w-3.5 h-3.5" />
-                <span>Alerts</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() =>
-                  navigate(
-                    `/trade?chainId=${token.chainId}&tokenOut=${token.symbol}&direction=BUY`
-                  )
-                }
-                className="py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-extrabold text-sm transition-colors cursor-pointer shadow-lg shadow-emerald-500/20"
-              >
-                Buy
-              </button>
-              <button
-                onClick={() =>
-                  navigate(
-                    `/trade?chainId=${token.chainId}&tokenOut=${token.symbol}&direction=SELL`
-                  )
-                }
-                className="py-3 rounded-xl bg-red-500 hover:bg-red-400 text-white font-extrabold text-sm transition-colors cursor-pointer shadow-lg shadow-red-500/20"
-              >
-                Sell
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -522,99 +759,58 @@ export function TokenDetail() {
 }
 
 function PerfPill({ label, value }: { label: string; value: number }) {
-  const isPositive = value >= 0;
+  const isPos = value >= 0;
   return (
     <div className="bg-input-bg p-2 rounded-lg">
-      <div className="text-[9px] text-muted-text font-bold">{label}</div>
-      <div className={classNames("font-bold text-[11px] mt-0.5", isPositive ? "text-emerald-400" : "text-red-400")}>
-        {isPositive ? "+" : ""}
-        {value.toFixed(1)}%
+      <div className="text-[10px] text-muted-text">{label}</div>
+      <div className={classNames("font-bold mt-0.5", isPos ? "text-emerald-400" : "text-red-400")}>
+        {isPos ? "+" : ""}{value.toFixed(1)}%
       </div>
     </div>
   );
 }
 
-function generateSyntheticCandles(basePrice: number): CandleData[] {
-  const candles: CandleData[] = [];
-  const now = Date.now();
-  let currentPrice = basePrice > 0 ? basePrice : 0.0003179;
+function generateSyntheticCandles(currentPrice: number): CandleData[] {
+  const count = 50;
+  const now = Math.floor(Date.now() / 1000);
+  const result: CandleData[] = [];
+  let price = currentPrice * 0.85;
 
-  for (let i = 60; i >= 0; i--) {
-    const timestamp = now - i * 5 * 60 * 1000;
-    const variation = (Math.random() - 0.48) * 0.04;
-    const open = currentPrice;
-    const close = Math.max(0.000001, open * (1 + variation));
-    const high = Math.max(open, close) * (1 + Math.random() * 0.01);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.01);
-    const volume = Math.floor(Math.random() * 50000 + 5000);
-
-    candles.push({
-      timestamp,
-      open,
-      high,
-      low,
-      close,
-      volume,
-    });
-
-    currentPrice = close;
+  for (let i = count; i >= 0; i--) {
+    const timestamp = now - i * 300;
+    const change = (Math.random() - 0.48) * 0.04 * price;
+    const open = price;
+    const close = price + change;
+    const high = Math.max(open, close) + Math.random() * 0.01 * price;
+    const low = Math.min(open, close) - Math.random() * 0.01 * price;
+    const volume = Math.floor(Math.random() * 10000 + 1000);
+    price = close;
+    result.push({ timestamp, open, high, low, close, volume });
   }
-
-  return candles;
+  return result;
 }
 
 function generateMockSwaps(token: TokenDetailData | undefined): SwapTx[] {
-  const price = token?.priceUsd ?? 0.0003179;
   return [
     {
-      txHash: "0x8f3a9b1c2d",
+      txHash: "0x9a8f4c2e",
       timestamp: "Just now",
-      type: "SELL",
-      amountUsd: 61.66,
-      tokenAmount: 193954,
-      nativeAmount: 0.798,
-      priceUsd: price,
-      traderAddress: "7FEApn",
-    },
-    {
-      txHash: "0x1a2b3c4d5e",
-      timestamp: "1m ago",
       type: "BUY",
-      amountUsd: 120.75,
-      tokenAmount: 380120,
-      nativeAmount: 1.54,
-      priceUsd: price * 1.01,
-      traderAddress: "TJY2Pu",
+      amountUsd: 1250.00,
+      tokenAmount: 41250,
+      nativeAmount: 2.45,
+      priceUsd: token?.priceUsd ?? 0.0303,
+      traderAddress: "7FEApn...3b9a",
     },
     {
-      txHash: "0x9e8d7c6b5a",
+      txHash: "0x3e4f5a6b",
       timestamp: "2m ago",
-      type: "BUY",
-      amountUsd: 30.33,
-      tokenAmount: 94137,
-      nativeAmount: 0.3926,
-      priceUsd: price,
-      traderAddress: "TJY2Pu",
-    },
-    {
-      txHash: "0x5f4e3d2c1b",
-      timestamp: "3m ago",
       type: "SELL",
-      amountUsd: 26.56,
-      tokenAmount: 83480,
-      nativeAmount: 0.3438,
-      priceUsd: price * 0.99,
-      traderAddress: "LJzN51",
-    },
-    {
-      txHash: "0x2b3c4d5e6f",
-      timestamp: "5m ago",
-      type: "SELL",
-      amountUsd: 170.53,
-      tokenAmount: 532092,
-      nativeAmount: 2.2,
-      priceUsd: price * 0.985,
-      traderAddress: "fJvozz",
+      amountUsd: 450.50,
+      tokenAmount: 14860,
+      nativeAmount: 0.88,
+      priceUsd: token?.priceUsd ?? 0.0303,
+      traderAddress: "TJY2Pu...e81c",
     },
   ];
 }

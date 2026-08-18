@@ -341,16 +341,17 @@ export class UserController {
 
   static async generateWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { name, chainId, chainFamily } = req.body as {
+      const { name, chainId, chain, chainFamily } = req.body as {
         name?: string;
         chainId?: string;
+        chain?: string;
         chainFamily?: string;
       };
       const db = DatabaseService.getInstance();
 
-      // chainId is the real identifier; chainFamily is accepted for clients
+      // chainId (or alias chain) is the real identifier; chainFamily is accepted for clients
       // written before multi-EVM and resolves to that family's default network.
-      const targetChain = resolveChainId({ chainId, chainFamily });
+      const targetChain = resolveChainId({ chainId: chainId || chain, chainFamily });
       const adapters = ChainAdapterRegistry.getInstance();
       if (!adapters.has(targetChain)) {
         return next(
@@ -398,15 +399,16 @@ export class UserController {
 
   static async importWallet(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
-      const { privateKey, name, chainId, chainFamily } = req.body as {
+      const { privateKey, name, chainId, chain, chainFamily } = req.body as {
         privateKey: string;
         name?: string;
         chainId?: string;
+        chain?: string;
         chainFamily?: string;
       };
       const db = DatabaseService.getInstance();
 
-      const targetChain = resolveChainId({ chainId, chainFamily });
+      const targetChain = resolveChainId({ chainId: chainId || chain, chainFamily });
       const adapters = ChainAdapterRegistry.getInstance();
       if (!adapters.has(targetChain)) {
         return next(

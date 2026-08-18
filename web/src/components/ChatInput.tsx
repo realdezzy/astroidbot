@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Send, Loader2, Sparkles, Mic } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
+import { classNames } from "../lib/utils";
 import { useChains } from "../hooks/useChains";
 import { WEB_INFO_LINK_MAP } from "@shared/navigation";
 
@@ -31,21 +32,89 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
   const [showVoiceTooltip, setShowVoiceTooltip] = useState(false);
   const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   useEffect(() => {
     return () => {
       if (tooltipTimeoutRef.current) clearTimeout(tooltipTimeoutRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
     };
   }, []);
 
-  const handleVoiceClick = (e: React.MouseEvent) => {
+  const handleVoiceClick = async (e: React.MouseEvent) => {
     e.preventDefault();
-    setShowVoiceTooltip(true);
-    if (tooltipTimeoutRef.current) {
-      clearTimeout(tooltipTimeoutRef.current);
+    if (isRecording) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      setIsRecording(false);
+      return;
     }
-    tooltipTimeoutRef.current = setTimeout(() => {
-      setShowVoiceTooltip(false);
-    }, 2000);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        if (audioBlob.size === 0) return;
+
+        setLoading(true);
+        setResponse("🎙️ Transcribing voice command...");
+        try {
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          const authHeaders = (apiFetch as unknown as { getAuthHeaders?: () => Record<string, string> }).getAuthHeaders?.() ?? {};
+          const res = await fetch("/api/ai/voice", {
+            method: "POST",
+            headers: {
+              "Content-Type": "audio/webm",
+              ...authHeaders,
+            },
+            body: arrayBuffer,
+          });
+
+          if (!res.ok) {
+            throw new Error("Voice transcription failed");
+          }
+
+          const data = await res.json();
+          if (data.text) {
+            setInput(data.text);
+            if (data.parsed) {
+              await processParsedAction(data.parsed);
+            } else {
+              setResponse(`🎙️ Heard: "${data.text}"`);
+            }
+          } else {
+            setResponse("🎙️ Could not hear or understand audio.");
+          }
+        } catch {
+          setResponse("❌ Voice processing failed.");
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch {
+      setShowVoiceTooltip(true);
+      if (tooltipTimeoutRef.current) clearTimeout(tooltipTimeoutRef.current);
+      tooltipTimeoutRef.current = setTimeout(() => setShowVoiceTooltip(false), 2500);
+    }
   };
 
   // The example pair comes from the user's default wallet's chain, so the
@@ -60,6 +129,59 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
     ? `Ask about ${contextHint}... e.g. "what are agents?"`
     : `Type a command... e.g. '${example}' or 'show portfolio'`;
 
+  const processParsedAction = async (result: Record<string, unknown>) => {
+    const action = result.action as string;
+
+    if (action === "trade") {
+      const wallets = await apiFetch<
+        { id: number; chain?: string | null; isDefault?: boolean }[]
+      >("/me/wallets");
+      const wallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
+      const walletChain = chains.find((c) => c.chainId === wallet?.chain);
+      const tokenIn = result.tokenIn ?? walletChain?.nativeSymbol;
+      const tokenOut = result.tokenOut ?? walletChain?.stableSymbol;
+
+      if (!wallet || !tokenIn || !tokenOut) {
+        setResponse("⚠️ I need a wallet on a tradable chain before I can do that.");
+        return;
+      }
+
+      const tradeResp = await apiFetch<{ ok: boolean; txId: string }>("/me/trades/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          walletId: wallet.id,
+          tokenIn,
+          tokenOut,
+          amountIn: result.amountIn ?? 1,
+          direction: result.direction ?? "BUY",
+        }),
+      });
+      setResponse(`✅ Trade executed! TX: ${tradeResp.txId?.slice(0, 12)}...`);
+    } else if (action === "chat") {
+      const reply = (result.replyText as string) ?? "Hello! How can I help you today?";
+      setResponse(`💬 ${reply}`);
+      const link = result.suggestedLink as string | undefined;
+      if (link) {
+        setTimeout(() => navigate(link), 1200);
+      }
+    } else if (action === "create_strategy") {
+      setResponse("📋 Opening agents page to create a strategy...");
+      setTimeout(() => navigate("/agents"), 800);
+    } else if (action === "info") {
+      const topic = result.topic as string;
+      setResponse(`📊 Opening ${topic}...`);
+      const link = (result.suggestedLink as string) ?? WEB_INFO_LINK_MAP[topic];
+      if (link) setTimeout(() => navigate(link), 600);
+      onCommand?.(action, result);
+    } else if (action === "settings") {
+      setResponse(`✅ ${result.key as string} updated to ${result.value}`);
+    } else if (action === "halt" || action === "resume") {
+      setResponse(`✅ Bot ${action === "halt" ? "halted" : "resumed"}`);
+    } else {
+      setResponse(`🤔 I didn't understand that. Try: '${example}' or 'show portfolio'`);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
@@ -72,59 +194,7 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
         method: "POST",
         body: JSON.stringify({ input: input.trim() }),
       });
-
-      const action = result.action as string;
-
-      if (action === "trade") {
-        const wallets = await apiFetch<
-          { id: number; chain?: string | null; isDefault?: boolean }[]
-        >("/me/wallets");
-        // The default wallet, and its chain's pair as the fallback — not
-        // whichever wallet came back first and a Stacks pair.
-        const wallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
-        const walletChain = chains.find((c) => c.chainId === wallet?.chain);
-        const tokenIn = result.tokenIn ?? walletChain?.nativeSymbol;
-        const tokenOut = result.tokenOut ?? walletChain?.stableSymbol;
-
-        if (!wallet || !tokenIn || !tokenOut) {
-          setResponse("⚠️ I need a wallet on a tradable chain before I can do that.");
-          return;
-        }
-
-        const tradeResp = await apiFetch<{ ok: boolean; txId: string }>("/me/trades/execute", {
-          method: "POST",
-          body: JSON.stringify({
-            walletId: wallet.id,
-            tokenIn,
-            tokenOut,
-            amountIn: result.amountIn ?? 1,
-            direction: result.direction ?? "BUY",
-          }),
-        });
-        setResponse(`✅ Trade executed! TX: ${tradeResp.txId?.slice(0, 12)}...`);
-      } else if (action === "chat") {
-        const reply = (result.replyText as string) ?? "Hello! How can I help you today?";
-        setResponse(`💬 ${reply}`);
-        const link = result.suggestedLink as string | undefined;
-        if (link) {
-          setTimeout(() => navigate(link), 1200);
-        }
-      } else if (action === "create_strategy") {
-        setResponse("📋 Opening agents page to create a strategy...");
-        setTimeout(() => navigate("/agents"), 800);
-      } else if (action === "info") {
-        const topic = result.topic as string;
-        setResponse(`📊 Opening ${topic}...`);
-        const link = (result.suggestedLink as string) ?? WEB_INFO_LINK_MAP[topic];
-        if (link) setTimeout(() => navigate(link), 600);
-        onCommand?.(action, result);
-      } else if (action === "settings") {
-        setResponse(`✅ ${result.key as string} updated to ${result.value}`);
-      } else if (action === "halt" || action === "resume") {
-        setResponse(`✅ Bot ${action === "halt" ? "halted" : "resumed"}`);
-      } else {
-        setResponse(`🤔 I didn't understand that. Try: '${example}' or 'show portfolio'`);
-      }
+      await processParsedAction(result);
     } catch {
       setResponse("❌ Something went wrong. Try again.");
     } finally {
@@ -154,14 +224,19 @@ export function ChatInput({ onCommand, contextHint }: ChatInputProps) {
             <button
               type="button"
               onClick={handleVoiceClick}
-              className="p-1.5 rounded-lg hover:bg-bg-hover text-muted-text/30 transition-colors cursor-pointer"
-              title="Voice (coming soon)"
+              className={classNames(
+                "p-1.5 rounded-lg transition-all cursor-pointer",
+                isRecording
+                  ? "bg-red-500/20 text-red-400 animate-pulse border border-red-500/40"
+                  : "hover:bg-bg-hover text-muted-text hover:text-title-text"
+              )}
+              title={isRecording ? "Click to stop recording" : "Voice Command (click to speak)"}
             >
-              <Mic className="w-4 h-4" />
+              <Mic className={classNames("w-4 h-4", isRecording && "text-red-400 animate-spin")} />
             </button>
             {showVoiceTooltip && (
               <div className="absolute bottom-full mb-2 bg-brand-500 text-white text-[11px] font-medium px-2 py-1 rounded shadow-md whitespace-nowrap z-50 animate-fadeIn">
-                Coming soon
+                Microphone access denied or unavailable
                 <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-brand-500" />
               </div>
             )}

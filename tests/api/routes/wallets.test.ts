@@ -120,7 +120,7 @@ describe("Wallets Routes Integration Tests", () => {
   });
 
   afterAll(() => {
-    server.close();
+    server?.close?.();
   });
 
   beforeEach(() => {

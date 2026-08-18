@@ -140,38 +140,8 @@ export function Perp() {
 
   return (
     <div className="space-y-8 relative min-h-[600px]">
-      {/* Coming Soon Glassmorphism Overlay */}
-      <div className="absolute inset-0 z-40 backdrop-blur-[4px] bg-bg/40 flex items-center justify-center p-4 rounded-3xl">
-        <div className="bg-card-bg/90 border border-brand-500/30 backdrop-blur-md rounded-3xl p-8 max-w-md shadow-2xl text-center space-y-6 transform translate-y-0 scale-100 transition-all duration-300">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center animate-pulse">
-            <Zap className="w-8 h-8 text-brand-400" />
-          </div>
-          <div className="space-y-2">
-            <span className="inline-block px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase bg-brand-500/10 border border-brand-500/25 text-brand-400">
-              Coming Soon
-            </span>
-            <h3 className="text-2xl font-black text-title-text tracking-tight">
-              Perpetual Leverage
-            </h3>
-            <p className="text-muted-text text-sm leading-relaxed">
-              We are working hard to bring decentralized perpetual trading with up to 20x leverage to Stacks. Stay tuned for our launch!
-            </p>
-          </div>
-          <div className="pt-2 border-t border-divider-color/50 flex justify-center gap-4 text-xs text-muted-text">
-            <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              <span>Up to 20x Leverage</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              <span>Self-Custodial</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main page content (blurred slightly via overlay) */}
-      <div className="pointer-events-none select-none space-y-8">
+      {/* Main page content */}
+      <div className="space-y-8">
         <div>
           <h2 className="text-2xl font-bold text-title-text flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-brand-500" /> Perpetual Leverage Trading

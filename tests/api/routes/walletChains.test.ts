@@ -128,7 +128,7 @@ describe("Wallet provisioning across chain families", () => {
   });
 
   afterAll(() => {
-    server.close();
+    server?.close?.();
   });
 
   beforeEach(() => {

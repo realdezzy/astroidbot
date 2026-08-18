@@ -34,7 +34,7 @@ const envSchema = z.object({
   SMTP_USER: z.string().default(""),
   SMTP_PASS: z.string().default(""),
   SMTP_FROM: z.string().default(""),
-  PORT: z.coerce.number().int().positive().default(8006),
+  PORT: z.coerce.number().int().min(0).default(8006),
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRY: z.string().default("15m"),
   REFRESH_TOKEN_EXPIRY_DAYS: z.coerce.number().int().positive().default(30),
@@ -91,6 +91,9 @@ const envSchema = z.object({
   NEYNAR_SIGNER_UUID: z.string().optional(),
   VELAR_PERP_CONTRACT_ADDRESS: z.string().default("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE"),
   VELAR_PERP_CONTRACT_NAME: z.string().default("velar-artha-perp"),
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().default("mailto:admin@astroidbot.io"),
 });
 
 type EnvConfig = z.infer<typeof envSchema>;

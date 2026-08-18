@@ -83,6 +83,49 @@ export async function executeApprovedActions(
   return { executed, attempted };
 }
 
+// Executes approved actions concurrently across multiple wallets for a single strategy
+export async function executeApprovedActionsGrouped(
+  walletActions: Array<{
+    actions: RebalanceAction[];
+    walletId: number;
+    userId: number;
+    senderAddress: string;
+    slippageBps: number;
+    chainId?: string;
+  }>
+): Promise<{ totalExecuted: number; totalAttempted: number; results: Array<{ walletId: number; executed: number; attempted: number }> }> {
+  const results = await Promise.allSettled(
+    walletActions.map((item) =>
+      executeApprovedActions(
+        item.actions,
+        item.walletId,
+        item.userId,
+        item.senderAddress,
+        item.slippageBps,
+        item.chainId ?? DEFAULT_CHAIN_ID
+      )
+    )
+  );
+
+  let totalExecuted = 0;
+  let totalAttempted = 0;
+  const walletResults: Array<{ walletId: number; executed: number; attempted: number }> = [];
+
+  results.forEach((res, i) => {
+    const walletId = walletActions[i]?.walletId ?? 0;
+    if (res.status === "fulfilled") {
+      totalExecuted += res.value.executed;
+      totalAttempted += res.value.attempted;
+      walletResults.push({ walletId, executed: res.value.executed, attempted: res.value.attempted });
+    } else {
+      logger.error("Grouped execution failed for wallet", { walletId, error: res.reason });
+      walletResults.push({ walletId, executed: 0, attempted: 0 });
+    }
+  });
+
+  return { totalExecuted, totalAttempted, results: walletResults };
+}
+
 export class StrategyEngine {
   private static instance: StrategyEngine;
 
