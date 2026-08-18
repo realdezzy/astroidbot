@@ -21,15 +21,8 @@ npx prisma generate
 # must be baselined once, or deploy will fail trying to re-create objects:
 #   npx prisma migrate resolve --applied 20250620000000_init
 #   npx prisma migrate resolve --applied 20260726120000_multichain_wallets_and_catchup
-echo "==> Applying database migrations..."
-if ! npx prisma migrate deploy; then
-  echo "==> Existing un-baselined database schema detected. Baselining migration history..."
-  for m in 20250620000000_init 20260726120000_multichain_wallets_and_catchup 20260726220000_wallet_chain_index 20260727000000_token_catalogue_and_candle_chain 20260727010000_social_trading 20260802000000_market_data_indexer 20260804120000_split_indexed_token 20260804140000_indexer_backfill 20260804150000_gas_sponsorship 20260804160000_social_verification 20260804170000_pool_last_signature 20260804180000_indexed_swaps 20260808120000_backfill_transaction_chains 20260809120000_split_chain_preferences 20260809130000_trade_chain; do
-    npx prisma migrate resolve --applied "$m" 2>/dev/null || true
-  done
-  echo "==> Re-running migration deploy..."
-  npx prisma migrate deploy
-fi
+echo "==> Ensuring database schema is up to date..."
+npx prisma db push --accept-data-loss
 
 echo "==> Starting AstroidBot..."
 exec npx tsx src/index.ts
