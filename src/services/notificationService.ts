@@ -1,6 +1,7 @@
 import { QueueManager, QUEUES } from "./queue.js";
 import { DatabaseService } from "./db.js";
 import { TelegramService } from "./telegram.js";
+import { PushService } from "./pushService.js";
 import { WebSocketManager } from "../api/websocket.js";
 import { logger } from "../utils/logger.js";
 import type { Job } from "bullmq";
@@ -64,6 +65,13 @@ export class NotificationService {
       if (telegram.isEnabled()) {
         await telegram.sendAlert(data.userId, `[${data.type}] *${data.title}*\n${data.message}`);
       }
+
+      // Send VAPID Web Push
+      void PushService.getInstance().sendPushNotification(data.userId, {
+        title: data.title,
+        message: data.message,
+        type: data.type,
+      });
     } catch (err) {
       logger.error("Failed to process notification", { error: err, data });
     }
