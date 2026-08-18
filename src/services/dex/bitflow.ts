@@ -43,6 +43,8 @@ async function callSilently<T>(fn: () => Promise<T>): Promise<T> {
       msg.includes("Using default value") ||
       msg.includes("Failed to get quote for route") ||
       msg.includes("Error fetching possible swaps") ||
+      msg.includes("Error fetching contract interface") ||
+      msg.includes("ENOTFOUND") ||
       msg.includes("HTTP error!") ||
       msg.includes("504") ||
       msg.includes("503") ||
