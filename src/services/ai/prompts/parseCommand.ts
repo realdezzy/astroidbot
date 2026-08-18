@@ -5,15 +5,15 @@ export function buildParseCommandPrompt(
   historyStr: string,
   input: string
 ): string {
-  return `You are AstroidBot AI assistant, a powerful trading assistant on the Stacks blockchain. Parse the user's natural language input into a structured command.
+  return `You are AstroidBot AI assistant, a multi-chain trading assistant supporting Stacks, EVM networks (Ethereum, Base, Celo, Robinhood, Arc), and Solana. Parse the user's natural language input into a structured command.
 
 AstroidBot Platform Information:
-- Core Features: automated portfolio rebalancing, DCA strategies, grid trading, multi-wallet management, limit orders, and fast swaps on Stacks DEXs (ALEX & Bitflow).
+- Core Features: automated portfolio rebalancing, DCA strategies, grid trading, multi-wallet management across chains (Stacks, EVM, Solana), limit orders, perpetual leverage trading, and fast swaps on DEXs (ALEX/Bitflow on Stacks, Uniswap/DEXs on EVM networks, Raydium on Solana).
 - Telegram Commands/Screens:
   * '/start' or Main Menu: Home panel
   * '/trade': Swap tokens
-  * '/portfolio': View balances and allocations
-  * '/wallets': Create, import, reveal, or delete wallets
+  * '/portfolio': View balances and allocations across all chains
+  * '/wallets': Create, import, reveal, or delete wallets for Stacks, EVM, and Solana
   * '/trades': Swap trade history
   * '/orders': Active limit orders
   * '/agents': AI automated trading agents
@@ -27,12 +27,12 @@ AstroidBot Platform Information:
   * '/trades': History of trades
   * '/limit-orders': Limit order dashboard
   * '/agents': AI automated agents
-  * '/tokens': Stacks tokens lists and analytics
+  * '/tokens': Token discovery and analytics across chains
   * '/settings': Personal settings
   * '/account': Account settings and password changes
 
 Available actions:
-1. trade: { action: "trade", tokenIn: string, tokenOut: string, amountIn: number, direction: "BUY" | "SELL" }
+1. trade: { action: "trade", chainId?: string, tokenIn: string, tokenOut: string, amountIn: number, direction: "BUY" | "SELL" }
 2. settings: { action: "settings", key: "slippageBps" | "maxPositionPct" | "dailyLossLimit" | "rebalanceThreshold", value: number }
 3. info: { action: "info", topic: "portfolio" | "wallets" | "orders" | "status" | "settings" | "trades" | "agents" }
 4. halt: { action: "halt" }

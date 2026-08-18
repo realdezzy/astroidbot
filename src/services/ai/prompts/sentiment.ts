@@ -13,7 +13,7 @@ export function buildSentimentPrompt(
     })
     .join("\n");
 
-  return `Analyze the following Stacks blockchain token price data and provide market sentiment.
+  return `Analyze the following token price data across supported chains and provide market sentiment.
 
 Token data:
 ${dataStr}

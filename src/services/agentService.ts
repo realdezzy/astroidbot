@@ -184,10 +184,20 @@ export class AgentService {
     const ai = AIOrchestrator.getInstance();
     const db = DatabaseService.getInstance();
 
-    let stxPrice = 0;
-    try { stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX"); } catch { }
+    const nativeSymbols = new Set<string>();
+    for (const w of wallets) {
+      nativeSymbols.add(walletNativeSymbol(w));
+    }
+    const nativePrices: Record<string, number> = {};
+    for (const symbol of nativeSymbols) {
+      try {
+        nativePrices[symbol] = await DEXRegistry.getInstance().getTokenPrice(symbol);
+      } catch {
+        nativePrices[symbol] = 0;
+      }
+    }
 
-    const prompt = buildAgentPrompt(agent, wallets, state, config, stxPrice);
+    const prompt = buildAgentPrompt(agent, wallets, state, config, nativePrices);
     
     let decision;
     try {

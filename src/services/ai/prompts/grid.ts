@@ -3,7 +3,7 @@ export function buildGridPrompt(
   volatility: number,
   midPrice: number
 ): string {
-  return `Configure a grid-based market making strategy for the ${tokenPair} pair on Stacks DEX.
+  return `Configure a grid-based market making strategy for the ${tokenPair} pair on DEX.
 
 Current mid-price: ${midPrice}
 Recent volatility: ${(volatility * 100).toFixed(2)}%

@@ -13,7 +13,7 @@ export function buildPortfolioPrompt(
     })
     .join("\n");
 
-  return `You are a portfolio manager for a Stacks blockchain trading bot.
+  return `You are a portfolio manager for an autonomous multi-chain trading bot.
 
 Current portfolio (total value: $${totalValue.toFixed(2)}):
 ${balanceStr}

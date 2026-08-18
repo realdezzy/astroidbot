@@ -1,30 +1,42 @@
 export function buildAgentPrompt(
   agent: { name: string; context: string },
-  wallets: Array<{ id: number; address: string; balance: number }>,
+  wallets: Array<{ id: number; address: string; balance: number; chain?: string; chainFamily?: string }>,
   state: Record<string, unknown>,
   config: Record<string, unknown>,
-  stxPrice: number
+  nativePrices: Record<string, number>
 ): string {
   const walletInfo = wallets
-    .map((w) => `#${w.id} ${w.address.slice(0, 10)}... balance: ${w.balance.toFixed(2)} STX`)
+    .map((w) => {
+      const chain = w.chain ?? "stacks:mainnet";
+      const symbol = chain.startsWith("base") || chain.startsWith("celo") || chain.startsWith("ethereum") || chain.startsWith("robinhood") ? "ETH" : chain.startsWith("solana") ? "SOL" : "STX";
+      return `#${w.id} ${w.address.slice(0, 10)}... [${chain}] balance: ${w.balance.toFixed(4)} ${symbol}`;
+    })
     .join("\n");
 
-  return `You are an autonomous trading agent named "${agent.name}" on the Stacks blockchain.
+  const priceEntries = Object.entries(nativePrices);
+  const benchmarks = priceEntries.length > 0
+    ? priceEntries.map(([symbol, price]) => `${symbol}: $${price > 0 ? price.toFixed(4) : "unknown"}`).join(", ")
+    : "unknown";
+
+  return `You are an autonomous multi-chain trading agent named "${agent.name}".
 
 Context: ${agent.context}
 Config: ${JSON.stringify(config)}
 Current state: ${JSON.stringify(state)}
-STX Price: $${stxPrice > 0 ? stxPrice.toFixed(4) : "unknown"}
+Native Token Price Benchmarks: ${benchmarks}
 
 Wallets:
 ${walletInfo}
 
-Available tokens on ALEX: STX, USDCx, USDA, ALEX, WELSH, DIKO, and others.
+Supported Networks & DEXs:
+- Stacks (ALEX & Bitflow): STX, USDCx, USDA, ALEX, WELSH, DIKO
+- EVM Networks — Ethereum, Base, Celo, Robinhood (Uniswap/DEXs): ETH, USDC, WETH, VIRTUAL, CELO
+- Solana (Raydium): SOL, USDC, BONK
 
 Rules:
 - Never trade more than ${config.maxPositionPct ?? 25}% of a wallet's balance in one trade
-- If STX price is unknown or you're unsure, prefer "hold"
-- Diversify across available tokens
+- If token prices are unknown or market signals are ambiguous, prefer "hold"
+- Diversify across available tokens on the wallet's network
 - Respond ONLY with valid JSON, nothing else:
 
 {

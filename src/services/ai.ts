@@ -9,6 +9,7 @@ import { RedisService } from "./redis.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { PortfolioManager } from "./portfolio.js";
 import { RiskManager } from "./riskManager.js";
+import { walletChainId, walletNativeSymbol } from "./chains/walletChain.js";
 import type {
   PortfolioTarget,
   GridSpreadConfig,
@@ -128,7 +129,8 @@ export class AIOrchestrator {
             messages: [
               {
                 role: "system",
-                content: "You are a Stacks blockchain trading bot. Respond only in valid JSON.",
+                content:
+                  "You are AstroidBot, a multi-chain AI trading assistant supporting Stacks, EVM networks (Ethereum, Base, Celo, Robinhood), and Solana. Respond only in valid JSON.",
               },
               { role: "user", content: req.prompt },
             ],
@@ -149,7 +151,8 @@ export class AIOrchestrator {
             messages: [
               {
                 role: "system",
-                content: "You are a Stacks blockchain trading bot. Respond only in valid JSON.",
+                content:
+                  "You are AstroidBot, a multi-chain AI trading assistant supporting Stacks, EVM networks (Ethereum, Base, Celo, Robinhood), and Solana. Respond only in valid JSON.",
               },
               { role: "user", content: req.prompt },
             ],
@@ -243,13 +246,14 @@ export class AIOrchestrator {
         const db = DatabaseService.getInstance();
         const wallets = await db.findWalletsByUserId(userId);
         if (wallets.length > 0) {
-          const tokens = await DEXRegistry.getInstance().getSwappableTokens();
-
           let grandTotal = 0;
           let totalPnl = 0;
           const walletDetails: string[] = [];
 
           for (const wallet of wallets) {
+            const chainId = walletChainId(wallet);
+            const nativeSymbol = walletNativeSymbol(wallet);
+            const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, chainId);
             const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
             const total = balances.reduce((s, b) => s + b.usdValue, 0);
             grandTotal += total;
@@ -258,7 +262,7 @@ export class AIOrchestrator {
               .map(b => `${b.symbol}: ${b.balance.toFixed(4)} ($${b.usdValue.toFixed(2)})`)
               .join(", ");
             walletDetails.push(
-              `- Wallet "${wallet.name}" (${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}): Total $${total.toFixed(2)}. Holdings: [${tokenDetails || "No tokens"}]`
+              `- Wallet "${wallet.name}" (${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}) [Chain: ${chainId}, Family: ${wallet.chainFamily || "stacks"}, Native: ${nativeSymbol}]: Total $${total.toFixed(2)}. Holdings: [${tokenDetails || "No tokens"}]`
             );
           }
 

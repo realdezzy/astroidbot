@@ -46,6 +46,7 @@ export const AgentDecisionSchema = z.discriminatedUnion("action", [
     reason: z.string(),
     trade: z.object({
       walletId: z.number().optional(),
+      chainId: z.string().optional(),
       tokenIn: z.string(),
       tokenOut: z.string(),
       amountIn: z.number().positive(),
