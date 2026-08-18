@@ -7,20 +7,27 @@ import {
   Shield,
   Zap,
   Lock,
-  Check,
   Wallet,
   Activity,
-  RefreshCw,
   Mail,
   ChevronRight,
   Sparkles,
   Sun,
   Moon,
+  Mic,
+  BarChart3,
+  Flame,
+  Layers,
+  Cpu,
+  Globe,
+  ArrowUpRight,
+  Terminal,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 export function Landing() {
   const { user } = useAuth();
+  const [currency, setCurrency] = useState<"USD" | "STX" | "SOL" | "ETH">("USD");
   const [investment, setInvestment] = useState<number>(1000);
   const [strategy, setStrategy] = useState<"conservative" | "moderate" | "aggressive">("moderate");
   const [days, setDays] = useState<number>(90);
@@ -64,17 +71,19 @@ export function Landing() {
   const getAPY = () => {
     switch (strategy) {
       case "conservative":
-        return 0.12;
+        return 0.14;
       case "moderate":
-        return 0.28;
+        return 0.32;
       case "aggressive":
-        return 0.58;
+        return 0.65;
     }
   };
 
   const apy = getAPY();
   const estimatedProfit = investment * (Math.pow(1 + apy / 365, days) - 1);
   const projectedTotal = investment + estimatedProfit;
+
+  const currencySymbol = currency === "USD" ? "$" : "";
 
   // Generate SVG path points for the profit calculator graph
   const generateGraphPath = () => {
@@ -86,10 +95,9 @@ export function Landing() {
     for (let i = 0; i <= pointsCount; i++) {
       const x = (i / pointsCount) * width;
       const progress = i / pointsCount;
-      // Growth function + volatility sine wave
-      const growth = investment * (Math.pow(1 + apy / 365, (days * progress)) - investment) / (projectedTotal - investment || 1);
+      const growth = investment * (Math.pow(1 + apy / 365, days * progress) - investment) / (projectedTotal - investment || 1);
       const volatility = Math.sin(progress * Math.PI * 3) * 15 * (1 - progress);
-      const y = height - 30 - (growth * (height - 60)) + volatility;
+      const y = height - 30 - growth * (height - 60) + volatility;
       points.push(`${x},${y}`);
     }
     return `M 0,${height - 30} Q ${points.slice(1).join(" ")}`;
@@ -105,9 +113,9 @@ export function Landing() {
   return (
     <div className="min-h-screen bg-main-bg text-main-text selection:bg-brand-500/30 overflow-x-hidden font-sans">
       {/* Background glow effects */}
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-brand-500/10 rounded-full filter blur-[120px] pointer-events-none" />
-      <div className="absolute top-[800px] right-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full filter blur-[160px] pointer-events-none" />
-      <div className="absolute top-[1800px] left-1/3 w-[600px] h-[600px] bg-brand-600/5 rounded-full filter blur-[180px] pointer-events-none" />
+      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-brand-500/10 rounded-full filter blur-[140px] pointer-events-none" />
+      <div className="absolute top-[800px] right-1/4 w-[600px] h-[600px] bg-indigo-500/5 rounded-full filter blur-[180px] pointer-events-none" />
+      <div className="absolute top-[1800px] left-1/3 w-[650px] h-[650px] bg-purple-600/5 rounded-full filter blur-[200px] pointer-events-none" />
 
       {/* Header / Navigation */}
       <header className="sticky top-0 z-50 backdrop-blur-md bg-main-bg/80 border-b border-sidebar-border">
@@ -118,23 +126,27 @@ export function Landing() {
             </div>
             <div className="shrink-0">
               <span className="font-bold text-title-text text-lg tracking-tight">AstroidBot</span>
-              <span className="text-xs block text-muted-text -mt-1 font-mono">AI TRADING</span>
+              <span className="text-xs block text-brand-400 font-mono -mt-1">MULTI-CHAIN AI 2.0</span>
             </div>
           </a>
 
           <nav className="hidden md:flex items-center gap-8 text-sm text-muted-text font-medium">
             <a href="#features" className="hover:text-title-text transition-colors">Features</a>
-            <a href="#calculator" className="hover:text-title-text transition-colors">Calculator</a>
-            <a href="#integrations" className="hover:text-title-text transition-colors">Integrations</a>
-            <Link to="/tokens" className="hover:text-title-text transition-colors">Tokens</Link>
+            <Link to="/tokens" className="hover:text-title-text transition-colors flex items-center gap-1">
+              <span>Token Discovery</span>
+              <span className="px-1.5 py-0.2 text-[9px] font-bold rounded bg-brand-500/20 text-brand-400 border border-brand-500/30">Live</span>
+            </Link>
+            <a href="#ai-assistant" className="hover:text-title-text transition-colors">AI Assistant</a>
+            <a href="#integrations" className="hover:text-title-text transition-colors">Supported Chains</a>
+            <a href="#calculator" className="hover:text-title-text transition-colors">Yield Calculator</a>
             <Link to="/docs" className="hover:text-title-text transition-colors">Docs</Link>
-            <a href="#contact" className="hover:text-title-text transition-colors">Contact</a>
           </nav>
 
           <div className="flex-grow flex items-center justify-end gap-2 sm:gap-4">
             <button
               onClick={toggleTheme}
               className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors cursor-pointer"
+              title="Toggle theme"
             >
               {theme === "dark" ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-indigo-500" />}
             </button>
@@ -167,193 +179,295 @@ export function Landing() {
       </header>
 
       {/* Hero Section */}
-      <section className="relative mx-auto px-6 pt-20 pb-28 text-center">
+      <section className="relative mx-auto px-6 pt-16 pb-24 text-center">
+        {/* Release Pill */}
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-brand-500/10 border border-brand-500/30 text-brand-400 text-xs font-semibold mb-8">
+          <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+          <span>ASTROIDBOT 2.0 — MULTI-CHAIN AI TRADING INDEXER & ROUTER</span>
+        </div>
 
-        <h1 className="text-4xl sm:text-6xl font-black text-title-text tracking-tight leading-tight max-w-4xl mx-auto">
-          AstroidBot: The <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-indigo-400 to-indigo-500">smart trading bot</span> for every chain you trade
+        <h1 className="text-4xl sm:text-6xl font-black text-title-text tracking-tight leading-tight max-w-5xl mx-auto">
+          The <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-indigo-400 to-purple-400">Multi-Chain AI Indexer</span> & Autonomous DEX Trading Suite
         </h1>
 
-        <p className="mt-6 text-lg text-muted-text max-w-2xl mx-auto leading-relaxed">
-          Automate your trading strategy, optimize order placement, and compound yield non-custodially using advanced algorithmic grid engines.
+        <p className="mt-6 text-lg text-muted-text max-w-3xl mx-auto leading-relaxed">
+          Index live market data, discover real-time DEX liquidity across Solana, Base, Stacks, and EVM networks, and execute voice-powered AI trading strategies non-custodially.
         </p>
 
         <div className="mt-10 flex flex-wrap justify-center gap-4">
           <Link
             to={user ? "/dashboard" : "/register"}
-            className="px-8 py-4 bg-brand-500 hover:bg-brand-600 text-white font-medium rounded-xl text-base transition-all duration-200 shadow-xl shadow-brand-500/30 flex items-center gap-2 hover:translate-x-0.5"
+            className="px-8 py-4 bg-brand-500 hover:bg-brand-600 text-white font-bold rounded-xl text-base transition-all duration-200 shadow-xl shadow-brand-500/30 flex items-center gap-2 hover:translate-x-0.5"
           >
-            Launch Trading Bot
+            Launch Trading App
             <ArrowRight className="w-5 h-5" />
           </Link>
-          {/* Points at real data rather than a marketing anchor — a visitor can
-              browse tokens across every chain before creating an account. */}
           <Link
             to="/tokens"
-            className="px-8 py-4 bg-card-bg hover:bg-bg-hover border border-card-border hover:border-brand-500/30 text-main-text font-medium rounded-xl text-base transition-all duration-200"
+            className="px-8 py-4 bg-card-bg hover:bg-bg-hover border border-card-border hover:border-brand-500/40 text-main-text font-bold rounded-xl text-base transition-all duration-200 flex items-center gap-2"
           >
-            Explore Tokens
+            <Flame className="w-4 h-4 text-orange-400" />
+            Explore Dex Markets
           </Link>
         </div>
 
-        {/* Dashboard Showcase */}
-        <div className="mt-20 relative max-w-5xl mx-auto rounded-2xl border border-card-border bg-card-bg p-4 backdrop-blur-sm shadow-2xl">
-          <div className="absolute -inset-0.5 bg-gradient-to-r from-brand-500 to-indigo-500 rounded-2xl opacity-10 filter blur-xl pointer-events-none" />
+        {/* Dashboard Showcase Simulation */}
+        <div className="mt-16 relative max-w-5xl mx-auto rounded-2xl border border-card-border bg-card-bg p-4 backdrop-blur-sm shadow-2xl overflow-hidden">
+          <div className="absolute -inset-0.5 bg-gradient-to-r from-brand-500 via-indigo-500 to-purple-600 rounded-2xl opacity-10 filter blur-xl pointer-events-none" />
 
-          {/* Top panel bar */}
+          {/* Window control bar */}
           <div className="flex items-center justify-between pb-3 border-b border-card-border mb-4 px-2">
             <div className="flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-full bg-red-500/80" />
               <span className="w-3 h-3 rounded-full bg-yellow-500/80" />
               <span className="w-3 h-3 rounded-full bg-green-500/80" />
-              <span className="text-xs text-muted-text ml-2 font-mono">Astroidbot-dashboard</span>
+              <span className="text-xs text-muted-text ml-2 font-mono">astroidbot-indexer-v2.0</span>
             </div>
             <div className="flex items-center gap-2 sm:gap-3">
-              <span className="text-xs font-mono px-2 py-0.5 rounded bg-brand-500/20 text-brand-400 border border-brand-500/20">
-                STX: $1.85
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                INDEXER ONLINE
               </span>
-              <span className="text-xs text-muted-text font-mono hidden sm:inline">Connected: SP1P...4R8S</span>
+              <span className="text-xs text-muted-text font-mono hidden sm:inline">Chains: Solana · Base · Stacks · EVM</span>
             </div>
           </div>
 
-          {/* Interactive Interface Simulation */}
+          {/* Interactive Mockup Grid */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-left">
             {/* Sidebar Simulation */}
             <div className="hidden md:block col-span-1 border-r border-card-border pr-4 space-y-2">
               <div className="flex items-center gap-2.5 px-3 py-2 bg-brand-500/15 text-brand-400 rounded-lg text-xs font-semibold">
-                <Activity className="w-4 h-4" />
-                <span>Dashboard</span>
+                <BarChart3 className="w-4 h-4" />
+                <span>Live Indexer</span>
               </div>
               <div className="flex items-center gap-2.5 px-3 py-2 text-muted-text hover:text-title-text rounded-lg text-xs font-medium cursor-pointer transition-colors">
-                <TrendingUp className="w-4 h-4" />
-                <span>Trades</span>
+                <Bot className="w-4 h-4 text-purple-400" />
+                <span>AI Voice Assistant</span>
               </div>
               <div className="flex items-center gap-2.5 px-3 py-2 text-muted-text hover:text-title-text rounded-lg text-xs font-medium cursor-pointer transition-colors">
-                <Wallet className="w-4 h-4" />
-                <span>Wallets</span>
+                <Activity className="w-4 h-4 text-emerald-400" />
+                <span>Multi-DEX Swaps</span>
               </div>
               <div className="flex items-center gap-2.5 px-3 py-2 text-muted-text hover:text-title-text rounded-lg text-xs font-medium cursor-pointer transition-colors">
-                <Bot className="w-4 h-4" />
-                <span>Agents</span>
+                <Zap className="w-4 h-4 text-yellow-400" />
+                <span>Limit Orders</span>
               </div>
             </div>
 
-            {/* Main Content Area Simulation */}
+            {/* Main Content Simulation */}
             <div className="col-span-1 md:col-span-3 space-y-4">
+              {/* Quick stats strip */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-main-bg/80 border border-card-border rounded-xl p-3">
-                  <div className="text-[10px] text-muted-text uppercase font-semibold">Portfolio Value</div>
-                  <div className="text-lg font-bold text-title-text mt-0.5">$18,452.20</div>
+                  <div className="text-[10px] text-muted-text uppercase font-semibold">Indexed DEX Pools</div>
+                  <div className="text-lg font-bold text-title-text mt-0.5">14,280+</div>
                   <div className="text-[10px] text-emerald-400 mt-1 flex items-center gap-0.5">
-                    <span>↑ 14.2%</span> <span className="text-muted-text/80">this week</span>
+                    <span>↑ Real-time websocket sync</span>
                   </div>
                 </div>
                 <div className="bg-main-bg/80 border border-card-border rounded-xl p-3">
-                  <div className="text-[10px] text-muted-text uppercase font-semibold">Bot Status</div>
+                  <div className="text-[10px] text-muted-text uppercase font-semibold">AI Agent Execution</div>
                   <div className="text-lg font-bold text-emerald-400 mt-0.5 flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span>ACTIVE</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span>AUTOMATED</span>
                   </div>
-                  <div className="text-[10px] text-muted-text mt-1">Grid mode enabled</div>
+                  <div className="text-[10px] text-muted-text mt-1">Non-custodial cryptographic key</div>
                 </div>
                 <div className="bg-main-bg/80 border border-card-border rounded-xl p-3">
-                  <div className="text-[10px] text-muted-text uppercase font-semibold">Total Profit</div>
-                  <div className="text-lg font-bold text-title-text mt-0.5">+$3,412.80</div>
-                  <div className="text-[10px] text-muted-text mt-1">45 trades executed</div>
+                  <div className="text-[10px] text-muted-text uppercase font-semibold">24H Tracked Volume</div>
+                  <div className="text-lg font-bold text-title-text mt-0.5">$48.6M</div>
+                  <div className="text-[10px] text-brand-400 mt-1">Across 6 supported networks</div>
                 </div>
               </div>
 
-              {/* Graphic Chart Simulation */}
-              <div className="bg-main-bg/80 border border-card-border rounded-xl p-4 relative overflow-hidden h-44">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs font-semibold text-muted-text">Yield Progression (30d)</span>
-                  <span className="text-[10px] text-brand-400 font-mono">Auto-refreshes in 4s</span>
+              {/* AI Prompt Simulator */}
+              <div className="bg-main-bg/80 border border-card-border rounded-xl p-3.5 font-mono text-xs space-y-2">
+                <div className="flex items-center justify-between text-muted-text text-[10px]">
+                  <span className="flex items-center gap-1 text-purple-400 font-bold">
+                    <Mic className="w-3 h-3" /> Voice & Chat AI Orchestrator
+                  </span>
+                  <span>Status: Ready</span>
                 </div>
-                <svg className="w-full h-28" viewBox="0 0 500 100" preserveAspectRatio="none">
-                  <defs>
-                    <linearGradient id="glowGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#5b8def" stopOpacity="0.4" />
-                      <stop offset="100%" stopColor="#5b8def" stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-                  <path
-                    d="M0,80 Q 80,60 160,75 T 320,35 T 500,15 L 500,100 L 0,100 Z"
-                    fill="url(#glowGrad)"
-                  />
-                  <path
-                    d="M0,80 Q 80,60 160,75 T 320,35 T 500,15"
-                    fill="none"
-                    stroke="#5b8def"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                  />
-                  {/* Grid lines */}
-                  <line x1="0" y1="25" x2="500" y2="25" stroke="var(--border-card)" strokeWidth="0.5" strokeDasharray="3,3" />
-                  <line x1="0" y1="50" x2="500" y2="50" stroke="var(--border-card)" strokeWidth="0.5" strokeDasharray="3,3" />
-                  <line x1="0" y1="75" x2="500" y2="75" stroke="var(--border-card)" strokeWidth="0.5" strokeDasharray="3,3" />
-                </svg>
+                <div className="bg-input-bg border border-card-border rounded-lg p-2.5 flex items-center gap-2 text-title-text">
+                  <Terminal className="w-4 h-4 text-brand-400 shrink-0" />
+                  <span className="text-brand-300 font-bold">&gt;</span>
+                  <span className="truncate">&quot;Swap 500 USDC to STX on Bitflow when 1-hour RSI falls below 30&quot;</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-emerald-400 font-sans font-semibold pt-1">
+                  <span>✔ Parsed strategy target: STX / USDC · Auto-limit order scheduled</span>
+                  <span className="text-muted-text font-mono text-[10px]">Latency: 12ms</span>
+                </div>
+              </div>
+
+              {/* Mini Token Indexer Preview Table */}
+              <div className="bg-main-bg/80 border border-card-border rounded-xl p-3 overflow-hidden text-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-title-text text-xs flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-brand-400" />
+                    Live Indexed Token Discovery
+                  </span>
+                  <Link to="/tokens" className="text-[11px] text-brand-400 font-semibold hover:underline flex items-center gap-0.5">
+                    View All Markets <ArrowUpRight className="w-3 h-3" />
+                  </Link>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="text-[10px] text-muted-text border-b border-card-border uppercase">
+                        <th className="py-1.5 px-2">Token</th>
+                        <th className="py-1.5 px-2">Chain</th>
+                        <th className="py-1.5 px-2 text-right">Price</th>
+                        <th className="py-1.5 px-2 text-right">24h Vol</th>
+                        <th className="py-1.5 px-2 text-right">24h %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-card-border/40 font-mono text-[11px]">
+                      <tr>
+                        <td className="py-1.5 px-2 font-bold text-title-text">wSTX</td>
+                        <td className="py-1.5 px-2"><span className="text-[9px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-bold uppercase">Stacks</span></td>
+                        <td className="py-1.5 px-2 text-right text-title-text">$1.845</td>
+                        <td className="py-1.5 px-2 text-right text-muted-text">$2.4M</td>
+                        <td className="py-1.5 px-2 text-right text-emerald-400 font-bold">+12.4%</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 px-2 font-bold text-title-text">SOL</td>
+                        <td className="py-1.5 px-2"><span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-400 font-bold uppercase">Solana</span></td>
+                        <td className="py-1.5 px-2 text-right text-title-text">$182.10</td>
+                        <td className="py-1.5 px-2 text-right text-muted-text">$18.9M</td>
+                        <td className="py-1.5 px-2 text-right text-emerald-400 font-bold">+8.1%</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 px-2 font-bold text-title-text">WELSH</td>
+                        <td className="py-1.5 px-2"><span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 font-bold uppercase">Base</span></td>
+                        <td className="py-1.5 px-2 text-right text-title-text">$0.0034</td>
+                        <td className="py-1.5 px-2 text-right text-muted-text">$840K</td>
+                        <td className="py-1.5 px-2 text-right text-red-400 font-bold">-3.2%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Features Section */}
+      {/* Supported Chains & Protocols Section */}
+      <section id="integrations" className="max-w-[1400px] mx-auto px-6 py-16 border-t border-sidebar-border text-center">
+        <span className="text-xs uppercase text-muted-text tracking-wider font-bold">Supported Multi-Chain Ecosystems & Protocols</span>
+        <div className="mt-8 flex flex-wrap justify-center items-center gap-8 md:gap-12 opacity-85">
+          <div className="flex items-center gap-2 bg-card-bg px-4 py-2 rounded-xl border border-card-border">
+            <span className="font-bold text-sm text-title-text font-mono">SOLANA</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 font-bold">Jupiter DEX</span>
+          </div>
+          <div className="flex items-center gap-2 bg-card-bg px-4 py-2 rounded-xl border border-card-border">
+            <span className="font-bold text-sm text-title-text font-mono">BASE</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold">Uniswap V3</span>
+          </div>
+          <div className="flex items-center gap-2 bg-card-bg px-4 py-2 rounded-xl border border-card-border">
+            <span className="font-bold text-sm text-title-text font-mono">STACKS</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 font-bold">Bitflow · ALEX · Velar</span>
+          </div>
+          <div className="flex items-center gap-2 bg-card-bg px-4 py-2 rounded-xl border border-card-border">
+            <span className="font-bold text-sm text-title-text font-mono">ROBINHOOD CHAIN</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">EVM</span>
+          </div>
+          <div className="flex items-center gap-2 bg-card-bg px-4 py-2 rounded-xl border border-card-border">
+            <span className="font-bold text-sm text-title-text font-mono">CELO</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold">Refuel</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Upgraded Features Section */}
       <section id="features" className="max-w-[1400px] mx-auto px-6 py-24 border-t border-sidebar-border">
         <div className="text-center max-w-3xl mx-auto mb-16">
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text">Why automate with AstroidBot?</h2>
+          <h2 className="text-3xl sm:text-4xl font-black text-title-text">Upgraded Platform Capabilities</h2>
           <p className="mt-4 text-muted-text">
-            One engine across Stacks, Solana and the EVM chains you enable — the same strategies, risk limits and automation wherever your funds are.
+            AstroidBot 2.0 brings together real-time market indexing, natural language AI controls, and non-custodial cross-chain execution in one unified system.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="bg-card-bg border border-card-border p-8 rounded-2xl hover:border-brand-500/30 transition-all duration-300 group">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl hover:border-brand-500/40 transition-all duration-300 group">
             <div className="w-12 h-12 rounded-xl bg-brand-500/10 flex items-center justify-center border border-brand-500/20 text-brand-400 mb-6 group-hover:scale-110 transition-transform">
+              <Globe className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-title-text mb-2">Live Token Indexer</h3>
+            <p className="text-muted-text text-xs leading-relaxed">
+              DexScreener-style real-time token discovery, 24h volume tracking, top traders analytics, liquidity statistics, and historical candles across all active chains.
+            </p>
+          </div>
+
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl hover:border-brand-500/40 transition-all duration-300 group" id="ai-assistant">
+            <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20 text-purple-400 mb-6 group-hover:scale-110 transition-transform">
+              <Mic className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-title-text mb-2">Voice & AI Commands</h3>
+            <p className="text-muted-text text-xs leading-relaxed">
+              Execute complex swaps, limit orders, and agent strategies using natural speech or chat. Powered by Whisper AI and Astroid AI Orchestration.
+            </p>
+          </div>
+
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl hover:border-brand-500/40 transition-all duration-300 group">
+            <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 text-emerald-400 mb-6 group-hover:scale-110 transition-transform">
+              <Cpu className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-title-text mb-2">Autonomous AI Agents</h3>
+            <p className="text-muted-text text-xs leading-relaxed">
+              Deploy intelligent trading agents with customizable risk parameters, signal strategies, and automated grid rebalancing logic.
+            </p>
+          </div>
+
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl hover:border-brand-500/40 transition-all duration-300 group">
+            <div className="w-12 h-12 rounded-xl bg-yellow-500/10 flex items-center justify-center border border-yellow-500/20 text-yellow-400 mb-6 group-hover:scale-110 transition-transform">
               <Zap className="w-6 h-6" />
             </div>
-            <h3 className="text-xl font-bold text-title-text mb-3">AI-Driven Parameter Optimization</h3>
-            <p className="text-muted-text text-sm leading-relaxed">
-              Our models evaluate the pairs on each chain you trade and adjust grids to that market&apos;s volatility, ensuring optimized buy-low, sell-high setups.
-            </p>
-          </div>
-
-          <div className="bg-card-bg border border-card-border p-8 rounded-2xl hover:border-brand-500/30 transition-all duration-300 group">
-            <div className="w-12 h-12 rounded-xl bg-brand-500/10 flex items-center justify-center border border-brand-500/20 text-brand-400 mb-6 group-hover:scale-110 transition-transform">
-              <TrendingUp className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-title-text mb-3">Automated Limit Order Engines</h3>
-            <p className="text-muted-text text-sm leading-relaxed">
-              Set precise buy or sell targets. AstroidBot monitors prices off-chain and auto-signs transactions when limits are hit, bypassing browser-locking mechanisms.
-            </p>
-          </div>
-
-          <div className="bg-card-bg border border-card-border p-8 rounded-2xl hover:border-brand-500/30 transition-all duration-300 group">
-            <div className="w-12 h-12 rounded-xl bg-brand-500/10 flex items-center justify-center border border-brand-500/20 text-brand-400 mb-6 group-hover:scale-110 transition-transform">
-              <Lock className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-title-text mb-3">Secure Non-Custodial Architecture</h3>
-            <p className="text-muted-text text-sm leading-relaxed">
-              No keys are ever stored on centralized servers. All actions use localized cryptographic contexts, keeping your funds safe in your own wallet.
+            <h3 className="text-lg font-bold text-title-text mb-2">Limit Orders & Perps</h3>
+            <p className="text-muted-text text-xs leading-relaxed">
+              Set precise trigger targets off-chain. Transactions execute auto-signed when limits are met, eliminating manual browser interaction.
             </p>
           </div>
         </div>
       </section>
 
-      {/* Profit Calculator Section */}
+      {/* Yield Calculator Section */}
       <section id="calculator" className="max-w-[1400px] mx-auto px-6 py-24 border-t border-sidebar-border">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           <div>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text">Project your profits</h2>
-            <p className="mt-4 text-muted-text leading-relaxed">
-              Choose your trading capital, specify the AI grid bot risk profile, and see how compounding performance performs over time.
+            <h2 className="text-3xl sm:text-4xl font-black text-title-text">Project your compounding yields</h2>
+            <p className="mt-4 text-muted-text leading-relaxed text-sm">
+              Select your preferred base asset, configure your AI bot strategy risk profile, and visualize projected compounding performance across automated grid cycles.
             </p>
 
             <div className="mt-8 space-y-6">
+              {/* Base Currency Selection */}
+              <div>
+                <label className="block text-xs text-muted-text font-bold mb-2 uppercase">Base Asset</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {(["USD", "STX", "SOL", "ETH"] as const).map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCurrency(c)}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                        currency === c
+                          ? "bg-brand-500/20 border-brand-500 text-brand-400"
+                          : "bg-card-bg border-card-border text-muted-text hover:text-title-text"
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Investment capital slider */}
               <div>
                 <div className="flex justify-between text-sm mb-2">
-                  <span className="text-muted-text font-medium">Investment Amount (STX)</span>
-                  <span className="text-brand-400 font-bold font-mono">{investment.toLocaleString()} STX</span>
+                  <span className="text-muted-text font-medium">Investment Amount ({currency})</span>
+                  <span className="text-brand-400 font-bold font-mono">
+                    {currencySymbol}{investment.toLocaleString()} {currency !== "USD" ? currency : ""}
+                  </span>
                 </div>
                 <input
                   type="range"
@@ -368,20 +482,21 @@ export function Landing() {
 
               {/* Bot strategy selector */}
               <div>
-                <label className="block text-sm text-muted-text font-medium mb-3">Trading Strategy</label>
+                <label className="block text-xs text-muted-text font-bold mb-2 uppercase">Strategy Profile</label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {(["conservative", "moderate", "aggressive"] as const).map((strat) => (
                     <button
                       key={strat}
                       onClick={() => setStrategy(strat)}
-                      className={`py-2.5 px-4 rounded-xl text-xs font-bold border capitalize transition-all duration-200 cursor-pointer ${strategy === strat
-                        ? "bg-brand-500/20 border-brand-500 text-brand-400"
-                        : "bg-card-bg border-card-border text-muted-text hover:text-title-text hover:border-brand-500/30"
-                        }`}
+                      className={`py-2.5 px-4 rounded-xl text-xs font-bold border capitalize transition-all duration-200 cursor-pointer ${
+                        strategy === strat
+                          ? "bg-brand-500/20 border-brand-500 text-brand-400"
+                          : "bg-card-bg border-card-border text-muted-text hover:text-title-text hover:border-brand-500/30"
+                      }`}
                     >
-                      {strat === "conservative" && "Conservative (12% APY)"}
-                      {strat === "moderate" && "Balanced (28% APY)"}
-                      {strat === "aggressive" && "Aggressive (58% APY)"}
+                      {strat === "conservative" && "Conservative (14% APY)"}
+                      {strat === "moderate" && "Balanced (32% APY)"}
+                      {strat === "aggressive" && "Aggressive (65% APY)"}
                     </button>
                   ))}
                 </div>
@@ -389,16 +504,17 @@ export function Landing() {
 
               {/* Duration selector */}
               <div>
-                <label className="block text-sm text-muted-text font-medium mb-3">Duration</label>
+                <label className="block text-xs text-muted-text font-bold mb-2 uppercase">Time Horizon</label>
                 <div className="grid grid-cols-3 gap-3">
                   {([30, 90, 365] as const).map((d) => (
                     <button
                       key={d}
                       onClick={() => setDays(d)}
-                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition-all duration-200 cursor-pointer ${days === d
-                        ? "bg-brand-500/20 border-brand-500 text-brand-400"
-                        : "bg-card-bg border-card-border text-muted-text hover:text-title-text hover:border-brand-500/30"
-                        }`}
+                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition-all duration-200 cursor-pointer ${
+                        days === d
+                          ? "bg-brand-500/20 border-brand-500 text-brand-400"
+                          : "bg-card-bg border-card-border text-muted-text hover:text-title-text hover:border-brand-500/30"
+                      }`}
                     >
                       {d} Days
                     </button>
@@ -416,14 +532,16 @@ export function Landing() {
               <div>
                 <span className="text-xs text-muted-text uppercase tracking-wider font-semibold">Estimated Profit</span>
                 <div className="text-4xl sm:text-5xl font-black text-title-text mt-1 font-mono">
-                  +{estimatedProfit.toFixed(2)} <span className="text-brand-400 text-2xl">STX</span>
+                  +{currencySymbol}{estimatedProfit.toFixed(2)} <span className="text-brand-400 text-xl font-sans font-bold">{currency !== "USD" ? currency : ""}</span>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4 py-4 border-y border-card-border">
                 <div>
                   <span className="text-xs text-muted-text block">Projected Total</span>
-                  <span className="text-lg font-bold text-title-text mt-0.5 font-mono">{projectedTotal.toFixed(2)} STX</span>
+                  <span className="text-lg font-bold text-title-text mt-0.5 font-mono">
+                    {currencySymbol}{projectedTotal.toFixed(2)} {currency !== "USD" ? currency : ""}
+                  </span>
                 </div>
                 <div>
                   <span className="text-xs text-muted-text block">Yield APY</span>
@@ -469,27 +587,26 @@ export function Landing() {
         </div>
       </section>
 
-
-      {/* Integrations Section */}
-      <section id="integrations" className="max-w-[1400px] mx-auto px-6 py-16 border-t border-sidebar-border text-center">
-        <span className="text-xs uppercase text-muted-text tracking-wider font-semibold">Integrations & Protocols</span>
-        <div className="mt-8 flex flex-wrap justify-center items-center gap-12 opacity-65 grayscale hover:grayscale-0 transition-all duration-300">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-lg text-title-text font-mono">STACKS</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400">Layer 2</span>
+      {/* Security & Non-Custodial Banner */}
+      <section className="max-w-[1400px] mx-auto px-6 py-16 border-t border-sidebar-border">
+        <div className="bg-gradient-to-r from-brand-500/10 via-indigo-500/10 to-purple-500/10 border border-brand-500/20 rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-2xl bg-brand-500/20 text-brand-400 border border-brand-500/30 shrink-0">
+              <Shield className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-title-text">100% Non-Custodial & Wallet Encrypted</h3>
+              <p className="text-xs text-muted-text mt-1 max-w-xl">
+                Your private keys remain exclusively in your wallet context. Transactions execute with explicit user permissions, cryptographic signature verification, and fail-closed safety.
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-lg text-title-text font-mono">ALEX SDK</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">DeFi</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-lg text-title-text font-mono">VELUMX</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Relayer</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-lg text-title-text font-mono">VELAR</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">DEX</span>
-          </div>
+          <Link
+            to={user ? "/dashboard" : "/register"}
+            className="px-6 py-3 bg-brand-500 hover:bg-brand-600 text-white font-bold rounded-xl text-sm whitespace-nowrap transition-colors shadow-lg shadow-brand-500/20"
+          >
+            Start Trading Securely
+          </Link>
         </div>
       </section>
 
@@ -506,14 +623,14 @@ export function Landing() {
           </div>
 
           {contactSubmitted ? (
-            <div className="bg-brand-500/10 border border-brand-500/20 text-brand-400 text-sm p-4 rounded-xl text-center">
+            <div className="bg-brand-500/10 border border-brand-500/20 text-brand-400 text-sm p-4 rounded-xl text-center font-semibold">
               Message submitted successfully! We will get back to you shortly.
             </div>
           ) : (
             <form onSubmit={handleContactSubmit} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs text-muted-text mb-1.5">Name</label>
+                  <label className="block text-xs text-muted-text mb-1.5 font-bold">Name</label>
                   <input
                     type="text"
                     required
@@ -524,7 +641,7 @@ export function Landing() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-muted-text mb-1.5">Email</label>
+                  <label className="block text-xs text-muted-text mb-1.5 font-bold">Email</label>
                   <input
                     type="email"
                     required
@@ -536,7 +653,7 @@ export function Landing() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-muted-text mb-1.5">Message</label>
+                <label className="block text-xs text-muted-text mb-1.5 font-bold">Message</label>
                 <textarea
                   required
                   rows={4}
@@ -548,7 +665,7 @@ export function Landing() {
               </div>
               <button
                 type="submit"
-                className="w-full py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-500/20"
               >
                 Send Message
                 <Mail className="w-4 h-4" />
@@ -573,8 +690,9 @@ export function Landing() {
 
           <div className="flex flex-wrap justify-center items-center gap-4 sm:gap-8 text-xs text-muted-text">
             <a href="#features" className="hover:text-title-text transition-colors">Features</a>
-            <a href="#calculator" className="hover:text-title-text transition-colors">Calculator</a>
-            <Link to="/tokens" className="hover:text-title-text transition-colors">Tokens</Link>
+            <Link to="/tokens" className="hover:text-title-text transition-colors">Token Discovery</Link>
+            <a href="#ai-assistant" className="hover:text-title-text transition-colors">AI Assistant</a>
+            <a href="#calculator" className="hover:text-title-text transition-colors">Yield Calculator</a>
             <Link to="/docs" className="hover:text-title-text transition-colors">Docs</Link>
             <a href="/terms" className="hover:text-title-text transition-colors">Terms of Service</a>
             <a href="/privacy" className="hover:text-title-text transition-colors">Privacy Policy</a>
@@ -584,3 +702,5 @@ export function Landing() {
     </div>
   );
 }
+
+export default Landing;

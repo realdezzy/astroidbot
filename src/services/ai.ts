@@ -29,7 +29,7 @@ import {
   ParseCommandSchema,
   AuditSignalSchema,
 } from "../validation/ai/schemas.js";
-import { needsPortfolioContext } from "./ai/intent.js";
+import { needsPortfolioContext, fallbackParseCommand } from "./ai/intent.js";
 
 const DEFAULT_MODELS: Record<string, string> = {
   openai: "gpt-4o",
@@ -238,6 +238,12 @@ export class AIOrchestrator {
     input: string,
     history?: { role: "user" | "assistant"; content: string }[]
   ): Promise<Record<string, unknown> | null> {
+    const fastMatch = fallbackParseCommand(input);
+    if (fastMatch) {
+      logger.info("Fast-match deterministic command parsed", { input, action: fastMatch.action });
+      return fastMatch;
+    }
+
     let userContextStr = "";
 
     // Intent classification: skip costly DB queries & balance fetches for simple chats/greetings
@@ -300,16 +306,29 @@ ${walletDetails.join("\n")}
 
     const prompt = buildParseCommandPrompt(userContextStr, historyStr, input);
     try {
-      return await this.request({
+      const res = await this.request({
         task: "parse_command",
         prompt,
         schema: ParseCommandSchema,
         userId,
         cacheTTL: 300,
       }) as Record<string, unknown>;
+
+      if (res && res.action === "unknown") {
+        const secondaryMatch = fallbackParseCommand(input);
+        if (secondaryMatch) return secondaryMatch;
+      }
+      return res;
     } catch (e) {
-      logger.warn("Failed to parse command response", { error: e });
-      return null;
+      logger.warn("Failed to parse command response from AI provider", { error: e });
+      const secondaryMatch = fallbackParseCommand(input);
+      if (secondaryMatch) return secondaryMatch;
+
+      return {
+        action: "chat",
+        replyText:
+          "I parsed your command, but I couldn't reach the AI provider right now. You can try commands like 'wallets', 'portfolio', 'halt bot', or 'swap 10 STX to USDC'.",
+      };
     }
   }
 

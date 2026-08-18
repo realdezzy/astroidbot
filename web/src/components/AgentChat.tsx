@@ -419,11 +419,10 @@ export function AgentChat() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || loading || streamingMessageId) return;
+  const executeCommandText = async (commandText: string) => {
+    if (!commandText.trim() || loading || streamingMessageId) return;
 
-    const userText = input.trim();
+    const userText = commandText.trim();
     setInput("");
     setLoading(true);
 
@@ -458,9 +457,6 @@ export function AgentChat() {
           const wallets = await apiFetch<
             { id: number; name: string; chain?: string | null; isDefault?: boolean }[]
           >("/me/wallets");
-          // The user's default wallet, not whichever came back first. With one
-          // chain those were the same wallet; with several, "wallets[0]" is an
-          // arbitrary chain to spend from.
           const wallet = wallets?.find((w) => w.isDefault) ?? wallets?.[0];
           if (!wallet) {
             replyText = "I parsed this as a trade request, but you don't have any wallets configured.";
@@ -470,9 +466,6 @@ export function AgentChat() {
               details: "Please configure a wallet first."
             };
           } else {
-            // Defaults come from the wallet's own chain. Hardcoding
-            // STX/USDCx meant an unqualified "buy 10" on a Base wallet asked
-            // for a pair that chain cannot route.
             const walletChain = chains.find((c) => c.chainId === wallet.chain);
             const tokenIn = (result.tokenIn as string) ?? walletChain?.nativeSymbol;
             const tokenOut = (result.tokenOut as string) ?? walletChain?.stableSymbol;
@@ -528,7 +521,7 @@ export function AgentChat() {
             body: JSON.stringify({ [key]: value }),
           });
 
-          replyText = `I have updated your risk configuration. Your ${key} is now set to ${value}.`;
+          replyText = replyText || `I have updated your risk configuration. Your ${key} is now set to ${value}.`;
           actionResult = {
             type: "success",
             title: "Settings Updated",
@@ -545,7 +538,7 @@ export function AgentChat() {
       } else if (action === "halt" || action === "resume") {
         try {
           await apiFetch(`/bot/${action}`, { method: "POST" });
-          replyText = `I have successfully sent a command to ${action} the Telegram automation bot.`;
+          replyText = replyText || `I have successfully sent a command to ${action} the trading bot.`;
           actionResult = {
             type: "success",
             title: `Bot ${action === "halt" ? "Halted" : "Resumed"}`,
@@ -577,13 +570,14 @@ export function AgentChat() {
           trades: "/trades",
           agents: "/agents",
           settings: "/settings",
+          tokens: "/tokens",
         };
         const link = (result.suggestedLink as string) ?? linkMap[topic] ?? "/dashboard";
         
-        replyText = `Redirecting you to the ${topic || "requested"} screen now.`;
+        replyText = replyText || `Redirecting you to the ${topic || "requested"} screen now.`;
         actionResult = {
           type: "info",
-          title: `Navigating to ${topic}`,
+          title: `Navigating to ${topic || "requested page"}`,
           details: "Click below if you are not automatically redirected.",
           link
         };
@@ -640,6 +634,7 @@ export function AgentChat() {
           };
         }
       } else if (action === "chat") {
+        replyText = replyText || "I'm your AstroidBot AI assistant. How can I help you optimize your portfolio or execute trades today?";
         const link = result.suggestedLink as string | undefined;
         if (link) {
           actionResult = {
@@ -651,7 +646,7 @@ export function AgentChat() {
           setTimeout(() => navigate(link), 2500);
         }
       } else {
-        replyText = replyText || "I parsed your input, but no automated action was mapped. Please try asking again in a different format.";
+        replyText = replyText || "I parsed your command. Try commands like 'wallets', 'portfolio', 'halt bot', or 'swap 10 STX to USDC'.";
       }
 
       const newBotMsg: Message = {
@@ -678,8 +673,14 @@ export function AgentChat() {
     }
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeCommandText(input);
+  };
+
   const handleSuggestion = (command: string) => {
     setInput(command);
+    executeCommandText(command);
   };
 
   // The swap example follows whichever chain this deployment leads with, so a
