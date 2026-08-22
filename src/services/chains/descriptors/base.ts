@@ -18,13 +18,12 @@ export const BASE_MAINNET: ChainDescriptor = {
     bundler: { provider: "pimlico", slug: "base" },
     wrappedNative: "0x4200000000000000000000000000000000000006",
     dex: {
-      name: "UniswapV3",
-      // QuoterV2. This constant was 39 hex characters for months; viem threw
-      // InvalidAddressError inside the per-fee-tier catch, so every mainnet
-      // pair reported "no route" with nothing in the logs. EvmChainAdapter
-      // validates every address at registration now — see assertValidAddresses.
+      name: "Uniswap",
       quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
       swapRouter: "0x2626664c2603336E57B271c5C0b26F421741e481",
+      v2Router: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
+      v2Factory: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
+      universalRouter: "0x198EF79F1F515F02dFE9e3115eD9fC07183f02fC",
       factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
       feeTiers: [500, 3000, 10000],
     },

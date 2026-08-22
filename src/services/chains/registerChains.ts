@@ -6,6 +6,8 @@ import { StacksAdapter } from "./stacksAdapter.js";
 import { EvmChainAdapter } from "./evm/evmChainAdapter.js";
 import { SolanaAdapter } from "./svm/solanaAdapter.js";
 import { UniswapV3Provider } from "../dex/providers/uniswapV3.js";
+import { UniswapV2Provider } from "../dex/providers/uniswapV2.js";
+import { UniswapUniversalProvider } from "../dex/providers/uniswapUniversal.js";
 import { JupiterProvider } from "../dex/providers/jupiter.js";
 import { BUILT_IN_DESCRIPTORS, parseCustomEvmChains } from "./descriptors/index.js";
 import type { ChainAdapter } from "../../types/chainAdapter.js";
@@ -31,7 +33,16 @@ function registerProviderFor(descriptor: ChainDescriptor): void {
   }
 
   if (descriptor.family === "evm" && descriptor.evm?.dex) {
-    DEXRegistry.getInstance().registerProvider(new UniswapV3Provider(descriptor));
+    const dex = descriptor.evm.dex;
+    if (dex.universalRouter) {
+      DEXRegistry.getInstance().registerProvider(new UniswapUniversalProvider(descriptor));
+    }
+    if (dex.quoter && dex.swapRouter) {
+      DEXRegistry.getInstance().registerProvider(new UniswapV3Provider(descriptor));
+    }
+    if (dex.v2Router) {
+      DEXRegistry.getInstance().registerProvider(new UniswapV2Provider(descriptor));
+    }
   }
 
   if (descriptor.family === "svm" && descriptor.svm?.jupiterApiUrl) {

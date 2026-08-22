@@ -55,12 +55,17 @@ export interface EvmChainConfig {
     /** Pimlico's URL slug for this chain, e.g. "base", "base-sepolia". */
     slug: string;
   };
-  /** Uniswap-V3-family router addresses. Absent when the chain has no DEX yet. */
+  /** Uniswap-family router addresses. Absent when the chain has no DEX yet. */
   dex?: {
     /** Human name of the DEX, used as the DEXProvider name ("UniswapV3", "Ubeswap"). */
     name: string;
-    quoter: `0x${string}`;
-    swapRouter: `0x${string}`;
+    quoter?: `0x${string}`;
+    swapRouter?: `0x${string}`;
+    /** Uniswap V2 Router & Factory */
+    v2Router?: `0x${string}`;
+    v2Factory?: `0x${string}`;
+    /** Uniswap Universal Router */
+    universalRouter?: `0x${string}`;
     /**
      * V3 factory. Only the indexer needs this — it reads `PoolCreated` logs to
      * discover pools, which is the one thing that can't be derived from the
@@ -68,7 +73,7 @@ export interface EvmChainConfig {
      */
     factory?: `0x${string}`;
     /** Fee tiers to scan when quoting, in hundredths of a bip (500 = 0.05%). */
-    feeTiers: number[];
+    feeTiers?: number[];
   };
   /** Wrapped native token — needed to route native<->ERC20 swaps. */
   wrappedNative?: `0x${string}`;

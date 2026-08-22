@@ -64,6 +64,47 @@ export const ERC20_ABI = [
   },
 ] as const;
 
+// Uniswap V2 Router02 ABI
+export const UNISWAP_V2_ROUTER_ABI = [
+  {
+    type: "function",
+    name: "getAmountsOut",
+    stateMutability: "view",
+    inputs: [
+      { name: "amountIn", type: "uint256" },
+      { name: "path", type: "address[]" },
+    ],
+    outputs: [{ name: "amounts", type: "uint256[]" }],
+  },
+  {
+    type: "function",
+    name: "swapExactTokensForTokens",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amountIn", type: "uint256" },
+      { name: "amountOutMin", type: "uint256" },
+      { name: "path", type: "address[]" },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [{ name: "amounts", type: "uint256[]" }],
+  },
+] as const;
+
+// Uniswap V2 Factory ABI
+export const UNISWAP_V2_FACTORY_ABI = [
+  {
+    type: "function",
+    name: "getPair",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+    ],
+    outputs: [{ name: "pair", type: "address" }],
+  },
+] as const;
+
 // Uniswap V3 QuoterV2 — quoteExactInputSingle (view-simulated via staticCall).
 export const UNISWAP_V3_QUOTER_V2_ABI = [
   {
@@ -114,6 +155,21 @@ export const UNISWAP_V3_ROUTER_ABI = [
       },
     ],
     outputs: [{ name: "amountOut", type: "uint256" }],
+  },
+] as const;
+
+// Uniswap Universal Router ABI — execute.
+export const UNISWAP_UNIVERSAL_ROUTER_ABI = [
+  {
+    type: "function",
+    name: "execute",
+    stateMutability: "payable",
+    inputs: [
+      { name: "commands", type: "bytes" },
+      { name: "inputs", type: "bytes[]" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [],
   },
 ] as const;
 

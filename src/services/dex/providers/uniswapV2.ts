@@ -13,8 +13,7 @@ import type { SwappableToken, TransactionPayload } from "../../../types.js";
 import type { DEXQuote } from "../../../types/dexProvider.js";
 import {
   ERC20_ABI,
-  UNISWAP_V3_QUOTER_V2_ABI,
-  UNISWAP_V3_ROUTER_ABI,
+  UNISWAP_V2_ROUTER_ABI,
   WRAPPED_NATIVE_ABI,
 } from "../../chains/evm/abis.js";
 import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
@@ -23,45 +22,26 @@ import { BaseDEXProvider } from "./baseDexProvider.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 
 /**
- * Uniswap V3 and its forks, on any EVM chain.
- *
- * The QuoterV2 fee-tier scan, exactInputSingle payload building and
- * allowance-aware approve batching are identical for every V3 deployment —
- * only addresses and the token list differ, and those live in the chain's
- * descriptor. Base, Celo (Ubeswap) and any V3 fork declared through
- * CUSTOM_EVM_CHAINS share this one implementation.
- *
- * Native-asset trades are handled here rather than pushed onto callers: naming
- * the chain's native symbol resolves to its wrapped form, and the payload
- * gains a deposit call before the swap and a withdraw after it as needed.
- * Under ERC-4337 the whole sequence is one atomic UserOperation, so a
- * half-wrapped balance can't be stranded.
+ * Uniswap V2 and constant-product AMM forks (e.g. PancakeSwap, Sushiswap, Ubeswap V2).
+ * Handles fixed 0.30% fee constant product pools via UniswapV2Router02.
  */
-export class UniswapV3Provider extends BaseDEXProvider {
+export class UniswapV2Provider extends BaseDEXProvider {
   readonly name: string;
   private readonly evm: ReturnType<typeof requireEvmConfig>;
   private readonly tokenList: SwappableToken[];
-
-  // Remembers which fee tier actually had a pool for a pair, so the common
-  // hasRoute-then-getQuote sequence doesn't re-probe the missing tiers each
-  // time. Pool existence per tier doesn't change, so this needs no TTL.
-  private feeTierCache = new Map<string, number>();
+  private decimalsCache = new Map<string, number>();
 
   constructor(descriptor: ChainDescriptor) {
     super(descriptor);
     this.evm = requireEvmConfig(descriptor);
 
-    if (!this.evm.dex) {
+    if (!this.evm.dex?.v2Router) {
       throw new Error(
-        `Chain ${descriptor.chainId} has no DEX configured — it cannot back a UniswapV3Provider`
+        `Chain ${descriptor.chainId} has no V2 DEX router configured`
       );
     }
 
-    // Name is per-chain so DEXRegistry (which dedupes by name) can hold a
-    // provider for every chain simultaneously. A shared "UniswapV3" name would
-    // mean the second chain's provider is silently dropped at registration —
-    // the same class of bug as the family-keyed adapter registry.
-    this.name = `${this.evm.dex.name}-${descriptor.chainId}`;
+    this.name = `UniswapV2-${descriptor.chainId}`;
 
     this.tokenList = Object.entries(this.evm.tokens ?? {}).map(([symbol, t]) => ({
       contractId: t.address,
@@ -73,8 +53,8 @@ export class UniswapV3Provider extends BaseDEXProvider {
     }));
   }
 
-  private get dex() {
-    return this.evm.dex!;
+  private get router(): Address {
+    return this.evm.dex!.v2Router!;
   }
 
   private get breaker() {
@@ -101,26 +81,10 @@ export class UniswapV3Provider extends BaseDEXProvider {
     return createPublicClient({ chain, transport: http(this.rpcUrl()) }) as PublicClient;
   }
 
-  /** True when the caller named the chain's native asset (ETH, CELO, …). */
   private isNative(symbolOrAddress: string): boolean {
     return symbolOrAddress.toUpperCase() === this.descriptor.nativeSymbol.toUpperCase();
   }
 
-  /**
-   * Decimals for tokens outside the curated list. Permanent — an ERC-20's
-   * decimals cannot change, so there is nothing to invalidate.
-   */
-  private decimalsCache = new Map<string, number>();
-
-  /**
-   * Reads an unknown token's decimals on-chain.
-   *
-   * Returns null rather than a default when the read fails. Guessing is not
-   * safe here: `decimals` scales the *amount being spent*. Assuming 18 for a
-   * 6-decimal token turns "swap 1 token" into `parseUnits("1", 18)` — a
-   * request to spend 10^12 times more than the user asked for. Refusing to
-   * resolve costs a "no route"; guessing can cost funds.
-   */
   private async fetchDecimals(address: string): Promise<number | null> {
     const key = address.toLowerCase();
     const cached = this.decimalsCache.get(key);
@@ -144,9 +108,6 @@ export class UniswapV3Provider extends BaseDEXProvider {
   }
 
   private async resolveToken(symbolOrAddress: string): Promise<SwappableToken | null> {
-    // Uniswap pools hold only ERC-20s, so the native asset routes through its
-    // wrapped form. Without this, asking to trade ETH resolved to nothing and
-    // reported "no route" on a pair with deep liquidity.
     if (this.isNative(symbolOrAddress) && this.evm.wrappedNative) {
       return {
         contractId: this.evm.wrappedNative,
@@ -164,11 +125,6 @@ export class UniswapV3Provider extends BaseDEXProvider {
     );
     if (known) return known;
 
-    // Unknown ERC-20 address. Its decimals are read from the contract rather
-    // than assumed: token discovery now surfaces the long tail of tokens that
-    // were never in the curated list, each with a Trade button, so "unknown
-    // address" went from a rare edge case to the common path. A symbol we
-    // don't recognise still fails to resolve — there's nothing to read it off.
     if (symbolOrAddress.startsWith("0x") && symbolOrAddress.length === 42) {
       const decimals = await this.fetchDecimals(symbolOrAddress);
       if (decimals === null) return null;
@@ -193,61 +149,31 @@ export class UniswapV3Provider extends BaseDEXProvider {
     return this.tokenList;
   }
 
-  private get quoter(): Address {
-    const q = this.evm.dex?.quoter;
-    if (!q) throw new Error(`Chain ${this.descriptor.chainId} has no V3 quoter configured`);
-    return q;
-  }
-
-  private get router(): Address {
-    const r = this.evm.dex?.swapRouter;
-    if (!r) throw new Error(`Chain ${this.descriptor.chainId} has no V3 swapRouter configured`);
-    return r;
-  }
-
-  private get feeTiers(): number[] {
-    return this.evm.dex?.feeTiers || [500, 3000, 10000];
-  }
-
   private async quoteRaw(
     tokenIn: SwappableToken,
     tokenOut: SwappableToken,
     amountInRaw: bigint
-  ): Promise<{ amountOut: bigint; fee: number } | null> {
+  ): Promise<bigint | null> {
     const client = this.publicClient();
-    const pairKey = `${tokenIn.contractId.toLowerCase()}:${tokenOut.contractId.toLowerCase()}`;
-    const knownFee = this.feeTierCache.get(pairKey);
-    const tiers =
-      knownFee !== undefined
-        ? [knownFee, ...this.feeTiers.filter((f) => f !== knownFee)]
-        : [...this.feeTiers];
+    const path: [Address, Address] = [
+      tokenIn.contractId as Address,
+      tokenOut.contractId as Address,
+    ];
 
-    for (const fee of tiers) {
-      try {
-        const { result } = await this.breaker.execute(() =>
-          client.simulateContract({
-            address: this.quoter,
-            abi: UNISWAP_V3_QUOTER_V2_ABI,
-            functionName: "quoteExactInputSingle",
-            args: [
-              {
-                tokenIn: tokenIn.contractId as Address,
-                tokenOut: tokenOut.contractId as Address,
-                amountIn: amountInRaw,
-                fee,
-                sqrtPriceLimitX96: 0n,
-              },
-            ],
-          })
-        );
-        const [amountOut] = result as readonly [bigint, bigint, number, bigint];
-        if (amountOut > 0n) {
-          this.feeTierCache.set(pairKey, fee);
-          return { amountOut, fee };
-        }
-      } catch {
-        // No pool at this fee tier (or insufficient liquidity) — try the next.
+    try {
+      const amounts = (await this.breaker.execute(() =>
+        client.readContract({
+          address: this.router,
+          abi: UNISWAP_V2_ROUTER_ABI,
+          functionName: "getAmountsOut",
+          args: [amountInRaw, path],
+        })
+      )) as readonly bigint[];
+      if (amounts && amounts.length >= 2 && amounts[1] !== undefined && amounts[1] > 0n) {
+        return amounts[1];
       }
+    } catch {
+      // Pair does not exist or has zero liquidity
     }
     return null;
   }
@@ -274,9 +200,9 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
     try {
       const probe = parseUnits("1", token.decimals);
-      const result = await this.quoteRaw(token, stable, probe);
-      if (!result) return 0;
-      return this.cachePrice(cacheKey, Number(formatUnits(result.amountOut, stable.decimals)));
+      const amountOut = await this.quoteRaw(token, stable, probe);
+      if (!amountOut) return 0;
+      return this.cachePrice(cacheKey, Number(formatUnits(amountOut, stable.decimals)));
     } catch {
       return 0;
     }
@@ -288,18 +214,17 @@ export class UniswapV3Provider extends BaseDEXProvider {
       this.resolveToken(tokenOut),
     ]);
     if (!tIn || !tOut || amountIn <= 0) {
-      return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
+      return { amountOut: 0, priceImpact: 0, feeBps: 30, feeAmount: 0 };
     }
 
     try {
       const amountInRaw = parseUnits(toDecimalString(amountIn), tIn.decimals);
-      const result = await this.quoteRaw(tIn, tOut, amountInRaw);
-      if (!result) return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
+      const amountOutRaw = await this.quoteRaw(tIn, tOut, amountInRaw);
+      if (!amountOutRaw) return { amountOut: 0, priceImpact: 0, feeBps: 30, feeAmount: 0 };
 
-      const amountOut = Number(formatUnits(result.amountOut, tOut.decimals));
-      // Uniswap fee is in hundredths of a bip (1e-6 of amountIn); bps is 1e-4.
-      const feeBps = result.fee / 100;
-      const feeAmount = amountIn * (result.fee / 1_000_000);
+      const amountOut = Number(formatUnits(amountOutRaw, tOut.decimals));
+      const feeBps = 30; // Uniswap V2 standard 0.3% fee
+      const feeAmount = amountIn * 0.003;
 
       const [priceIn, priceOut] = await Promise.all([
         this.getTokenPrice(tokenIn),
@@ -307,12 +232,6 @@ export class UniswapV3Provider extends BaseDEXProvider {
       ]);
       let priceImpact = 0;
       if (priceIn > 0 && priceOut > 0 && amountOut > 0 && amountIn > 0) {
-        // Both prices are "tokenOut per tokenIn". The execution side was
-        // inverted — amountIn/amountOut — which made the ratio to spot
-        // vanishingly small and drove the result to |1 - ~0| = 100% on every
-        // healthy quote. A pair with a real 100% impact is untradeable, so the
-        // number was alarming and constant, which is the worst combination:
-        // users learn to ignore the one field that would warn them.
         const spotPrice = priceIn / priceOut;
         const executionPrice = amountOut / amountIn;
         priceImpact = Math.abs(1 - executionPrice / spotPrice) * 100;
@@ -326,7 +245,7 @@ export class UniswapV3Provider extends BaseDEXProvider {
         amountIn,
         error: err instanceof Error ? err.message : String(err),
       });
-      return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
+      return { amountOut: 0, priceImpact: 0, feeBps: 30, feeAmount: 0 };
     }
   }
 
@@ -345,25 +264,25 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
     try {
       const amountInRaw = parseUnits(toDecimalString(amountIn), tIn.decimals);
-      const result = await this.quoteRaw(tIn, tOut, amountInRaw);
-      if (!result) return null;
-
       const amountOutMinimumRaw = parseUnits(toDecimalString(minAmountOut), tOut.decimals);
-      const router = this.router;
+
+      const path: [Address, Address] = [
+        tIn.contractId as Address,
+        tOut.contractId as Address,
+      ];
+
+      // Set 20-minute expiration deadline
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
 
       const swapData = encodeFunctionData({
-        abi: UNISWAP_V3_ROUTER_ABI,
-        functionName: "exactInputSingle",
+        abi: UNISWAP_V2_ROUTER_ABI,
+        functionName: "swapExactTokensForTokens",
         args: [
-          {
-            tokenIn: tIn.contractId as Address,
-            tokenOut: tOut.contractId as Address,
-            fee: result.fee,
-            recipient: senderAddress as Address,
-            amountIn: amountInRaw,
-            amountOutMinimum: amountOutMinimumRaw,
-            sqrtPriceLimitX96: 0n,
-          },
+          amountInRaw,
+          amountOutMinimumRaw,
+          path,
+          senderAddress as Address,
+          deadline,
         ],
       });
 
@@ -372,9 +291,6 @@ export class UniswapV3Provider extends BaseDEXProvider {
       const wrapsIn = this.isNative(tokenIn) && !!this.evm.wrappedNative;
       const unwrapsOut = this.isNative(tokenOut) && !!this.evm.wrappedNative;
 
-      // Wrap first: the swap spends the wrapped token, so the deposit has to
-      // land before it. Under ERC-4337 all of this is one atomic
-      // UserOperation, so a partially-wrapped balance can't be left behind.
       if (wrapsIn) {
         const depositData = encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: "deposit" });
         calls.push({
@@ -384,18 +300,13 @@ export class UniswapV3Provider extends BaseDEXProvider {
         });
       }
 
-      // Only include the approval call if the account's current allowance to
-      // the router is insufficient — avoids a redundant approve on every swap
-      // once one large approval has gone through.
-      // A fresh wrap means the balance is new and unapproved, so skip the
-      // allowance read and always approve.
       const currentAllowance = wrapsIn ? 0n : await this.breaker
         .execute(() =>
           this.publicClient().readContract({
             address: tIn.contractId as Address,
             abi: ERC20_ABI,
             functionName: "allowance",
-            args: [senderAddress as Address, router],
+            args: [senderAddress as Address, this.router],
           })
         )
         .catch(() => 0n);
@@ -404,15 +315,13 @@ export class UniswapV3Provider extends BaseDEXProvider {
         const approveData = encodeFunctionData({
           abi: ERC20_ABI,
           functionName: "approve",
-          args: [router, amountInRaw],
+          args: [this.router, amountInRaw],
         });
         calls.push({ to: tIn.contractId, data: approveData });
       }
 
-      calls.push({ to: router, data: swapData, value: "0" });
+      calls.push({ to: this.router, data: swapData, value: "0" });
 
-      // Unwrap after the swap so the user ends up holding the native asset
-      // they asked for rather than its wrapped form.
       if (unwrapsOut) {
         const withdrawData = encodeFunctionData({
           abi: WRAPPED_NATIVE_ABI,
