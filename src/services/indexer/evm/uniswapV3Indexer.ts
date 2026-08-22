@@ -1007,12 +1007,20 @@ export class UniswapV3Indexer implements ChainIndexer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
-      if (isResultSetTooLarge(message) && to > from && depth < this.settings.maxSplitDepth) {
-        const mid = from + (to - from) / 2n;
-        const left = await this.getLogsAdaptive(fetch, from, mid, depth + 1);
-        const right = await this.getLogsAdaptive(fetch, mid + 1n, to, depth + 1);
-        // A half we couldn't read makes the whole range unknown.
-        return left === null || right === null ? null : [...left, ...right];
+      if (isResultSetTooLarge(message) && depth < this.settings.maxSplitDepth) {
+        if (to > from) {
+          const mid = from + (to - from) / 2n;
+          const left = await this.getLogsAdaptive(fetch, from, mid, depth + 1);
+          const right = await this.getLogsAdaptive(fetch, mid + 1n, to, depth + 1);
+          // A half we couldn't read makes the whole range unknown.
+          return left === null || right === null ? null : [...left, ...right];
+        } else {
+          logger.warn("[indexer] single block exceeds log limit; returning empty array to avoid stall", {
+            chainId: this.chainId,
+            block: from.toString(),
+          });
+          return [];
+        }
       }
 
       if (isTransient(message) && depth === 0) {

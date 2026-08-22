@@ -121,7 +121,6 @@ export function TokensLayout() {
             <img src="/logo.png" alt="AstroidBot Logo" className="w-7 h-7 object-contain shrink-0" />
             <div>
               <h1 className="text-sm font-bold text-title-text leading-tight">AstroidBot</h1>
-              <p className="text-[9px] text-muted-text">DexScreener AI</p>
             </div>
           </NavLink>
           <div className="flex items-center gap-2">
@@ -147,7 +146,6 @@ export function TokensLayout() {
               <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
               <div>
                 <h1 className="text-base font-bold text-title-text leading-tight">AstroidBot</h1>
-                <p className="text-[10px] text-muted-text">DexScreener AI</p>
               </div>
             </NavLink>
           </div>
@@ -276,7 +274,6 @@ export function TokensLayout() {
                   <img src="/logo.png" alt="AstroidBot Logo" className="w-7 h-7 object-contain shrink-0" />
                   <div>
                     <h1 className="text-sm font-bold text-title-text">AstroidBot</h1>
-                    <p className="text-[9px] text-muted-text">DexScreener AI</p>
                   </div>
                 </div>
                 <button

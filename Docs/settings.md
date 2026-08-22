@@ -1,84 +1,39 @@
 ---
-title: Settings
-category: Platform
-order: 10
+title: Settings & Configuration
+category: User Features
+order: 14
 ---
 
-# Settings & Configuration
+# Settings & Risk Configuration
 
-Configure your risk parameters, trading preferences, and account security.
+AstroidBot includes flexible risk controls to safeguard your capital across all trading activities.
 
-## Risk Settings
+---
 
-These parameters control how the bot manages your trading risk. Change them at any time — they apply immediately to the next cycle.
+## Risk Parameters
 
-### Web
-Go to **Settings** in the sidebar.
+You can adjust your risk parameters at any time from the Web Dashboard (**Settings**) or Telegram (**⚙️ Settings**):
 
-### Telegram
-Tap **⚙️ Settings** on the main menu. Use ◀ and ▶ buttons to adjust each value, or use natural language: _"set slippage to 200"_
+| Setting | Description | Recommended Range | Default |
+|---|---|---|---|
+| **Slippage Tolerance** | Maximum acceptable price movement between quote time and execution block. | 0.1% – 3.0% | 0.5% |
+| **Max Position Size (%)** | Maximum percentage of a wallet's balance to allocate to a single trade. | 5% – 50% | 25% |
+| **Daily Loss Limit (%)** | Maximum acceptable daily drawdown. All trading bots pause if daily loss hits this cap. | 1.0% – 15.0% | 5.0% |
+| **Rebalance Threshold (%)** | Portfolio drift percentage required to trigger automatic rebalancing. | 1.0% – 5.0% | 2.0% |
 
-### Parameters
+---
 
-| Setting | Description | Range | Default |
-|---------|-------------|-------|---------|
-| **Slippage (bps)** | Max acceptable price movement. If the price moves more than this between quote and execution, the trade is cancelled. | 10–1000 | 100 (1%) |
-| **Max Position (%)** | Maximum percentage of wallet balance to use in a single trade. Prevents over-exposure. | 1–100 | 25% |
-| **Daily Loss Limit (%)** | If daily losses exceed this percentage of portfolio value, further trades are halted. | 0.5–25 | 5% |
-| **Rebalance Threshold (%)** | Minimum allocation drift to trigger portfolio rebalancing. | 0.5–10 | 2% |
+## Per-Chain Overrides & Gas Sponsorship
 
-### Which settings are per chain
+- **Chain-Specific Slippage Overrides**: You can set individual slippage limits per blockchain (e.g. `0.3%` on Solana vs `1.0%` on Stacks) to account for differing pool dynamics.
+- **Gas Sponsorship Control**: On supported EVM networks (such as Base), account abstraction gas sponsorship can be enabled or toggled per chain.
 
-Two layers, and which layer a setting lives in follows from what it bounds.
+---
 
-**Slippage is per chain.** A Stacks AMM and a Solana aggregator are not the same
-trade at the same tolerance. The web Settings page lists every enabled chain
-below the account default; a chain left on *Inherit* uses that default, and
-clearing an override returns it to inheriting rather than pinning it at today's
-value.
+## Account Management
 
-**Max position, daily loss limit and rebalance threshold are account-wide.**
-They bound total exposure, so a per-chain copy would let someone running three
-chains take three times the position they asked to be limited to.
-
-**Gas sponsorship is per chain**, and only offered on chains that can sponsor
-at all — ERC-4337 custody with a bundler and a paymaster key. Chains that
-cannot are listed with the reason rather than hidden, so a missing toggle is
-explained instead of mysterious.
-
-> Per-chain preferences live in their own table. They previously shared one
-> with the account settings, and toggling sponsorship for a second chain
-> inserted a duplicate settings row carrying product defaults — after which
-> which risk limits were enforced depended on which row the database returned
-> first. If you are upgrading across that change, the migration keeps your
-> configured row and carries every sponsorship choice across.
-
-### When Settings Take Effect
-
-Settings are checked at two points:
-1. **At trade enqueue time** (strategy engine / personal trade cycle)
-2. **At trade execution time** (the background execution engine — re-checks because market may have moved)
-
-If a trade fails the pre-execution risk check, it's rejected and logged.
-
-## Account Settings
-
-### Web
-Go to **Account** in the sidebar.
-
-### Changing Password
-1. Enter your current password
-2. Enter your new password (8+ chars, 1 letter + 1 number)
-3. Click **Change Password**
-
-### Email Verification
-If your email shows as unverified, you can request a new verification email from the Account page.
-
-### Telegram Integration
-- **Link Telegram**: If you signed up via email, you can link your Telegram account from the Account page using the Telegram Login Widget
-- **Unlink Telegram**: You can disconnect your Telegram account if desired
-
-### Theme
-Toggle between **Light Mode** and **Dark Mode** from the sidebar (desktop) or the top bar (mobile). Your preference is saved locally.
-
-
+Go to **Account** in the Web Dashboard sidebar to:
+- Change your account password
+- Link or unlink your Telegram profile
+- Link your X or Farcaster social trading accounts
+- Toggle interface color theme (Dark Mode / Light Mode)

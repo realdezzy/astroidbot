@@ -95,12 +95,12 @@ export class RollupService {
         COALESCE(SUM(c."sells")
           FILTER (WHERE c."bucketStart" >= NOW() - INTERVAL '24 hours'), 0)    AS "sells24h"
 
-      FROM "IndexedPool" p
-      LEFT JOIN "PoolCandle" c
-        ON c."poolId" = p."id"
-       AND c."bucketStart" >= NOW() - INTERVAL '24 hours'
+      FROM "PoolCandle" c
+      JOIN "IndexedPool" p
+        ON p."id" = c."poolId"
       WHERE p."chainId" = ${chainId}
         AND p."baseToken" IS NOT NULL
+        AND c."bucketStart" >= NOW() - INTERVAL '24 hours'
       GROUP BY p."id"
     `);
 
@@ -255,7 +255,10 @@ export class RollupService {
 
     if (updates.length === 0) return 0;
 
-    await db.prisma.$transaction(updates);
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+      await db.prisma.$transaction(updates.slice(i, i + BATCH_SIZE));
+    }
     return updates.length;
   }
 

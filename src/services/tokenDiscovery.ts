@@ -27,7 +27,7 @@ import type { ChainId } from "../types/chain.js";
  *    run an indexer, and without this step it would be indexed and invisible.
  */
 
-export const MIN_LIQUIDITY_USD = 1_000;
+export const MIN_LIQUIDITY_USD = 10;
 
 export interface DiscoveryFilters {
   chainId?: ChainId;
@@ -123,7 +123,10 @@ export class TokenDiscoveryService {
     const indexed = await db.prisma.indexedToken.findMany({
       where: {
         chainId,
-        liquidityUsd: { gte: MIN_LIQUIDITY_USD },
+        OR: [
+          { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },
+          { volume24h: { gt: 0 } },
+        ],
         // No rollup yet means no liquidity reading either, so the floor above
         // can't be trusted to have been applied to real numbers.
         lastRolledUpAt: { not: null },
@@ -293,7 +296,11 @@ export class TokenDiscoveryService {
     }
 
     if (!filters.includeIlliquid) {
-      where.OR = [{ liquidityUsd: null }, { liquidityUsd: { gte: MIN_LIQUIDITY_USD } }];
+      where.OR = [
+        { liquidityUsd: null },
+        { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },
+        { volume24h: { gt: 0 } },
+      ];
     }
     if (filters.query) {
       const q = filters.query.trim();

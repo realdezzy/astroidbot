@@ -57,7 +57,7 @@ export function usePushNotifications() {
       const applicationServerKey = urlBase64ToUint8Array(publicKey);
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey,
+        applicationServerKey: applicationServerKey.buffer as ArrayBuffer,
       });
 
       await apiFetch("/push/subscribe", {

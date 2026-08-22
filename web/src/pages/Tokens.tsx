@@ -56,16 +56,6 @@ const TIMEFRAMES: { id: Timeframe; label: string }[] = [
 
 /**
  * Token discovery.
- *
- * Structured like DexScreener because that layout is genuinely well-suited to
- * the task — a dense sortable table with the timeframe columns side by side
- * lets you compare momentum across windows at a glance, which stacked cards
- * cannot. It is built on this app's theme tokens rather than hardcoded slate
- * shades, so it follows light/dark like every other page.
- *
- * The chain rail is driven by `/api/chains`, never a literal list: enabling a
- * chain in config makes it appear here automatically, and a chain this
- * deployment doesn't run can't be selected into an empty result.
  */
 export function Tokens() {
   const navigate = useNavigate();

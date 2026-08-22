@@ -1,89 +1,49 @@
 ---
-title: Limit Orders
-category: Features
-order: 9
+title: Limit Orders & Stop-Loss
+category: User Features
+order: 5
 ---
 
-# Limit Orders
+# Limit Orders & Stop-Loss
 
-Limit orders let you set a target price and walk away. The bot monitors prices every cycle and executes when your target is hit.
+AstroidBot allows you to set automated **Limit Orders** and **Stop-Loss** triggers across all supported blockchains. Your funds remain safely in your custody until market conditions hit your exact price target.
+
+---
 
 ## How Limit Orders Work
 
-1. You create an order specifying:
-   - Which token to buy or sell
-   - The amount
-   - The target price (in USD)
-2. On every bot cycle (every 60 seconds), the bot checks current prices
-3. When the price meets your target, the bot builds the swap transaction and broadcasts it
-4. The order is marked as filled and appears in your trade history
+Unlike traditional centralized exchange limit orders that lock up your balance in an order book, AstroidBot's limit order engine monitors live DEX price feeds 24/7. When the market price satisfies your target condition, AstroidBot automatically constructs, signs, and executes the swap on your behalf.
+
+---
+
+## Order Types
+
+1. **Buy Limit**: Triggers a buy order when the token price falls to or below your specified target.
+2. **Sell Limit (Take-Profit)**: Triggers a sell order when the token price rises to or above your target.
+3. **Stop-Loss**: Triggers a protection sell order if a token drops below a defined safety threshold, locking in profits or preventing catastrophic drawdowns.
+
+---
 
 ## Creating a Limit Order
 
-### Web
-1. Go to **Limit Orders** in the sidebar
-2. Click **➕ Create** (or **➕ New Order**)
-3. Fill in the form:
-   - **Chain** — picked first. An order can only fill on the chain its wallet
-     and pair live on, so this drives everything below it: the wallet list is
-     filtered to that chain, the token pickers show only that chain's
-     catalogue, and the default pair comes from the chain itself.
-   - **Wallets** — one or more wallets *on that chain* to place the order from
-   - **Direction** — BUY or SELL
-   - **Token In** — the token you're spending
-   - **Token Out** — the token you're buying
-   - **Amount** — how much to spend
-   - **Target Price (USD)** — the price at which to execute
-4. Click **Create Order**
+### On Web Dashboard
+1. Go to **Limit Orders** in the sidebar.
+2. Click **Create Limit Order**.
+3. Select your target **Chain** and **Wallet**.
+4. Choose the **Token Pair** (e.g. SOL / USDC).
+5. Specify your **Target Price** and **Order Amount**.
+6. Select **Expiry Duration** (1 Day, 7 Days, 30 Days, or Never).
+7. Click **Submit Order**.
 
-An order whose pair cannot route on the wallet's chain is rejected at creation
-with the chain named, rather than stored and left to fail later. Target prices
-are denominated in that chain's USD stablecoin.
+### Via Voice / AI Assistant
+Simply tell the assistant:
+- *"Set a limit order to buy 100 STX when price reaches $1.35"*
+- *"Set a stop loss to sell my SOL if price drops below $180"*
 
-### Telegram
-1. Tap **📋 Limit Orders** on the main menu
-2. Tap **➕ Create**
-3. Pick the token you want to buy/sell
-4. Choose BUY or SELL direction
-5. Enter the amount
-6. Enter the target price in USD
-7. Review and tap **✅ Place Order**
+---
 
-## Managing Orders
+## Managing Open Orders
 
-### Viewing Active Orders
-- **Web**: Go to **Limit Orders** page — all active orders shown in the table
-- **Telegram**: Tap **📋 Limit Orders** — shows each order with direction, amount, and target price
-
-### Canceling Orders
-- **Web**: Click the **Cancel** button on any order in the table
-- **Telegram**: Tap the **❌ Cancel** button next to any order
-
-### Order Status
-- **ACTIVE** — waiting for the target price to be reached
-- **PENDING_FILL** — price condition met, trade executing
-- **FILLED** — trade confirmed on-chain
-- **CANCELLED** — manually cancelled
-
-## Limit Order Execution
-
-**Price Checking:**
-The bot uses the USDCx price of the input token as a proxy for the real pair price. This works well for tokens that are directionally correlated with USDCx (the Stacks USD stablecoin). For exotic token pairs, the execution price may differ slightly from your target.
-
-**Execution Conditions:**
-- **BUY order**: executes when current price **≤** target price (buy when it drops to your target)
-- **SELL order**: executes when current price **≥** target price (sell when it rises to your target)
-
-**Expiry:**
-Orders can have an optional expiry time. If the price target isn't reached by the expiry date, the order is automatically cancelled.
-
-**Force After:**
-Orders can optionally "force execute" after a certain time regardless of price — useful for ensuring a trade happens by a deadline.
-
-## Fees
-
-Each limit order execution incurs the standard DEX fee (typically 0.3% / 30 bps, depending on the route and platform used). This fee is shown in the trade history after execution.
-
-## Multiple Wallets
-
-Limit orders support multiple wallets. When creating via the web dashboard, you can select multiple wallets with the **MultiWalletSelect** component. The bot creates a separate order for each selected wallet.
+You can monitor, edit, or cancel active limit orders at any time without network gas fees:
+- **On Web**: Visit the **Limit Orders** table to view target price progress indicators, status badges, and one-click **Cancel** buttons.
+- **On Telegram**: Tap **📋 Limit Orders** on the main menu to view active orders and cancel them with a single tap.

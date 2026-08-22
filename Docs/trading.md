@@ -1,78 +1,64 @@
 ---
-title: Trading
-category: Features
-order: 6
+title: Multi-Chain Swaps & Trading
+category: User Features
+order: 4
 ---
 
-# Trading Tokens
+# Multi-Chain Swaps & Trading
 
-Execute swaps on any chain this deployment runs. AstroidBot finds the best price across the DEXs registered for *that* chain — quotes are never mixed across chains, so a Base wallet is only ever priced by Base routers.
+AstroidBot provides high-speed DEX aggregation across major blockchain networks, automatically routing your orders through the deepest liquidity pools for optimal pricing and minimum price impact.
 
-## Quick Trade — Web
+---
 
-1. Go to **Trade** in the sidebar
-2. **Select wallets** — check the boxes for wallets you want to trade from (multi-wallet support)
-3. **Pick tokens** — choose the input token (e.g. STX) and output token (e.g. USDCx) from the searchable dropdowns
-4. **Choose direction** — the swap arrow can be rotated to switch buy/sell direction
-5. **Enter amount** — type how much of the input token to spend
-6. **Review quote** — the quote card shows:
-   - Estimated output amount
-   - Fee (in bps and absolute value)
-   - Price impact percentage
-7. **Click Execute Trade** — the trade is sent to the background execution worker
+## Supported Ecosystems & DEX Routers
 
-## Quick Trade — Telegram
+| Chain | Network ID | Supported DEX Routers | Native Asset | Stablecoin |
+|---|---|---|---|---|
+| **Solana** | `solana:mainnet` | Jupiter Aggregator | SOL | USDC |
+| **Stacks** | `stacks:mainnet` | ALEX, Bitflow, Velar, Faktory | STX | USDCx |
+| **Base** | `base:mainnet` | Uniswap V3 | ETH | USDC |
+| **Celo** | `celo:mainnet` | Ubeswap / Uniswap V3 | CELO | cUSD |
+| **Ethereum** | `ethereum:mainnet` | Uniswap V3 | ETH | USDC |
+| **Robinhood** | `robinhood:mainnet` | Uniswap V3 | ETH | USDC |
 
-1. Tap **🛒 Quick Trade** on the main menu
-2. Pick a token from the 16 available tokens
-3. Choose 🟢 BUY (spend STX) or 🔴 SELL (receive STX)
-4. Type the amount when prompted (e.g. `5.0`)
-5. Review the confirm screen — shows estimated output, fee, price impact, wallet used
-6. Tap **✅ Confirm Trade** to execute
+---
 
-## Trade Quote Preview
+## Executing a Swap on Web
 
-Before executing any trade, you can preview the expected result:
+1. Go to **Trade** in the Web Dashboard sidebar.
+2. Select your target **Chain** using the chain selector chips.
+3. Choose your **Wallet** for that specific chain.
+4. Select your **Input Asset** (e.g. USDC) and **Output Asset** (e.g. SOL or STX).
+5. Enter the amount to trade, or click a quick-percentage chip (`25%`, `50%`, `75%`, `100%`).
+6. Review the **Quote Preview**:
+   - **Exchange Rate**: Current conversion ratio.
+   - **Price Impact**: Percentage shift in pool price caused by your order size.
+   - **Routing DEX**: The DEX provider handling the trade execution.
+   - **Network Gas Fee**: Estimated transaction fee (sponsored where applicable).
+   - **Minimum Received**: Guaranteed output accounting for slippage settings.
+7. Click **Execute Trade**. Once broadcast, your transaction hash and live explorer link will be displayed.
 
-**Web**: Go to **Trade** page, enter amounts — the quote card updates live showing expected output, fee, and price impact.
+---
 
-The bot queries all registered DEXs and returns the best available route.
+## Executing a Swap on Telegram
 
-## Trade History
+1. Tap **🛒 Quick Trade** on the Telegram main menu.
+2. Select your desired chain from the interactive menu.
+3. Choose your token pair from the list or send a token symbol/address.
+4. Select **BUY** or **SELL**.
+5. Tap an amount preset button (`25%`, `50%`, `75%`, `Max`) or type a custom number.
+6. Review the quote summary card and tap **✅ Confirm Trade**.
 
-### Web
-Go to **Trades** in the sidebar. View all historical trades with:
-- Direction (BUY/SELL)
-- Input and output amounts with token symbols
-- Status: **CONFIRMED** (on-chain), **BROADCAST** (pending), **FAILED** (error)
-- Fee amounts
-- Transaction IDs
+---
 
-### Telegram
-Tap **📈 Trades** on the main menu. Shows last 20 trades with direction, amounts, and status emojis.
+## Automatic Native Token Wrapping
 
-## Supported Tokens & DEXs
+When trading native assets like **ETH** or **CELO** on EVM networks, AstroidBot automatically handles wrapping into **WETH** / **WCELO** and unwrapping back to native assets as required by Uniswap V3 smart contracts in a single atomic transaction. You do not need to wrap your tokens manually beforehand.
 
-Liquidity is aggregated per chain. On Stacks (typically 200+ tokens cached automatically):
-- **ALEX**: Standard and stable token pools (STX, USDCx, ALEX, USDA)
-- **Bitflow**: Stablecoins and protocol tokens (USDCx, USDA, STX)
-- **Velar**: Protocol tokens and liquidity pools (STX, VELAR, etc.)
-- **Faktory**: Meme tokens and newly launched bonding curve assets (e.g. AGENTX, WELSH, etc.)
+---
 
-On EVM chains, any Uniswap-V3-family router named in the chain's descriptor —
-one provider serves Base, Celo, Ethereum and anything added through
-`CUSTOM_EVM_CHAINS`. On Solana, the Jupiter aggregator.
+## Slippage & Price Impact Protection
 
-Token registries and liquidity pool metadata are cached and refreshed automatically in the background, per chain.
-
-## Trade Execution Flow
-
-Behind the scenes, every trade follows this pipeline:
-
-1. **Risk Check** — validates against your daily loss limit, position size caps, and available balance
-2. **DEX Routing** — queries all providers for the best price
-3. **Payload Building** — constructs the call in the shape that chain executes: a Clarity contract call on Stacks, a to/data/value batch on EVM, a serialized transaction on Solana
-4. **Signing** — decrypts wallet key, signs the transaction
-5. **Broadcasting** — sends to that chain's RPC through its adapter
-6. **Confirmation** — polls the network for transaction status (up to 20 attempts, 30s apart)
-7. **Notification** — you receive a Telegram alert (if linked) and the dashboard updates via WebSocket
+- **Slippage Tolerance**: Defaults to `0.5%`. If market price moves unfavorably by more than your set tolerance during execution, the transaction fails safely to protect your funds.
+- **Price Impact Warnings**: If an order size exceeds local pool depth resulting in a price impact greater than `3.0%`, AstroidBot highlights a warning banner before confirmation.
+- **Quote Expiration**: Quotes expire after 30 seconds to prevent execution against stale market rates.

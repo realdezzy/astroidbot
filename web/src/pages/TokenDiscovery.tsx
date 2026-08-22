@@ -171,7 +171,7 @@ export function TokenDiscovery() {
         ))}
       </div>
 
-      {/* DexScreener Styled Discovery Table */}
+      {/* Discovery Table */}
       <div className="overflow-x-auto glass-card">
         <table className="w-full min-w-[1000px] border-collapse text-sm">
           <thead>

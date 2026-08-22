@@ -68,7 +68,7 @@ const envSchema = z.object({
   INDEXER_MAX_ADDRESSES_PER_FILTER: z.coerce.number().int().positive().default(100),
   INDEXER_MAX_SPLIT_DEPTH: z.coerce.number().int().min(0).default(12),
   INDEXER_RETRY_BACKOFF_MS: z.coerce.number().int().min(0).default(1_000),
-  INDEXER_MIN_POOL_LIQUIDITY_USD: z.coerce.number().min(0).default(1_000),
+  INDEXER_MIN_POOL_LIQUIDITY_USD: z.coerce.number().min(0).default(10),
   INDEXER_SWAP_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   INDEXER_CANDLE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   INDEXER_BACKFILL_WINDOW_HOURS: z.coerce.number().int().min(0).default(24),

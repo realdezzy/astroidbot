@@ -4,98 +4,93 @@ category: Overview
 order: 2
 ---
 
-# Getting Started
+# Getting Started with AstroidBot
 
-This guide walks you through setting up your AstroidBot account from scratch.
+This guide will walk you through setting up your account, creating your first multi-chain wallet, and placing your first trade in less than 3 minutes.
 
-## 1. Create an Account
+---
 
-### Via Web Dashboard
-1. Open the web dashboard at [here](https://astroidbot.xyz/dashboard)
-2. Click **Login** (top right)
-3. Switch to the **Register** tab
-4. Enter your email and a password (8+ characters, must include letters and numbers)
-5. Click **Register**
-6. Check your email for a verification link and click it
+## Step 1: Create Your Account
 
-### Via Telegram
-1. Open Telegram and search for the bot (ask your admin for the username, e.g. `@migoTestBankbot`)
-2. Send `/start` — this creates your account automatically
-3. To link an email (so you can also use the web dashboard), send `/link_email` and follow the prompts
+### Option A: Via Web Dashboard
+1. Navigate to the Web Dashboard at [astroidbot.xyz](https://astroidbot.xyz)
+2. Click **Get Started** or **Sign In** in the top navigation bar.
+3. Select **Register**, enter your email address, and choose a secure password.
+4. Click **Create Account**. Your non-custodial account is created instantly.
 
-## 2. Fund Your Wallet
+### Option B: Via Telegram Bot
+1. Open Telegram and search for `@AstroidBot`.
+2. Send `/start` to activate the bot.
+3. The bot will automatically create your account and initialize your primary multi-chain profile.
+4. (Optional) Link your email via `/link_email` so you can seamlessly access both Web and Telegram interfaces.
 
-AstroidBot automatically creates your first wallet when you sign up. Find its address:
+---
 
-**Via Telegram:** Tap **💼 Wallets** on the main menu — your wallet address and balance are shown there.
+## Step 2: Set Up & Fund Your Multi-Chain Wallets
 
-**Via Web:** Go to **Wallets** in the sidebar — each wallet card shows the address with a copy button.
+AstroidBot generates non-custodial wallets for your account across all supported chains.
 
-Send STX (Stacks native token) to this address from any Stacks wallet or exchange. The balance will appear in AstroidBot after the transaction confirms on-chain (typically ~1 minute).
+### View Your Wallet Addresses
+- **On Web**: Go to **Wallets** in the left sidebar. You will see card representations for each enabled chain (Solana, Stacks, Base, Celo, Ethereum, Robinhood).
+- **On Telegram**: Tap **💼 Wallets** on the main menu to view wallet addresses grouped by chain.
 
-## 3. Explore the Bot
+### Transferring Funds
+1. Copy the deposit address for your target chain (e.g., your Solana or Base address).
+2. Transfer funds (SOL, STX, ETH, or stablecoins like USDC) from your personal wallet or exchange.
+3. Balances will update automatically on your dashboard once confirmed on-chain.
 
-### Telegram Quick Tour
-Send `/start` to see the main menu with buttons:
-- **📊 Portfolio** — current balances across all wallets
-- **💼 Wallets** — create, import, reveal, delete wallets
-- **📈 Trades** — recent trade history
-- **📋 Limit Orders** — view and manage limit orders
-- **🛒 Quick Trade** — execute a swap
-- **🤖 Agents** — manage AI trading agents
-- **⚙️ Settings** — risk parameters (slippage, position limits)
+---
 
-### Web Dashboard Tour
-The sidebar has links to every page:
-- **Dashboard** — overview with portfolio value, bot status, recent trades
-- **Portfolio** — allocation charts, PnL performance, per-wallet breakdown
-- **Wallets** — wallet management (create, import, reveal keys)
-- **Trade** — swap tokens with quote preview
-- **Trades** — full trade history with filters
-- **Limit Orders** — create and manage limit orders
-- **Agents** — AI agents and their strategies
-- **Tokens** — token explorer and block list
-- **Settings** — risk, slippage, position configuration
-- **Account** — email, password, linked accounts
+## Step 3: Explore Key Features
 
-## 4. Configure Your Settings
+### 🎙️ AI Voice & Natural Language Commands
+- Try typing or speaking commands naturally in the AI terminal on the Dashboard:
+  - *"Show my total portfolio value across all chains"*
+  - *"Swap 100 USDC to SOL on Solana"*
+  - *"Set a limit order to buy STX at $1.50"*
 
-Before trading, review your risk settings:
+### 🔍 Token Discovery & Market Screener
+- Click **Token Discovery** in the navigation bar to browse trending assets across all networks.
+- View 24-hour volume metrics, price changes, and TradingView charts.
+- Click **Trade** on any token page to auto-fill the order preform for instant execution.
 
-**Via Telegram:** Tap **⚙️ Settings** on the main menu. Use the +/- buttons to adjust:
-- **Slippage** — maximum acceptable price movement (in basis points, 100 = 1%)
-- **Max Position** — maximum percentage of your wallet to use per trade
-- **Daily Loss** — stop trading if daily losses exceed this percentage
-- **Rebalance** — trigger rebalancing when allocation drifts by this percentage
+### 🤖 Automated Strategies & AI Agents
+- Visit **Strategies** to configure automated Grid Trading or Dollar-Cost Averaging (DCA).
+- Assign your strategies to an **AI Agent** and choose its operating mode (**Off**, **Advisor**, or **Autonomous**).
 
-**Via Web:** Go to **Settings** in the sidebar. Same options with input fields.
+---
 
-## 5. Try Your First Trade
+## Step 4: Configure Risk & Safety Parameters
 
-**Via Telegram:**
-1. Tap **🛒 Quick Trade** on the main menu
-2. Pick a token (e.g. USDCx)
-3. Choose **BUY** (spend STX to get USDCx) or **SELL** (sell USDCx for STX)
-4. Type the amount (e.g. `5.0`)
-5. Review the quote (shows estimated output, fee, price impact)
-6. Tap **✅ Confirm Trade**
+Before executing large trades, ensure your risk preferences match your strategy:
+1. Go to **Settings** in the Web Dashboard or tap **⚙️ Settings** in Telegram.
+2. Set your default **Slippage Tolerance** (e.g., `0.5%` or `1.0%`).
+3. Set your **Max Position Size** per trade to prevent accidental over-allocation.
+4. Configure **Daily Loss Limits** to pause automated bot activity if market volatility exceeds your threshold.
 
-**Via Web:**
-1. Go to **Trade** in the sidebar
-2. Select wallets to use (checkbox list)
-3. Pick input and output tokens
-4. Enter the amount
-5. Review the quote preview
-6. Click **Execute Trade**
+---
 
-## 6. Set Up Automation
+## Step 5: Place Your First Trade
 
-Now that you can trade manually, try automating:
-1. [Create a trading strategy](/Docs/strategies) — DCA, grid, sniper, etc.
-2. [Set up an AI agent](/Docs/agents) to run strategies on schedule
-3. [Place limit orders](/Docs/limit-orders) for hands-off execution
+### On Web Dashboard:
+1. Click **Trade** in the sidebar.
+2. Select your target **Chain** (e.g., Solana or Base).
+3. Select your **Input Token** (e.g., USDC) and **Output Token** (e.g., SOL).
+4. Enter the amount to trade.
+5. Review the real-time DEX quote (showing price impact, routing path, and estimated fees).
+6. Click **Execute Trade**.
 
-## Need Help?
+### On Telegram Bot:
+1. Tap **🛒 Quick Trade** on the main menu.
+2. Select the chain and token pair.
+3. Tap a quick-amount chip (`25%`, `50%`, `75%`, `Max`) or type a custom amount.
+4. Tap **✅ Confirm Trade**.
 
-- On Telegram: send `/help` for the command list, or type any question naturally (e.g. "how do I create a wallet?")
-- On the web dashboard: use the AI chat bar at the top of the Dashboard page
+---
+
+## Next Steps
+
+- Learn more about [Voice & AI Commands](/Docs/voice-ai-assistant)
+- Master [Multi-Chain Swaps & DEX Routing](/Docs/trading)
+- Set up [Automated Grid Bots & DCA](/Docs/strategies)
+- Configure [Social Trading on X & Farcaster](/Docs/social-trading)

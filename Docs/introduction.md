@@ -6,54 +6,61 @@ order: 1
 
 # Introduction to AstroidBot
 
-AstroidBot is your AI-powered trading companion on the Stacks blockchain. It automates trading through Telegram, a web dashboard, and autonomous AI agents — so you can trade smarter without staring at charts all day.
+Welcome to **AstroidBot** — the next-generation AI-powered crypto trading suite designed for seamless multi-chain execution. AstroidBot combines natural language voice and text AI commands, non-custodial wallet management, automated quantitative strategies, and real-time token screener across major blockchain ecosystems.
 
-## What Can AstroidBot Do?
+Whether you are trading on **Solana**, **Stacks**, **Base**, **Celo**, **Ethereum**, or **Robinhood Chain**, AstroidBot eliminates complex DEX interfaces and chart overload so you can trade smarter, faster, and hands-free.
 
-- **Trade automatically** — set up strategies that run on schedule (rebalance, DCA, grid, sniper, copy)
-- **Execute swaps** — buy and sell tokens instantly via Telegram or the web dashboard
-- **Place limit orders** — set a target price and walk away; the bot executes when the market hits it
-- **Run AI agents** — let an LLM analyze the market and suggest or execute trades autonomously
-- **Manage wallets** — generate, import, and track multiple Stacks wallets securely
-- **Ask in plain English** — type "buy 5 STX for USDCx" or "how's my portfolio?" and the AI handles it
+---
 
-## Two Ways to Use AstroidBot
+## What Makes AstroidBot Different?
 
-### 1. Telegram Bot
-The Telegram bot is your quick-access control center. Use it to:
-- Run trades on the go
-- Check your portfolio balance
-- Create and cancel limit orders
-- Manage AI agents (run, toggle, delete)
-- Ask natural language questions like "show my recent trades"
+- **🎙️ Voice & AI Command Execution**: Place trades, query portfolio status, and schedule smart limit orders in plain natural language (e.g. *"Swap 500 USDC to STX when RSI drops below 30"*).
+- **🌐 Seamless Multi-Chain Coverage**: Trade across Solana (Jupiter), Stacks (ALEX, Bitflow, Velar), and EVM networks (Uniswap V3 on Base, Celo, Ethereum, Robinhood) from a single unified interface.
+- **🤖 Autonomous AI Trading Agents**: Deploy AI trading agents that monitor market signals 24/7, provide advisor insights, or execute approved strategies automatically.
+- **⚡ Automated Quantitative Strategies**: Run Grid Trading, Dollar-Cost Averaging (DCA), Token Sniping, and Social Copy-Trading with institutional-grade risk management.
+- **🔍 Live Token Screener & Market Radar**: Discover trending tokens across all chains with real-time 24h volume metrics, liquidity scoring, and integrated TradingView charts.
+- **📱 Dual Interface Experience**: Use our high-speed Web Dashboard for deep analytics or our button-first Telegram Bot for trading on the move.
+- **🔐 Non-Custodial Hardware-Grade Security**: Your keys remain yours. All wallet private keys are encrypted at rest with AES-256-GCM and stored securely.
 
-All Telegram screens use inline buttons — tap to navigate, no typing commands for most actions.
+---
 
-### 2. Web Dashboard
-The web dashboard is your analytics and strategy headquarters. Use it to:
-- View TradingView financial charts (PnL, volume, allocation)
-- Create and manage trading strategies with detailed configuration
-- Set up AI agents and assign strategies to them
-- Execute detailed trades with quote previews
-- Manage wallet keys and settings
+## Two Interfaces, One Unified Engine
 
-## Key Concepts
+### 1. Web Dashboard
+The Web Dashboard is your central command center for deep analytics, token discovery, strategy configuration, and visual charting:
+- Explore real-time token screeners and TradingView charts
+- Create and fine-tune automated trading strategies (Grid, DCA, Limit Orders)
+- Monitor AI Agent decision logs and performance metrics
+- Calculate projected strategy returns with the Yield Calculator
+- Manage non-custodial multi-chain wallets securely
 
-### Wallets
-Every trade needs a wallet. When you first sign up, AstroidBot automatically creates one. You can add more wallets (generate new keys or import existing ones). All private keys are encrypted with AES-256-GCM and never exposed in plaintext.
+### 2. Telegram Bot
+The Telegram Bot provides instant, button-first mobile control:
+- Execute instant swaps with preset amount chips (`25%`, `50%`, `75%`, `Max`)
+- Monitor portfolio performance grouped by chain
+- Set up and receive instant alerts for executed trades and limit orders
+- Interact with the AI assistant via plain text or voice messages on the go
 
-### Strategies vs Agents
-- **Strategy** — a deterministic trading rule (e.g. "buy 1 STX of USDCx every hour"). Configure it once, it runs on schedule.
-- **Agent** — an AI-powered worker that can run multiple strategies AND make its own decisions. Agents have three modes:
-  - **Off** — runs assigned strategies only, no AI decisions
-  - **Advisor** — logs AI analysis but doesn't trade (safe preview)
-  - **Autonomous** — executes AI decisions alongside strategies
+---
 
-### DEX Routing
-AstroidBot automatically finds the best price across available DEXs (ALEX, Bitflow, Velar, Faktory) for every trade. You don't need to know which exchange to use — the bot picks the best route.
+## Key Core Concepts
 
-## Next Steps
-1. [Set up your account and link Telegram](/Docs/getting-started)
-2. [Explore the Telegram bot](/Docs/telegram-bot)
-3. [Browse the web dashboard](/Docs/dashboard)
-4. [Create your first strategy](/Docs/strategies)
+### Multi-Chain Wallets
+Every trade executes through a dedicated wallet on your target blockchain. You can generate fresh non-custodial keypairs or import existing keys for Solana, Stacks, or EVM chains.
+
+### Strategies vs. AI Agents
+- **Strategy**: A deterministic set of rules (e.g., *"Buy $50 of SOL every day at 12:00 UTC"*).
+- **AI Agent**: An intelligent worker that monitors market conditions, evaluates technical indicators, and manages multiple strategies in **Off**, **Advisor**, or **Autonomous** mode.
+
+### Unified DEX Routing
+AstroidBot automatically routes your swaps through the deepest liquidity pools on each chain (Jupiter on Solana, ALEX/Bitflow/Velar on Stacks, Uniswap V3 on EVM) to guarantee best price execution and minimal slippage.
+
+---
+
+## Quick Navigation
+
+1. [Getting Started Guide](/Docs/getting-started)
+2. [Voice & AI Command Assistant](/Docs/voice-ai-assistant)
+3. [Multi-Chain Swaps & Trading](/Docs/trading)
+4. [Automated Strategies & Grid Bots](/Docs/strategies)
+5. [Token Discovery & Screener](/Docs/token-discovery)
