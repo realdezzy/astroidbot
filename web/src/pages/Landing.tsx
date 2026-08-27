@@ -9,8 +9,6 @@ import {
   ChevronRight,
   ChevronLeft,
   Sparkles,
-  Sun,
-  Moon,
   Mic,
   BarChart3,
   Flame,
@@ -117,39 +115,6 @@ export function Landing() {
     setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
   };
 
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const stored = localStorage.getItem("theme") as "light" | "dark" | null;
-    if (stored) return stored;
-    if (window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
-    return "dark";
-  });
-
-  useEffect(() => {
-    if (theme === "light") {
-      document.documentElement.classList.add("light");
-    } else {
-      document.documentElement.classList.remove("light");
-    }
-  }, [theme]);
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
-    const handleChange = (e: MediaQueryListEvent) => {
-      const stored = localStorage.getItem("theme");
-      if (!stored) {
-        setTheme(e.matches ? "light" : "dark");
-      }
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, []);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    localStorage.setItem("theme", nextTheme);
-  };
-
   const getAPY = () => {
     switch (strategy) {
       case "conservative":
@@ -223,13 +188,6 @@ export function Landing() {
           </nav>
 
           <div className="flex-grow flex items-center justify-end gap-2 sm:gap-4">
-            <button
-              onClick={toggleTheme}
-              className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors cursor-pointer"
-              title="Toggle theme"
-            >
-              {theme === "dark" ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-indigo-500" />}
-            </button>
             {user ? (
               <Link
                 to="/dashboard"

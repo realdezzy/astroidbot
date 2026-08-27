@@ -1,11 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Outlet, NavLink, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   LogOut,
-  Sun,
-  Moon,
   Menu,
   X,
   Search,
@@ -42,26 +40,6 @@ export function TokensLayout() {
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState(searchParams.get("q") ?? "");
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const stored = localStorage.getItem("theme") as "light" | "dark" | null;
-    if (stored) return stored;
-    if (window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
-    return "dark";
-  });
-
-  useEffect(() => {
-    if (theme === "light") {
-      document.documentElement.classList.add("light");
-    } else {
-      document.documentElement.classList.remove("light");
-    }
-  }, [theme]);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    localStorage.setItem("theme", nextTheme);
-  };
 
   const handleLogout = async () => {
     await logout();
@@ -124,12 +102,6 @@ export function TokensLayout() {
             </div>
           </NavLink>
           <div className="flex items-center gap-2">
-            <button
-              onClick={toggleTheme}
-              className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover transition-colors"
-            >
-              {theme === "dark" ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-indigo-500" />}
-            </button>
             <button
               onClick={() => setMobileOpen(true)}
               className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover transition-colors"
@@ -216,16 +188,6 @@ export function TokensLayout() {
           </div>
 
           <div className="p-3 border-t border-sidebar-border space-y-3">
-            <button
-              onClick={toggleTheme}
-              className="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-muted-text hover:text-title-text hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2">
-                {theme === "dark" ? <Sun className="w-3.5 h-3.5 text-yellow-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-500" />}
-                <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
-              </div>
-            </button>
-
             {user ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-2.5 px-2">

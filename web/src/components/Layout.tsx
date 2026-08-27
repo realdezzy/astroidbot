@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -11,8 +11,6 @@ import {
   ArrowRightLeft,
   Wallet,
   PieChart,
-  Sun,
-  Moon,
   Menu,
   X,
   MessageSquare,
@@ -42,26 +40,6 @@ export function Layout() {
   const navigate = useNavigate();
   const { isSubscribed, subscribe, unsubscribe, isSupported, loading: pushLoading } = usePushNotifications();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const stored = localStorage.getItem("theme") as "light" | "dark" | null;
-    if (stored) return stored;
-    if (window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
-    return "dark";
-  });
-
-  useEffect(() => {
-    if (theme === "light") {
-      document.documentElement.classList.add("light");
-    } else {
-      document.documentElement.classList.remove("light");
-    }
-  }, [theme]);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    localStorage.setItem("theme", nextTheme);
-  };
 
   const handleTogglePush = async () => {
     if (isSubscribed) {
@@ -100,12 +78,6 @@ export function Layout() {
               {isSubscribed ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
             </button>
           )}
-          <button
-            onClick={toggleTheme}
-            className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors"
-          >
-            {theme === "dark" ? <Sun className="w-5 h-5 text-yellow-400" /> : <Moon className="w-5 h-5 text-indigo-500" />}
-          </button>
           <button
             onClick={() => setMobileOpen(true)}
             className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors"
@@ -161,16 +133,6 @@ export function Layout() {
               {pushLoading && <span className="text-xs text-brand-400 animate-pulse">...</span>}
             </button>
           )}
-
-          <button
-            onClick={toggleTheme}
-            className="flex items-center justify-between w-full px-3 py-2 text-sm text-muted-text hover:text-title-text hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
-          >
-            <div className="flex items-center gap-2">
-              {theme === "dark" ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-indigo-500" />}
-              <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
-            </div>
-          </button>
 
           <div className="flex items-center gap-3 px-2">
             <div className="w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center text-sm font-bold text-white shrink-0">

@@ -55,15 +55,15 @@ export function TradingViewChart({ candles, timeframe = "5m", theme = "dark" }: 
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#10b981",
-      downColor: "#ef4444",
+      upColor: "#00e676",
+      downColor: "#ff2a4b",
       borderVisible: false,
-      wickUpColor: "#10b981",
-      wickDownColor: "#ef4444",
+      wickUpColor: "#00e676",
+      wickDownColor: "#ff2a4b",
     });
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
-      color: "#3b82f6",
+      color: "#00d2ff",
       priceFormat: {
         type: "volume",
       },
@@ -102,7 +102,7 @@ export function TradingViewChart({ candles, timeframe = "5m", theme = "dark" }: 
       return {
         time: timeInSec as any,
         value: c.volume,
-        color: c.close >= c.open ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)",
+        color: c.close >= c.open ? "rgba(0, 230, 118, 0.4)" : "rgba(255, 42, 75, 0.4)",
       };
     });
 
