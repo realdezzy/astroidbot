@@ -56,6 +56,12 @@ const envSchema = z.object({
   CUSTOM_EVM_CHAINS: z.string().default(""),
   JUPITER_API_KEY: z.string().optional(),
   MARKET_DATA_PROVIDER: z.enum(["internal", "dexscreener", "auto"]).default("internal"),
+  // Read off process.env before, which is why a typo in either was silent.
+  CLICKHOUSE_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("false"),
+  CLICKHOUSE_URL: z.string().url().default("http://localhost:8123"),
   INDEXER_POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().optional(),
   INDEXER_PORT: z.coerce.number().int().positive().default(8007),
   INDEXER_LOCK_TTL_MS: z.coerce.number().int().positive().default(300_000),
@@ -124,6 +130,13 @@ export class ConfigManager {
 
     Logger.setLevel(Logger.fromString(this.config.LOG_LEVEL));
 
+    // Throws on a malformed URL. Better at startup than as a chain that looks
+    // enabled and silently talks to nothing.
+    const overrides = Object.keys(this.rpcOverrides);
+    if (overrides.length > 0) {
+      logger.info("Per-chain RPC overrides in effect", { vars: overrides });
+    }
+
     logger.info("Configuration loaded successfully", {
       aiProvider: this.config.AI_PROVIDER,
       network: this.config.STACKS_NETWORK,
@@ -163,6 +176,38 @@ export class ConfigManager {
     return this.config.BLOCKED_TOKENS.split(",")
       .map((t) => t.trim())
       .filter(Boolean);
+  }
+
+  /**
+   * Per-chain RPC overrides, as `RPC_URL_<CHAIN>_<NETWORK>` → url.
+   *
+   * These cannot be zod fields — the names depend on which chains a deployment
+   * enables — but that is not a reason to leave them unvalidated and
+   * undiscoverable. They were read straight off `process.env` at six call
+   * sites, so a typo'd variable name silently changed nothing, and the only
+   * symptom was a chain quietly running against its public default endpoint.
+   *
+   * Validated here and logged at startup, so what each chain is actually
+   * talking to is a fact in the first few lines of the log.
+   */
+  get rpcOverrides(): Record<string, string> {
+    const out: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!key.startsWith("RPC_URL_") || !value) continue;
+
+      try {
+        new URL(value);
+        out[key] = value;
+      } catch {
+        throw new Error(
+          `${key} is not a valid URL. Expected something like ` +
+            `https://base-mainnet.example.com/v2/<key>, got "${value}".`
+        );
+      }
+    }
+
+    return out;
   }
 
   get telegramAdminIds(): bigint[] {

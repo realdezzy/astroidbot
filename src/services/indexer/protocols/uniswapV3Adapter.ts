@@ -1,23 +1,14 @@
-import { parseAbiItem } from "viem";
 import type { ChainId } from "../../../types/chain.js";
 import type { SwapEvent, PoolCreatedEvent } from "../events/canonical.js";
 import type { DexAdapter } from "./dexAdapter.js";
 import type { TrackedPool } from "../types.js";
 import { priceFromSqrtX96 } from "../priceMath.js";
 
-const POOL_CREATED_EVENT = parseAbiItem(
-  "event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool)"
-);
-
-const SWAP_EVENT = parseAbiItem(
-  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
-);
-
 export class UniswapV3Adapter implements DexAdapter {
   readonly dexId = "uniswap-v3";
   readonly chainFamily = "evm";
 
-  canHandle(dexId: string, chainId: ChainId): boolean {
+  canHandle(dexId: string, _chainId: ChainId): boolean {
     return dexId.toLowerCase().includes("uniswap-v3") || dexId.toLowerCase().includes("pancakeswap-v3");
   }
 

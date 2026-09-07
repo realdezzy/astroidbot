@@ -3,9 +3,10 @@ import { ConfigManager } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { DatabaseService } from "./db.js";
-import { createPublicClient, formatUnits, http } from "viem";
-import { base, baseSepolia } from "viem/chains";
+import { formatUnits, type PublicClient } from "viem";
 import { ERC20_ABI } from "./chains/evm/abis.js";
+import { publicClientFor } from "./chains/evm/evmClient.js";
+import { hasMulticall3, multicallRead } from "./chains/evm/multicall.js";
 import { familyOfChainId } from "../types/chain.js";
 import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
 import { DEFAULT_CHAIN_FOR_FAMILY } from "./chains/descriptors/index.js";
@@ -149,21 +150,36 @@ export class PortfolioManager {
     return balances;
   }
 
+  /**
+   * ERC-20 and native balances for one wallet, on that wallet's own chain.
+   *
+   * The chain used to be hardcoded to Base: `fetchBalances` resolved the
+   * wallet's ChainId, threaded it to the Solana path, and dropped it here,
+   * building its client from BASE_NETWORK/BASE_RPC_URL. A Celo, Ethereum or
+   * Robinhood wallet therefore had its balances read off Base — which returns
+   * successfully, with zeros, so it looked like an empty wallet rather than a
+   * misrouted query.
+   */
   private async fetchEvmBalances(
     address: string,
     swappableTokens: SwappableToken[],
     ignoreDust: boolean,
-    userId?: number
+    userId?: number,
+    chainId?: string
   ): Promise<TokenBalance[]> {
-    const config = ConfigManager.getInstance().config;
-    const isMainnet = config.BASE_NETWORK === "mainnet";
-    const chain = isMainnet ? base : baseSepolia;
-    const rpcUrl = config.BASE_RPC_URL || chain.rpcUrls.default.http[0]!;
+    const registryOfChains = ChainAdapterRegistry.getInstance();
+    const resolvedChainId = chainId ?? DEFAULT_CHAIN_FOR_FAMILY.evm!;
 
-    const client = createPublicClient({
-      chain,
-      transport: http(rpcUrl),
-    });
+    if (!registryOfChains.has(resolvedChainId)) {
+      logger.warn("Cannot read EVM balances for a chain that is not enabled", {
+        address,
+        chainId: resolvedChainId,
+      });
+      return [];
+    }
+
+    const descriptor = registryOfChains.get(resolvedChainId).descriptor;
+    const client = publicClientFor(descriptor);
 
     const registry = DEXRegistry.getInstance();
 
@@ -182,81 +198,96 @@ export class PortfolioManager {
     const allowedTokens = ConfigManager.getInstance().allowedTokens;
     const blockedTokens = ConfigManager.getInstance().blockedTokens;
 
-    let ethBalance = 0;
-    let ethPrice = 0;
+    let nativeBalance = 0;
+    let nativePrice = 0;
     try {
       const rawBalance = await client.getBalance({ address: address as `0x${string}` });
       // formatUnits, not Number(raw)/1e18 — a wei value above 2^53 loses
       // precision as a double before the division.
-      ethBalance = Number(formatUnits(rawBalance, 18));
-      // Scoped to "evm": unscoped, a Stacks provider listing a "WETH" symbol
-      // would answer first and price Base ETH off the wrong chain.
-      ethPrice = await registry.getTokenPrice("WETH", "evm");
+      nativeBalance = Number(formatUnits(rawBalance, descriptor.nativeDecimals));
+      // Scoped to this ChainId, not the bare "evm" family. A family scope
+      // matches every EVM DEX on every EVM chain, so a Celo wallet's CELO
+      // could be priced by a Base router that has never heard of it.
+      nativePrice = await registry.getTokenPrice(descriptor.nativeSymbol, resolvedChainId);
     } catch (err) {
-      logger.warn("Failed to fetch ETH balance", { address, error: err instanceof Error ? err.message : String(err) });
+      logger.warn("Failed to fetch native balance", {
+        address,
+        chainId: resolvedChainId,
+        symbol: descriptor.nativeSymbol,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     const balances: TokenBalance[] = [];
-    if (ethBalance > 0) {
+    if (nativeBalance > 0) {
       // usdValue is 0 when no on-chain price was available. Left uninvented
-      // rather than defaulted to a guessed ETH price, because this figure
-      // feeds RiskManager position sizing.
-      const usdValue = ethBalance * ethPrice;
+      // rather than defaulted to a guessed price, because this figure feeds
+      // RiskManager position sizing.
+      const usdValue = nativeBalance * nativePrice;
       if (ignoreDust || usdValue >= this.dustThresholdUsd) {
         balances.push({
-          token: "ETH",
-          symbol: "ETH",
-          balance: ethBalance,
+          token: descriptor.nativeSymbol,
+          symbol: descriptor.nativeSymbol,
+          balance: nativeBalance,
           usdValue,
         });
       }
     }
 
-    const evmTokens = swappableTokens.filter(
-      (t) => (t.chainFamily ?? (t.contractId.startsWith("0x") ? "evm" : "stacks")) === "evm"
+    // Scoped to this chain, not to the EVM family. Filtering by family alone
+    // put Base's USDC in a Celo wallet's balance list, where the read returns
+    // zero and the row silently vanishes — or worse, returns a real balance
+    // for a same-address token on the other chain.
+    const chainTokens = swappableTokens.filter((token) => {
+      if (token.chainId) return token.chainId === resolvedChainId;
+      // Older callers pass no chainId. Fall back to the family test, which is
+      // what this did for every token before.
+      const family = token.chainFamily ?? (token.contractId.startsWith("0x") ? "evm" : "stacks");
+      return family === "evm";
+    });
+
+    const wanted = chainTokens.filter((token) => {
+      if (allowedTokens.length > 0 && !allowedTokens.includes(token.contractId)) return false;
+      if (blockedTokens.length > 0 && blockedTokens.includes(token.contractId)) return false;
+      return !userBlockedSet.has(token.contractId);
+    });
+
+    // One batched call rather than one `eth_call` per listed token. This runs
+    // on a user-facing request, and the token list grows with every chain the
+    // deployment enables.
+    const raw = await batchBalanceOf(
+      client,
+      resolvedChainId,
+      address,
+      wanted.map((t) => t.contractId)
     );
 
-    const tokenBalances = await Promise.all(
-      evmTokens.map(async (token) => {
-        if (allowedTokens.length > 0 && !allowedTokens.includes(token.contractId)) return null;
-        if (blockedTokens.length > 0 && blockedTokens.includes(token.contractId)) return null;
-        if (userBlockedSet.has(token.contractId)) return null;
+    const held = wanted.flatMap((token, index) => {
+      const rawBalance = raw[index];
+      if (typeof rawBalance !== "bigint") return [];
 
-        try {
-          const rawBalance = await client.readContract({
-            address: token.contractId as `0x${string}`,
-            abi: ERC20_ABI,
-            functionName: "balanceOf",
-            args: [address as `0x${string}`],
-          }) as bigint;
+      const balance = Number(formatUnits(rawBalance, token.decimals));
+      return balance > 0 ? [{ token, balance }] : [];
+    });
 
-          const balance = Number(formatUnits(rawBalance, token.decimals));
-          if (balance <= 0) return null;
-
-          const tokenPrice = await registry.getTokenPrice(token.symbol, "evm");
-          const usdValue = balance * (tokenPrice || 1.0);
-
-          if (!ignoreDust && usdValue < this.dustThresholdUsd) return null;
-
-          return {
-            token: token.contractId,
-            symbol: token.symbol,
-            balance,
-            usdValue,
-          };
-        } catch (err) {
-          logger.warn(`Failed to fetch ERC20 balance for ${token.symbol}`, {
-            address,
-            token: token.contractId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return null;
-        }
+    // Priced only for tokens actually held, and scoped to this chain.
+    const priced = await Promise.all(
+      held.map(async ({ token, balance }) => {
+        const tokenPrice = await registry
+          .getTokenPrice(token.symbol, resolvedChainId)
+          .catch(() => 0);
+        return { token, balance, usdValue: balance * (tokenPrice || 1.0) };
       })
     );
 
-    for (const tb of tokenBalances) {
-      if (tb) balances.push(tb);
+    for (const entry of priced) {
+      if (!ignoreDust && entry.usdValue < this.dustThresholdUsd) continue;
+      balances.push({
+        token: entry.token.contractId,
+        symbol: entry.token.symbol,
+        balance: entry.balance,
+        usdValue: entry.usdValue,
+      });
     }
 
     return balances;
@@ -282,7 +313,9 @@ export class PortfolioManager {
           : "stacks";
 
     if (family === "evm") {
-      return this.fetchEvmBalances(address, swappableTokens, ignoreDust, userId);
+      // chainId is passed through rather than dropped. It was resolved above
+      // and handed to the SVM path; the EVM path ignored it and read Base.
+      return this.fetchEvmBalances(address, swappableTokens, ignoreDust, userId, chainId);
     }
 
     if (family === "svm") {
@@ -494,4 +527,47 @@ export function runRebalance(
   actions.sort((a, b) => Math.abs(b.amountIn) - Math.abs(a.amountIn));
 
   return actions;
+}
+
+/**
+ * `balanceOf` for one holder across many tokens, in as few calls as possible.
+ *
+ * Multicall3 where the chain has it — every chain checked so far does — and
+ * individual reads otherwise, so a chain without it degrades in speed rather
+ * than in correctness. An unreadable token is `null`, which the caller skips:
+ * a token that reverts on `balanceOf` is not one the wallet holds.
+ */
+async function batchBalanceOf(
+  client: PublicClient,
+  chainId: string,
+  holder: string,
+  tokens: string[]
+): Promise<(unknown | null)[]> {
+  if (tokens.length === 0) return [];
+
+  const requests = tokens.map((contractId) => ({
+    address: contractId,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [holder as `0x${string}`],
+  }));
+
+  if (await hasMulticall3(client, chainId)) {
+    return multicallRead(client, requests);
+  }
+
+  return Promise.all(
+    tokens.map(async (contractId) => {
+      try {
+        return await client.readContract({
+          address: contractId as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [holder as `0x${string}`],
+        });
+      } catch {
+        return null;
+      }
+    })
+  );
 }

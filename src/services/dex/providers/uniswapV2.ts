@@ -20,6 +20,7 @@ import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
+import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 
 /**
  * Uniswap V2 and constant-product AMM forks (e.g. PancakeSwap, Sushiswap, Ubeswap V2).
@@ -62,8 +63,7 @@ export class UniswapV2Provider extends BaseDEXProvider {
   }
 
   private rpcUrl(): string {
-    const key = `RPC_URL_${this.descriptor.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-    return process.env[key] || this.evm.defaultRpcUrl;
+    return rpcUrlOverride(this.descriptor.chainId, this.evm.defaultRpcUrl);
   }
 
   private publicClient(): PublicClient {

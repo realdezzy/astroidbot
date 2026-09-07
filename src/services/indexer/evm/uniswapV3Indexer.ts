@@ -1,6 +1,7 @@
 import { parseAbiItem, type Address, type PublicClient } from "viem";
 import { DatabaseService } from "../../db.js";
 import { batchingPublicClientFor } from "../../chains/evm/evmClient.js";
+import { hasMulticall3, multicallRead, type MulticallRequest } from "../../chains/evm/multicall.js";
 import { ERC20_ABI } from "../../chains/evm/abis.js";
 import { logger } from "../../../utils/logger.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
@@ -27,9 +28,32 @@ const SWAP_EVENT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
 );
 
+/** A decoded `Swap` log, as viem hands it back from `getLogs`. */
+type SwapLog = Awaited<ReturnType<PublicClient["getLogs"]>>[number] & {
+  args: {
+    sender?: Address;
+    recipient?: Address;
+    amount0?: bigint;
+    amount1?: bigint;
+    sqrtPriceX96?: bigint;
+  };
+};
+
 /**
- * "Your query matched too much" — the one error subdivision actually fixes.
+ * "You asked for too much" — the one error class subdivision actually fixes.
+ *
  * Wordings differ per provider, so this matches the shapes seen in the wild.
+ * Two distinct causes land here and both are fixed by asking for less: a
+ * result set over the provider's cap, and a *block range* over it.
+ *
+ * The range variants are not decoration. Alchemy's free tier caps `eth_getLogs`
+ * at ten blocks and says so in prose — "you can make eth_getLogs requests with
+ * up to a 10 block range" — which matched nothing here. Unmatched means the
+ * reader treats it as unknown, holds the cursor so the range is retried, and
+ * retries it forever against a limit that will never lift: ingestion stops dead
+ * with nothing above `warn` in the log and a green health endpoint. Any
+ * provider limit this list doesn't know produces that same silence, which is
+ * why `getLogsAdaptive` now also reports a range it has given up on.
  */
 function isResultSetTooLarge(message: string): boolean {
   const m = message.toLowerCase();
@@ -42,6 +66,11 @@ function isResultSetTooLarge(message: string): boolean {
     m.includes("log response size") ||
     m.includes("block range is too large") ||
     m.includes("range too large") ||
+    m.includes("block range") ||
+    m.includes("blocks range") ||
+    m.includes("block span") ||
+    m.includes("range is too wide") ||
+    m.includes("limited to") ||
     m.includes("query timeout exceeded") ||
     m.includes("-32005")
   );
@@ -66,6 +95,35 @@ function isTransient(message: string): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The block-range cap an endpoint states in its own refusal, if it states one.
+ *
+ * Two shapes are worth reading, because between them they cover the providers
+ * that cap by range rather than by result count:
+ *
+ *   "up to a 10 block range"                        → 10
+ *   "this block range should work: [0x1a, 0x23]"    → 10
+ *
+ * Anything else returns null and the caller falls back to halving. A parsed
+ * number is only ever used to make the window *smaller*, so misreading one
+ * costs throughput rather than correctness.
+ */
+export function parseBlockRangeLimit(message: string): bigint | null {
+  const stated = /up to (?:a )?([\d,_]+)\s*block/i.exec(message);
+  if (stated) {
+    const value = BigInt(stated[1]!.replace(/[,_]/g, ""));
+    if (value > 0n) return value;
+  }
+
+  const suggested = /\[\s*(0x[0-9a-f]+)\s*,\s*(0x[0-9a-f]+)\s*\]/i.exec(message);
+  if (suggested) {
+    const span = BigInt(suggested[2]!) - BigInt(suggested[1]!) + 1n;
+    if (span > 0n) return span;
+  }
+
+  return null;
 }
 
 /**
@@ -95,6 +153,13 @@ export class UniswapV3Indexer implements ChainIndexer {
   private client: PublicClient | null = null;
   /** contractId (lowercase) -> decimals. Decimals never change; no TTL needed. */
   private decimalsCache = new Map<string, number>();
+  /**
+   * Largest `getLogs` block range this endpoint has been shown to accept.
+   *
+   * Null until one is refused. A property of the endpoint rather than of any
+   * range, so it is learned once and reused for the life of the process.
+   */
+  private maxBlockRange: bigint | null = null;
 
   constructor(
     private readonly descriptor: ChainDescriptor,
@@ -366,28 +431,50 @@ export class UniswapV3Indexer implements ChainIndexer {
         continue;
       }
 
-      for (const log of logs) {
+      // Filter first, then read decimals for the survivors in one batch. Read
+      // per pool inside the loop, a chunk that created fifty pools cost a
+      // hundred sequential round trips before the first row was written.
+      const candidates = logs.flatMap((log) => {
         const { token0: t0, token1: t1, fee, pool: poolAddress } = log.args;
-        if (!t0 || !t1 || !poolAddress) continue;
+        if (!t0 || !t1 || !poolAddress) return [];
 
         const token0 = t0.toLowerCase();
         const token1 = t1.toLowerCase();
-        const feeTier = fee === undefined ? null : Number(fee);
 
         // Only pools with a priceable side are worth ingesting — the other
         // side is what gives every swap a USD value.
-        if (!priceable.has(token0) && !priceable.has(token1)) continue;
+        if (!priceable.has(token0) && !priceable.has(token1)) return [];
 
-        const pool = poolAddress.toLowerCase();
         // The quote side is the one we can price; the base is what the pool is
         // actually about. Every downstream metric is attributed to the base.
         const quoteToken = priceable.has(token1) ? token1 : token0;
-        const baseToken = quoteToken === token0 ? token1 : token0;
 
-        const [decimals0, decimals1] = await Promise.all([
-          this.decimalsOf(token0),
-          this.decimalsOf(token1),
-        ]);
+        return [
+          {
+            pool: poolAddress.toLowerCase(),
+            token0,
+            token1,
+            quoteToken,
+            baseToken: quoteToken === token0 ? token1 : token0,
+            feeTier: fee === undefined ? null : Number(fee),
+            createdBlock: log.blockNumber ?? null,
+          },
+        ];
+      });
+
+      if (candidates.length === 0) continue;
+
+      const decimals = await this.decimalsFor(
+        candidates.flatMap((c) => [c.token0, c.token1])
+      );
+
+      /** Base sides seen this chunk, catalogued together once the pools exist. */
+      const newTokens: { address: string; decimals: number }[] = [];
+
+      for (const candidate of candidates) {
+        const { pool, token0, token1, quoteToken, baseToken, feeTier, createdBlock } = candidate;
+        const decimals0 = decimals.get(token0) ?? 18;
+        const decimals1 = decimals.get(token1) ?? 18;
 
         try {
           await db.prisma.indexedPool.upsert({
@@ -403,13 +490,14 @@ export class UniswapV3Indexer implements ChainIndexer {
               baseToken,
               quoteToken,
               feeTier,
-              createdBlock: log.blockNumber ?? null,
+              createdBlock,
               pairCreatedAt: new Date(),
             },
             // A rediscovered pool keeps its original creation data; only the
             // token metadata could have been wrong (unreadable decimals).
             update: { decimals0, decimals1, baseToken, quoteToken },
           });
+
           // Catalogue the traded side so discovery can list it.
           //
           // Without this the catalogue only ever contains the handful of tokens
@@ -417,7 +505,10 @@ export class UniswapV3Indexer implements ChainIndexer {
           // `getSwappableTokens` knows about — and the entire point of an
           // indexer is the long tail that wasn't hardcoded anywhere. The
           // priceable side (WETH, a stable) is skipped: it's already curated.
-          await this.catalogueToken(baseToken, baseToken === token0 ? decimals0 : decimals1);
+          newTokens.push({
+            address: baseToken,
+            decimals: baseToken === token0 ? decimals0 : decimals1,
+          });
 
           discovered++;
         } catch (error) {
@@ -428,6 +519,10 @@ export class UniswapV3Indexer implements ChainIndexer {
           });
         }
       }
+
+      // After the pools exist, so a token is never catalogued for a pool that
+      // failed to write. One identity read per new token for the whole chunk.
+      await this.catalogueTokens(newTokens);
     }
 
     // Only claim the scanned range if all of it was actually readable.
@@ -469,14 +564,20 @@ export class UniswapV3Indexer implements ChainIndexer {
     const rawSwaps: RawSwap[] = [];
     const poolState = new Map<number, { price: number; at: Date }>();
 
-    // Primed once for the whole range: a bounded number of samples, rather
-    // than a lookup per block, is what keeps ingestion O(1) in range size.
-    const clock = new BlockTimeOracle(this.rpc);
-    await clock.prime(fromBlock, toBlock);
-
     let swapsIngested = 0;
     /** First block of the earliest unreadable chunk; the cursor stops before it. */
     let failedAt: bigint | null = null;
+
+    /**
+     * Every swap log in the range, collected before any of them is decoded.
+     *
+     * The decode needs a block timestamp, and timestamps are what the oracle
+     * has to buy from the chain. Collecting first means the oracle can be
+     * primed from the blocks that actually emitted a swap rather than from the
+     * range those blocks sit in — on a quiet tick that is the difference
+     * between two block reads and one per block scanned.
+     */
+    const collected: SwapLog[] = [];
 
     const addressChunks = this.chunkArray(
       [...byAddress.keys()],
@@ -516,45 +617,54 @@ export class UniswapV3Indexer implements ChainIndexer {
         break;
       }
 
-      const logs = fetched.flat().filter((l) => l !== null);
-      if (logs.length === 0) continue;
-
-      // Block order matters: `open` is the first price written to a bucket
-      // and `close` the last, so out-of-order application inverts both.
-      logs.sort((a, b) => {
-        const blockDelta = Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n));
-        return blockDelta !== 0 ? blockDelta : (a.logIndex ?? 0) - (b.logIndex ?? 0);
-      });
-
-      for (const log of logs) {
-        const pool = byAddress.get(log.address.toLowerCase());
-        if (!pool) continue;
-
-        const { amount0, amount1, sqrtPriceX96, recipient, sender } = log.args;
-        if (amount0 === undefined || amount1 === undefined || sqrtPriceX96 === undefined) {
-          continue;
-        }
-
-        const traderAddress = (recipient ?? sender ?? "").toLowerCase();
-        const timestamp = log.blockNumber != null ? clock.timeOf(log.blockNumber) : Date.now();
-        const price0In1 = priceFromSqrtX96(sqrtPriceX96, pool.decimals0, pool.decimals1);
-
-        const { volumeUsd, isBuy, priceUsd } = this.valueSwap(pool, amount0, amount1, price0In1, usd);
-
-        rawSwaps.push({
-          poolId: pool.id,
-          txKey: `${log.transactionHash}:${log.logIndex ?? 0}`,
-          blockNumber: log.blockNumber ?? 0n,
-          logIndex: log.logIndex ?? 0,
-          bucketStart: bucketStartOf(timestamp),
-          priceUsd,
-          volumeUsd,
-          isBuy,
-          traderAddress: traderAddress || undefined,
-        });
-        poolState.set(pool.id, { price: price0In1, at: new Date(timestamp) });
-        swapsIngested++;
+      for (const log of fetched.flat()) {
+        if (log !== null) collected.push(log);
       }
+    }
+
+    // Only now, and only for the blocks that actually emitted something. A
+    // range with four swaps in three blocks costs three timestamps, not one
+    // per block in the range — and a range with no swaps costs none at all.
+    const clock = new BlockTimeOracle(this.rpc);
+    await clock.primeBlocks(collected.map((log) => log.blockNumber));
+
+    // Block order matters: `open` is the first price written to a bucket and
+    // `close` the last, so out-of-order application inverts both. Sorted
+    // across the whole range rather than per chunk, since a pool can trade in
+    // more than one chunk and the buckets do not respect chunk boundaries.
+    collected.sort((a, b) => {
+      const blockDelta = Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n));
+      return blockDelta !== 0 ? blockDelta : (a.logIndex ?? 0) - (b.logIndex ?? 0);
+    });
+
+    for (const log of collected) {
+      const pool = byAddress.get(log.address.toLowerCase());
+      if (!pool) continue;
+
+      const { amount0, amount1, sqrtPriceX96, recipient, sender } = log.args;
+      if (amount0 === undefined || amount1 === undefined || sqrtPriceX96 === undefined) {
+        continue;
+      }
+
+      const traderAddress = (recipient ?? sender ?? "").toLowerCase();
+      const timestamp = log.blockNumber != null ? clock.timeOf(log.blockNumber) : Date.now();
+      const price0In1 = priceFromSqrtX96(sqrtPriceX96, pool.decimals0, pool.decimals1);
+
+      const { volumeUsd, isBuy, priceUsd } = this.valueSwap(pool, amount0, amount1, price0In1, usd);
+
+      rawSwaps.push({
+        poolId: pool.id,
+        txKey: `${log.transactionHash}:${log.logIndex ?? 0}`,
+        blockNumber: log.blockNumber ?? 0n,
+        logIndex: log.logIndex ?? 0,
+        bucketStart: bucketStartOf(timestamp),
+        priceUsd,
+        volumeUsd,
+        isBuy,
+        traderAddress: traderAddress || undefined,
+      });
+      poolState.set(pool.id, { price: price0In1, at: new Date(timestamp) });
+      swapsIngested++;
     }
 
     // Swaps are stored and the buckets they touch are recomputed from
@@ -649,52 +759,53 @@ export class UniswapV3Indexer implements ChainIndexer {
     const db = DatabaseService.getInstance();
     const byId = new Map([...byAddress.values()].map((p) => [p.id, p]));
 
+    // One entry per pool we can price at all. Pools with no priceable side are
+    // dropped here rather than sent and discarded, so the batch carries only
+    // reads whose answer is usable.
+    const measurable = poolIds.flatMap((id) => {
+      const pool = byId.get(id);
+      if (!pool) return [];
+
+      // Whichever side we can price; if both, prefer token1 for symmetry with
+      // valueSwap.
+      const usd1 = usd.get(pool.token1);
+      const usd0 = usd.get(pool.token0);
+
+      const quote =
+        usd1 && usd1 > 0
+          ? { token: pool.token1, decimals: pool.decimals1, price: usd1 }
+          : usd0 && usd0 > 0
+            ? { token: pool.token0, decimals: pool.decimals0, price: usd0 }
+            : null;
+
+      return quote ? [{ id, poolAddress: pool.poolAddress, quote }] : [];
+    });
+
+    if (measurable.length === 0) return;
+
+    // One eth_call per hundred pools instead of one per pool. This was the
+    // single largest line in the indexer's RPC budget: a chain at its 300-pool
+    // cap spent 300 calls a tick here to refresh a number the discovery table
+    // reads once.
+    const balances = await this.batchRead(
+      measurable.map((entry) => ({
+        address: entry.quote.token,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [entry.poolAddress as Address],
+      }))
+    );
+
     const updates: { id: number; liquidityUsd: number }[] = [];
-    const CONCURRENCY = 25;
 
-    for (let i = 0; i < poolIds.length; i += CONCURRENCY) {
-      const slice = poolIds.slice(i, i + CONCURRENCY);
+    for (const [index, entry] of measurable.entries()) {
+      const balance = balances[index];
+      if (typeof balance !== "bigint") continue;
 
-      const measured = await Promise.all(
-        slice.map(async (id) => {
-          const pool = byId.get(id);
-          if (!pool) return null;
+      const value = toHuman(balance, entry.quote.decimals) * entry.quote.price;
+      if (!Number.isFinite(value) || value < 0) continue;
 
-          // Whichever side we can price; if both, prefer token1 for symmetry
-          // with valueSwap.
-          const usd1 = usd.get(pool.token1);
-          const usd0 = usd.get(pool.token0);
-
-          const quote =
-            usd1 && usd1 > 0
-              ? { token: pool.token1, decimals: pool.decimals1, price: usd1 }
-              : usd0 && usd0 > 0
-                ? { token: pool.token0, decimals: pool.decimals0, price: usd0 }
-                : null;
-
-          if (!quote) return null;
-
-          try {
-            const balance = await this.rpc.readContract({
-              address: quote.token as Address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [pool.poolAddress as Address],
-            });
-
-            const value = toHuman(balance as bigint, quote.decimals) * quote.price;
-            if (!Number.isFinite(value) || value < 0) return null;
-
-            return { id, liquidityUsd: value * 2 };
-          } catch {
-            return null;
-          }
-        })
-      );
-
-      for (const m of measured) {
-        if (m) updates.push(m);
-      }
+      updates.push({ id: entry.id, liquidityUsd: value * 2 });
     }
 
     if (updates.length === 0) return;
@@ -890,88 +1001,159 @@ export class UniswapV3Indexer implements ChainIndexer {
    * `create`-only on conflict: re-reading identity every pass would be two RPC
    * calls per token per tick to learn something that cannot change.
    */
-  private async catalogueToken(address: string, decimals: number): Promise<void> {
+  private async catalogueTokens(tokens: { address: string; decimals: number }[]): Promise<void> {
+    if (tokens.length === 0) return;
+
     const db = DatabaseService.getInstance();
+    const wanted = new Map(tokens.map((t) => [t.address.toLowerCase(), t.decimals]));
 
-    const existing = await db.prisma.indexedToken.findUnique({
-      where: { chainId_contractId: { chainId: this.chainId, contractId: address } },
-      select: { id: true },
+    // One query for the whole batch. Asked per token this was a round trip per
+    // discovered pool, almost all of which answer "already known".
+    const existing = await db.prisma.indexedToken.findMany({
+      where: { chainId: this.chainId, contractId: { in: [...wanted.keys()] } },
+      select: { contractId: true },
     });
-    if (existing) return;
 
-    const [symbol, name] = await Promise.all([
-      this.stringField(address, "symbol"),
-      this.stringField(address, "name"),
+    for (const row of existing) wanted.delete(row.contractId.toLowerCase());
+    if (wanted.size === 0) return;
+
+    const addresses = [...wanted.keys()];
+
+    // symbol() and name() for every new token in one batch, rather than two
+    // reads each. Identity is read once and never again — `create`-only on
+    // conflict — so this is the only place these calls are made.
+    const results = await this.batchRead([
+      ...addresses.map((address) => ({ address, abi: ERC20_ABI, functionName: "symbol" })),
+      ...addresses.map((address) => ({ address, abi: ERC20_ABI, functionName: "name" })),
     ]);
 
-    // A token whose symbol can't be read isn't listable — it would render as a
-    // blank row — and is overwhelmingly likely to be a broken or hostile
-    // contract rather than something a user wants to trade.
-    if (!symbol) return;
+    for (const [index, address] of addresses.entries()) {
+      const symbol = this.cleanString(results[index]);
+      const name = this.cleanString(results[addresses.length + index]);
 
-    try {
-      await db.prisma.indexedToken.create({
-        data: {
-          chainId: this.chainId,
-          contractId: address,
-          symbol: symbol.slice(0, 32),
-          name: (name || symbol).slice(0, 128),
-          decimals,
-          dexId: this.dexId,
-        },
-      });
-    } catch {
-      // Concurrent discovery on another chain's pass can win the race; the
-      // unique constraint is the arbiter and losing it is fine.
-    }
-  }
+      // A token whose symbol can't be read isn't listable — it would render as
+      // a blank row — and is overwhelmingly likely to be a broken or hostile
+      // contract rather than something a user wants to trade.
+      if (!symbol) continue;
 
-  /** Reads an optional string-returning ERC-20 field. */
-  private async stringField(address: string, field: "symbol" | "name"): Promise<string | null> {
-    try {
-      const value = await this.rpc.readContract({
-        address: address as Address,
-        abi: ERC20_ABI,
-        functionName: field,
-      });
-      const text = String(value).trim();
-      if (!text) return null;
-
-      // Reject control characters. Tokens exist whose "symbol" is padding or
-      // escape bytes; they render as an invisible, unclickable row. Checked by
-      // code point rather than a regex literal, which would otherwise embed
-      // raw control bytes in this source file.
-      for (const char of text) {
-        const code = char.codePointAt(0) ?? 0;
-        if (code < 0x20 || code === 0x7f) return null;
+      try {
+        await db.prisma.indexedToken.create({
+          data: {
+            chainId: this.chainId,
+            contractId: address,
+            symbol: symbol.slice(0, 32),
+            name: (name || symbol).slice(0, 128),
+            decimals: wanted.get(address) ?? 18,
+            dexId: this.dexId,
+          },
+        });
+      } catch {
+        // Concurrent discovery on another chain's pass can win the race; the
+        // unique constraint is the arbiter and losing it is fine.
       }
-
-      return text;
-    } catch {
-      return null;
     }
   }
 
-  private async decimalsOf(address: string): Promise<number> {
-    const key = address.toLowerCase();
-    const cached = this.decimalsCache.get(key);
-    if (cached !== undefined) return cached;
+  /**
+   * Sanitises a string-returning ERC-20 field.
+   *
+   * Tokens exist whose "symbol" is padding or escape bytes; they render as an
+   * invisible, unclickable row. Checked by code point rather than a regex
+   * literal, which would otherwise embed raw control bytes in this source file.
+   */
+  private cleanString(value: unknown): string | null {
+    if (value == null) return null;
 
-    try {
-      const decimals = await this.rpc.readContract({
-        address: key as Address,
-        abi: ERC20_ABI,
-        functionName: "decimals",
-      });
-      const value = Number(decimals);
-      this.decimalsCache.set(key, value);
-      return value;
-    } catch {
+    const text = String(value).trim();
+    if (!text) return null;
+
+    for (const char of text) {
+      const code = char.codePointAt(0) ?? 0;
+      if (code < 0x20 || code === 0x7f) return null;
+    }
+
+    return text;
+  }
+
+  /**
+   * Decimals for a set of tokens, in one round trip where possible.
+   *
+   * Batched because discovery reads both sides of every new pool: a burst of
+   * pool creations used to cost two sequential reads per pool on top of the
+   * three per token `catalogueToken` made.
+   */
+  private async decimalsFor(addresses: string[]): Promise<Map<string, number>> {
+    const keys = [...new Set(addresses.map((a) => a.toLowerCase()))];
+    const out = new Map<string, number>();
+
+    const unknown = keys.filter((key) => {
+      const cached = this.decimalsCache.get(key);
+      if (cached !== undefined) {
+        out.set(key, cached);
+        return false;
+      }
+      return true;
+    });
+
+    if (unknown.length === 0) return out;
+
+    const results = await this.batchRead(
+      unknown.map((address) => ({ address, abi: ERC20_ABI, functionName: "decimals" }))
+    );
+
+    for (const [index, address] of unknown.entries()) {
+      const raw = results[index];
       // Non-standard ERC-20s exist. 18 is the right guess and a wrong guess
       // misprices one pool rather than failing the whole range.
-      this.decimalsCache.set(key, 18);
-      return 18;
+      const value = raw == null ? 18 : Number(raw);
+      const decimals = Number.isFinite(value) && value >= 0 && value <= 36 ? value : 18;
+
+      this.decimalsCache.set(address, decimals);
+      out.set(address, decimals);
     }
+
+    return out;
+  }
+
+  /**
+   * Contract reads, batched through Multicall3 when the chain has it.
+   *
+   * Falls back to individual `eth_call`s on a chain without it, so this is a
+   * pure optimisation rather than a new requirement on a descriptor — but
+   * every chain checked so far has Multicall3 at the canonical address, so the
+   * fallback is a safety net rather than an expected path.
+   */
+  private async batchRead(requests: MulticallRequest[]): Promise<(unknown | null)[]> {
+    if (requests.length === 0) return [];
+
+    if (await hasMulticall3(this.rpc, this.chainId)) {
+      return multicallRead(this.rpc, requests);
+    }
+
+    const CONCURRENCY = 25;
+    const out: (unknown | null)[] = new Array(requests.length).fill(null);
+
+    for (let i = 0; i < requests.length; i += CONCURRENCY) {
+      const slice = requests.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        slice.map(async (request) => {
+          try {
+            return await this.rpc.readContract({
+              address: request.address as Address,
+              abi: request.abi as never,
+              functionName: request.functionName,
+              args: request.args as never,
+            });
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      for (const [offset, result] of results.entries()) out[i + offset] = result;
+    }
+
+    return out;
   }
 
   /**
@@ -1003,12 +1185,25 @@ export class UniswapV3Indexer implements ChainIndexer {
     depth = 0
   ): Promise<T[] | null> {
     try {
-      return await fetch(from, to);
+      const logs = await fetch(from, to);
+      // A range this size worked, so remember it as viable. Without this the
+      // window learned below would never widen again after one bad range.
+      this.noteRangeWorked(to - from + 1n);
+      return logs;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
       if (isResultSetTooLarge(message) && depth < this.settings.maxSplitDepth) {
         if (to > from) {
+          // Learn from the refusal before splitting. Providers that cap by
+          // block range say what they will accept — Alchemy's free tier names
+          // the exact window — and a cap is a property of the endpoint, not of
+          // this range. Recording it means the *next* chunk is sized correctly
+          // rather than rediscovering the same limit by bisection every time,
+          // which on a 2,000-block chunk against a 10-block cap is over two
+          // hundred requests to read what one correctly-sized request would.
+          this.noteRangeRefused(message, to - from + 1n);
+
           const mid = from + (to - from) / 2n;
           const left = await this.getLogsAdaptive(fetch, from, mid, depth + 1);
           const right = await this.getLogsAdaptive(fetch, mid + 1n, to, depth + 1);
@@ -1046,12 +1241,73 @@ export class UniswapV3Indexer implements ChainIndexer {
     }
   }
 
-  /** Splits a block range into RPC-sized windows. */
+  /**
+   * Splits a block range into RPC-sized windows.
+   *
+   * The window is the configured chunk size until the endpoint refuses one,
+   * after which it is whatever the endpoint has shown it will accept.
+   */
   private *chunks(from: bigint, to: bigint): Generator<[bigint, bigint]> {
-    const size = BigInt(this.settings.blockChunkSize);
+    const size = this.effectiveChunkSize();
     for (let start = from; start <= to; start += size) {
       const end = start + size - 1n > to ? to : start + size - 1n;
       yield [start, end];
+    }
+  }
+
+  /**
+   * Blocks per `getLogs`, capped by anything the endpoint has told us.
+   *
+   * `INDEXER_BLOCK_CHUNK_SIZE` is a ceiling rather than a promise: an endpoint
+   * with a tighter limit wins, because asking past it produces nothing but
+   * refusals.
+   */
+  private effectiveChunkSize(): bigint {
+    const configured = BigInt(this.settings.blockChunkSize);
+    return this.maxBlockRange != null && this.maxBlockRange < configured
+      ? this.maxBlockRange
+      : configured;
+  }
+
+  /**
+   * Records that the endpoint refused a range of `span` blocks.
+   *
+   * The provider's own suggestion is preferred when it makes one — "this block
+   * range should work: [0x…, 0x…]" and "up to a 10 block range" are both
+   * parsed — because it is exact. Failing that, half the refused span is the
+   * same guess bisection would make, just remembered.
+   */
+  private noteRangeRefused(message: string, span: bigint): void {
+    const learned = parseBlockRangeLimit(message) ?? (span > 1n ? span / 2n : 1n);
+    if (learned <= 0n) return;
+
+    if (this.maxBlockRange == null || learned < this.maxBlockRange) {
+      this.maxBlockRange = learned;
+      logger.warn("[indexer] endpoint limits getLogs range; narrowing chunks", {
+        chainId: this.chainId,
+        refusedSpan: span.toString(),
+        blockChunkSize: learned.toString(),
+        configured: this.settings.blockChunkSize,
+        hint:
+          learned < 100n
+            ? "This endpoint's block-range cap makes catch-up very slow — a paid RPC tier is likely required."
+            : undefined,
+      });
+    }
+  }
+
+  /**
+   * Records a span the endpoint accepted.
+   *
+   * Only ever widens, and in practice rarely does: once the window has
+   * narrowed, `chunks()` stops asking for anything larger, so there is nothing
+   * to observe succeeding. That is the conservative direction — a limit is a
+   * property of the plan you are on, and guessing it has lifted costs a wasted
+   * round trip per chunk. Restart the process after upgrading a tier.
+   */
+  private noteRangeWorked(span: bigint): void {
+    if (this.maxBlockRange != null && span > this.maxBlockRange) {
+      this.maxBlockRange = span;
     }
   }
 

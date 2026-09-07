@@ -1,13 +1,23 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
-import { bootstrap } from "../../../src/bootstrap.js";
-import { DatabaseService } from "../../../src/services/db.js";
-import { RedisService } from "../../../src/services/redis.js";
-import { QueueManager } from "../../../src/services/queue.js";
+import { bootstrap } from "../../src/bootstrap.js";
+import { DatabaseService } from "../../src/services/db.js";
+import { RedisService } from "../../src/services/redis.js";
+import { QueueManager } from "../../src/services/queue.js";
 import jwt from "jsonwebtoken";
-import { ConfigManager } from "../../../src/config.js";
+import { ConfigManager } from "../../src/config.js";
+import { JWT_ALGORITHM, JWT_ISSUER } from "../../src/api/jwtOptions.js";
 
+/**
+ * Lives in tests/integration/ because it boots the whole application:
+ * `bootstrap()` connects to Postgres and Redis and calls `process.exit(1)` if
+ * it cannot, which turns a missing database into a failed *suite* rather than
+ * a skipped one. In the default `npm test` run that made the gate red in any
+ * environment without infrastructure — including the Docker build.
+ *
+ * Run with `npm run test:integration` against a live stack.
+ */
 describe("Push Notification Routes (/api/push)", () => {
   let server: Server;
   let authToken: string;
@@ -32,6 +42,8 @@ describe("Push Notification Routes (/api/push)", () => {
     const config = ConfigManager.getInstance().config;
     authToken = jwt.sign({ userId: testUserId, email: testUser.email }, config.JWT_SECRET, {
       expiresIn: "1h",
+      algorithm: JWT_ALGORITHM,
+      issuer: JWT_ISSUER,
     });
   });
 

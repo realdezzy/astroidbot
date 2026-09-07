@@ -43,6 +43,23 @@ const INDEXERS: {
 const lockKey = (chainId: string): string => `indexer:ingest:${chainId}`;
 
 /**
+ * Consecutive ticks with no cursor movement before a chain is called stalled.
+ *
+ * Generous on purpose. A chain that is genuinely caught up reports the same
+ * `toBlock` only until the next block is mined, so on any live chain this
+ * counter resets within a tick or two; reaching five means every range read
+ * was refused, which is a real fault rather than a quiet minute.
+ */
+const STALL_TICKS = 5;
+
+/** What we know about one chain's forward progress. */
+interface ChainProgress {
+  lastToBlock: bigint;
+  stalledSince: Date | null;
+  ticks: number;
+}
+
+/**
  * Drives per-chain ingestion.
  *
  * A run is skipped rather than queued if another is already in flight for that
@@ -65,6 +82,7 @@ export class IndexerService {
 
   private indexers = new Map<string, ChainIndexer>();
   private running = new Set<string>();
+  private progress = new Map<string, ChainProgress>();
   private initialised = false;
 
   static getInstance(): IndexerService {
@@ -143,6 +161,13 @@ export class IndexerService {
 
     const redis = RedisService.getInstance();
     const ttl = ConfigManager.getInstance().config.INDEXER_LOCK_TTL_MS;
+
+    // An unreachable Redis is rethrown rather than read as "locked". Both used
+    // to arrive here as null, and null means skip — so a Redis outage stopped
+    // ingestion on every chain, every tick, indefinitely, while emitting
+    // nothing above debug and leaving /health reporting ok. The throw
+    // propagates to runPass(), which counts it as a failure and degrades the
+    // health endpoint after three in a row.
     const token = await redis.acquireLock(lockKey(chainId), ttl);
 
     // Held by another process. Skipping is correct and not an error: whoever
@@ -173,6 +198,7 @@ export class IndexerService {
         });
       }
 
+      this.noteProgress(chainId, result);
       return result;
     } catch (error) {
       logger.warn("[indexer] run failed", {
@@ -186,6 +212,66 @@ export class IndexerService {
     }
   }
 
+  /**
+   * Records whether a chain's cursor actually moved.
+   *
+   * A run that returns without error but leaves the cursor where it was is the
+   * failure mode this codebase keeps rediscovering: an unreadable range is
+   * *supposed* to hold the cursor so the next tick retries it, which is exactly
+   * right for a blip and exactly wrong for a provider limit that will never
+   * lift. The two are indistinguishable from one tick, so the distinction has
+   * to be made over many — and then said out loud.
+   */
+  private noteProgress(chainId: string, result: IndexRunResult): void {
+    const previous = this.progress.get(chainId);
+    const advanced = previous == null || result.toBlock > previous.lastToBlock;
+
+    if (advanced) {
+      this.progress.set(chainId, { lastToBlock: result.toBlock, stalledSince: null, ticks: 0 });
+      return;
+    }
+
+    const stalledSince = previous.stalledSince ?? new Date();
+    const ticks = previous.ticks + 1;
+    this.progress.set(chainId, { lastToBlock: previous.lastToBlock, stalledSince, ticks });
+
+    // Once, on crossing the threshold. Repeating it every tick would bury the
+    // rest of the log in the outage it is reporting.
+    if (ticks === STALL_TICKS) {
+      logger.error("[indexer] cursor has not advanced — ingestion is stalled", {
+        chainId,
+        atBlock: previous.lastToBlock.toString(),
+        ticks,
+        since: stalledSince.toISOString(),
+        hint:
+          "Every range this chain read was refused. Most often an RPC provider " +
+          "limit the log reader does not recognise; check the preceding " +
+          "[indexer] getLogs failed warnings for the endpoint's own wording.",
+      });
+    }
+  }
+
+  /**
+   * Per-chain ingestion progress, for the health endpoint.
+   *
+   * `stalled` is the answer to "why is discovery empty" that neither the run
+   * count nor the error count can give: a stalled chain has no errors and a
+   * rising run count.
+   */
+  progressSnapshot(): Record<string, { lastBlock: string; stalled: boolean; stalledSince: string | null }> {
+    const out: Record<string, { lastBlock: string; stalled: boolean; stalledSince: string | null }> = {};
+
+    for (const [chainId, state] of this.progress) {
+      out[chainId] = {
+        lastBlock: state.lastToBlock.toString(),
+        stalled: state.ticks >= STALL_TICKS,
+        stalledSince: state.stalledSince?.toISOString() ?? null,
+      };
+    }
+
+    return out;
+  }
+
   /** Test seam — lets a suite install a stub indexer for a chain. */
   register(indexer: ChainIndexer): void {
     this.initialised = true;
@@ -195,6 +281,7 @@ export class IndexerService {
   reset(): void {
     this.indexers.clear();
     this.running.clear();
+    this.progress.clear();
     this.initialised = false;
   }
 }

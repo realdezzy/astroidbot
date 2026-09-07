@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "tsx src/index.ts",
+    "start": "node dist/src/index.js",
     "dev": "tsx watch src/index.ts",
-    "start:indexer": "tsx src/indexer.ts",
+    "start:indexer": "node dist/src/indexer.js",
     "dev:indexer": "tsx watch src/indexer.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",

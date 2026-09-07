@@ -5,6 +5,7 @@ import { DEXRegistry } from "../dex/dexRegistry.js";
 import { StacksAdapter } from "./stacksAdapter.js";
 import { EvmChainAdapter } from "./evm/evmChainAdapter.js";
 import { SolanaAdapter } from "./svm/solanaAdapter.js";
+import { rpcUrlOverride } from "./evm/evmClient.js";
 import { UniswapV3Provider } from "../dex/providers/uniswapV3.js";
 import { UniswapV2Provider } from "../dex/providers/uniswapV2.js";
 import { UniswapUniversalProvider } from "../dex/providers/uniswapUniversal.js";
@@ -102,5 +103,31 @@ export function registerEnabledChains(): void {
   logger.info("[chains] Enabled", {
     chains: registry.list().map((d) => d.chainId),
     tradable: registry.tradable().map((d) => d.chainId),
+    // Host only — an RPC URL usually carries the API key in its path, and this
+    // line goes wherever the logs go. The host is what answers "is this chain
+    // on the paid endpoint or still on the public default", which is the
+    // question that otherwise takes a packet capture to settle.
+    endpoints: Object.fromEntries(
+      registry.list().map((d) => [d.chainId, rpcHostFor(d)])
+    ),
   });
+}
+
+/**
+ * The hostname a chain's RPC resolves to, and whether it came from an override.
+ *
+ * Deliberately not the full URL: these strings contain provider API keys.
+ */
+function rpcHostFor(descriptor: ChainDescriptor): string {
+  const fallback = descriptor.evm?.defaultRpcUrl ?? descriptor.svm?.defaultRpcUrl ?? descriptor.stacks?.apiUrl;
+  if (!fallback) return "n/a";
+
+  const url = rpcUrlOverride(descriptor.chainId, fallback);
+  const overridden = url !== fallback;
+
+  try {
+    return `${new URL(url).host}${overridden ? " (override)" : " (default)"}`;
+  } catch {
+    return overridden ? "(override, unparseable)" : "(default)";
+  }
 }

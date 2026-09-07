@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { createServer } from "../../../src/api/server.js";
 import { ConfigManager } from "../../../src/config.js";
 import type { Server } from "node:http";
+import { JWT_ALGORITHM, JWT_ISSUER } from "../../../src/api/jwtOptions.js";
 
 const mockSocialAccountDb = {
   findMany: vi.fn(),
@@ -116,7 +117,10 @@ describe("Social API Routes Integration Tests", () => {
 
     ConfigManager.load();
     server = createServer();
-    token = jwt.sign({ userId: 10 }, ConfigManager.getInstance().config.JWT_SECRET);
+    token = jwt.sign({ userId: 10 }, ConfigManager.getInstance().config.JWT_SECRET, {
+      algorithm: JWT_ALGORITHM,
+      issuer: JWT_ISSUER,
+    });
   });
 
   afterAll(() => {

@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { ConfigManager } from "../../config.js";
 import { DatabaseService } from "../../services/db.js";
 import { UnauthorizedError, ForbiddenError } from "../errors.js";
+import { JWT_ALGORITHM, JWT_ISSUER } from "../jwtOptions.js";
 
 export interface JwtPayload {
   userId: number;
@@ -32,7 +33,10 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
 
   try {
     const secret = ConfigManager.getInstance().config.JWT_SECRET;
-    const payload = jwt.verify(token, secret) as JwtPayload;
+    const payload = jwt.verify(token, secret, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+    }) as JwtPayload;
 
     req.userId = payload.userId;
     req.telegramId = payload.telegramId;
@@ -54,7 +58,10 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
 
   try {
     const secret = ConfigManager.getInstance().config.JWT_SECRET;
-    const payload = jwt.verify(token, secret) as JwtPayload;
+    const payload = jwt.verify(token, secret, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+    }) as JwtPayload;
 
     req.userId = payload.userId;
     req.telegramId = payload.telegramId;

@@ -22,6 +22,7 @@ import { BaseChainAdapter } from "../baseChainAdapter.js";
 import { sponsorGasFor, sponsorshipAvailability } from "../gasSponsorship.js";
 import { ERC20_ABI } from "./abis.js";
 import { requireEvmConfig, type ChainDescriptor, type EvmChainConfig } from "../../../types/chain.js";
+import { rpcUrlOverride } from "./evmClient.js";
 
 const SAFE_VERSION = "1.4.1" as const;
 const ENTRY_POINT = { address: entryPoint07Address, version: "0.7" as const };
@@ -126,9 +127,7 @@ export class EvmChainAdapter extends BaseChainAdapter {
   private rpcUrl(): string {
     // Per-chain override, e.g. RPC_URL_BASE_MAINNET, so a deployment can point
     // at its own node without a code change.
-    const key = `RPC_URL_${this.descriptor.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-    const override = process.env[key];
-    return override || this.evm.defaultRpcUrl;
+    return rpcUrlOverride(this.descriptor.chainId, this.evm.defaultRpcUrl);
   }
 
   publicClient(): PublicClient {

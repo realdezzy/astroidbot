@@ -8,9 +8,6 @@ until nc -z postgres 5432 2>/dev/null; do
 done
 echo "   Postgres is ready."
 
-echo "==> Generating Prisma client..."
-npx prisma generate
-
 # migrate deploy, not db push: push refuses any change it considers risky (it
 # blocked the Wallet chainFamily unique-key change and crash-looped this
 # container under `set -e`), and --accept-data-loss would trade that for
@@ -18,11 +15,18 @@ npx prisma generate
 # Migrations are reviewed SQL, checked into prisma/migrations.
 #
 # A database provisioned by the old db push path already has the schema and
-# must be baselined once, or deploy will fail trying to re-create objects:
-#   npx prisma migrate resolve --applied 20250620000000_init
-#   npx prisma migrate resolve --applied 20260726120000_multichain_wallets_and_catchup
-echo "==> Ensuring database schema is up to date..."
-npx prisma db push --accept-data-loss
+# must be baselined once, or deploy will fail trying to re-create objects.
+# Every migration except the newest describes schema that push already applied,
+# so mark them applied without running them, then let deploy run the rest:
+#
+#   for m in $(ls prisma/migrations | grep -v migration_lock.toml | sort | head -n -1); do
+#     npx prisma migrate resolve --applied "$m"
+#   done
+#
+# Check `npx prisma migrate status` first — if it reports no applied
+# migrations and the tables exist, this is the database that needs it.
+echo "==> Applying database migrations..."
+npx prisma migrate deploy
 
 echo "==> Starting AstroidBot..."
-exec npx tsx src/index.ts
+exec node dist/src/index.js

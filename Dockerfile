@@ -9,7 +9,14 @@ COPY shared/ /app/shared/
 COPY web/ ./
 RUN npm run build
 
-FROM node:22-alpine AS test
+# Typecheck, lint gate, tests and the backend compile, in one stage.
+#
+# This stage produces `dist/`, and the runtime stage copies it — which is what
+# makes the gate real. It used to build nothing anything depended on, so
+# BuildKit skipped it entirely: `docker compose up --build` produced an image
+# having run neither a test nor a typecheck, from a Dockerfile that read as
+# though it gated on both.
+FROM node:22-alpine AS build
 
 WORKDIR /app
 
@@ -22,9 +29,10 @@ RUN npx prisma generate
 COPY shared/ ./shared/
 COPY src/ ./src/
 COPY tests/ ./tests/
-COPY tsconfig.json vitest.config.ts ./
+COPY scripts/ ./scripts/
+COPY tsconfig.json tsconfig.eslint.json eslint.config.js vitest.config.ts .lint-baseline.json ./
 
-RUN npm run build && npm test
+RUN npm run lint:gate && npm test && npm run build
 
 FROM node:22-alpine AS backend
 
@@ -40,10 +48,16 @@ COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps --omit=dev && npm cache clean --force
 
 COPY prisma/ ./prisma/
+
+# Generated at build time rather than on every container start. The entrypoint
+# used to run this on boot, which needs the network and adds tens of seconds
+# before the process comes up — twice, since both entrypoints did it.
 RUN npx prisma generate
 
-COPY shared/ ./shared/
-COPY src/ ./src/
+# Compiled JavaScript, not TypeScript run through tsx. Nothing compiled used to
+# ship: both entrypoints ran `npx tsx src/*.ts`, transpiling on demand at every
+# boot and holding source maps in memory for the life of the process.
+COPY --from=build /app/dist ./dist
 COPY Docs/ ./Docs/
 COPY --from=frontend-builder /app/web/dist ./web/dist
 

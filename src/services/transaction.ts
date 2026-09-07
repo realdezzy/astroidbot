@@ -68,7 +68,20 @@ export class TransactionService {
     const db = DatabaseService.getInstance();
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
-    const lockToken = await redis.acquireLock(lockKey, 30_000);
+    // Redis being unreachable is not the same as the wallet being busy, and
+    // both used to produce the same message. Signing without the lock is not an
+    // option — it is what stops two concurrent trades sharing a nonce — so
+    // either way we refuse, but the caller is told which happened.
+    let lockToken: string | null;
+    try {
+      lockToken = await redis.acquireLock(lockKey, 30_000);
+    } catch (error) {
+      logger.error("Wallet lock unavailable — refusing to sign", {
+        walletId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { error: "Transaction lock service is unavailable. Please try again shortly." };
+    }
 
     if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
@@ -274,7 +287,20 @@ export class TransactionService {
     const db = DatabaseService.getInstance();
     const redis = RedisService.getInstance();
     const lockKey = `wallet:${walletId}`;
-    const lockToken = await redis.acquireLock(lockKey, 30_000);
+    // Redis being unreachable is not the same as the wallet being busy, and
+    // both used to produce the same message. Signing without the lock is not an
+    // option — it is what stops two concurrent trades sharing a nonce — so
+    // either way we refuse, but the caller is told which happened.
+    let lockToken: string | null;
+    try {
+      lockToken = await redis.acquireLock(lockKey, 30_000);
+    } catch (error) {
+      logger.error("Wallet lock unavailable — refusing to sign", {
+        walletId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { error: "Transaction lock service is unavailable. Please try again shortly." };
+    }
 
     if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };

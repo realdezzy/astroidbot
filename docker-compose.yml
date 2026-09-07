@@ -95,26 +95,38 @@ services:
           memory: 1G
           cpus: "2.0"
 
-  clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8123:8123"
-      - "127.0.0.1:9000:9000"
-    volumes:
-      - clickhousedata:/var/lib/clickhouse
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spy", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: "2.0"
+  # ClickHouse is commented out, not deleted.
+  #
+  # Nothing in the application connects to it: ClickHouseClient has no callers,
+  # and the live ingestion path (uniswapV3Indexer / stacksIndexer /
+  # solanaIndexer) writes to Postgres. So this reserved 1 GB and two CPUs, and
+  # kept a volume, for a code path that does not run.
+  #
+  # It belongs to the same unfinished second architecture as
+  # src/services/indexer/{bus,protocols,state,pricing,storage}/, which is
+  # reachable only from tests. Uncomment this together with wiring that
+  # architecture up; delete both if it is not the direction.
+  #
+  # clickhouse:
+  #   image: clickhouse/clickhouse-server:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:8123:8123"
+  #     - "127.0.0.1:9000:9000"
+  #   volumes:
+  #     - clickhousedata:/var/lib/clickhouse
+  #   healthcheck:
+  #     test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spy", "http://localhost:8123/ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 1G
+  #         cpus: "2.0"
 
 volumes:
   pgdata:
   redisdata:
-  clickhousedata:
+  # clickhousedata:

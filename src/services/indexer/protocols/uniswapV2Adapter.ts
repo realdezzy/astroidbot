@@ -1,22 +1,13 @@
-import { parseAbiItem } from "viem";
 import type { ChainId } from "../../../types/chain.js";
 import type { SwapEvent, PoolCreatedEvent } from "../events/canonical.js";
 import type { DexAdapter } from "./dexAdapter.js";
 import type { TrackedPool } from "../types.js";
 
-const PAIR_CREATED_EVENT = parseAbiItem(
-  "event PairCreated(address indexed token0, address indexed token1, address pair, uint256)"
-);
-
-const SWAP_EVENT = parseAbiItem(
-  "event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)"
-);
-
 export class UniswapV2Adapter implements DexAdapter {
   readonly dexId = "uniswap-v2";
   readonly chainFamily = "evm";
 
-  canHandle(dexId: string, chainId: ChainId): boolean {
+  canHandle(dexId: string, _chainId: ChainId): boolean {
     const id = dexId.toLowerCase();
     return id.includes("uniswap-v2") || id.includes("pancakeswap-v2") || id.includes("sushiswap");
   }

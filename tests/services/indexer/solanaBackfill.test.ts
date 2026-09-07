@@ -20,6 +20,11 @@ const indexedSwap = {
   createMany: vi.fn(),
 };
 
+/** Cross-chain native anchoring reads this; nothing here carries a price. */
+const indexedToken = {
+  findMany: vi.fn().mockResolvedValue([]),
+};
+
 const transaction = vi.fn().mockResolvedValue([]);
 
 vi.mock("../../../src/services/db.js", () => ({
@@ -28,6 +33,7 @@ vi.mock("../../../src/services/db.js", () => ({
       prisma: {
         indexedPool,
         indexedSwap,
+        indexedToken,
         indexerCursor: { findUnique: vi.fn(), create: vi.fn(), upsert: vi.fn() },
         $transaction: transaction,
         $executeRaw: vi.fn().mockResolvedValue(0),
@@ -58,7 +64,18 @@ const POOL = {
   token1: "UsdcMint111111111111111111111111111111111111",
   decimals0: 9,
   decimals1: 6,
+  lastSignature: null as string | null,
 };
+
+/**
+ * The pool as it looks with its forward cursor at `signature`.
+ *
+ * `lastSignature` rides on the pool row the tick already fetched, rather than
+ * being re-read per pool, so a test states it here instead of stubbing a query.
+ */
+function poolAt(signature: string | null) {
+  return { ...POOL, lastSignature: signature };
+}
 
 function loadConfig(extra: Record<string, string> = {}) {
   process.env.ASTROIDBOT_DATABASE_URL = "postgresql://localhost:5432/test";
@@ -82,6 +99,7 @@ interface IndexerSeam {
   ): Promise<{ swaps: number; progress: { signature: string; backfillSeed?: string } | null }>;
   ingest(pools: (typeof POOL)[], slot: bigint): Promise<unknown>;
   backfillStep(): Promise<{ swapsIngested: number }>;
+  usdPrices(pools: (typeof POOL)[]): Promise<Map<string, number>>;
 }
 
 /** Newest-first signatures, `count` of them, `ageMs` old and 1s apart. */
@@ -139,16 +157,87 @@ describe("solana ingestion cursors", () => {
     return new SolanaIndexer(SOLANA_MAINNET, indexerSettings()) as unknown as IndexerSeam;
   }
 
+  describe("USD anchoring", () => {
+    it("prices SOL, not only the stables", async () => {
+      // Jupiter routes most pairs through a SOL leg, so a pool discovered here
+      // is more likely quoted in SOL than in USDC. With SOL unanchored,
+      // decodeBatch found neither side priced, wrote volumeUsd 0 for every one
+      // of them, and the rollup reported the whole chain's volume as unknown —
+      // silently, because "we saw trades we could not value" is a legitimate
+      // state that looks identical to a quiet chain.
+      indexedPool.findMany.mockResolvedValue([
+        {
+          token0: "So11111111111111111111111111111111111111112",
+          token1: "UsdcMint111111111111111111111111111111111111",
+          lastPrice0: 104.17,
+          liquidityUsd: 5_000_000,
+        },
+      ]);
+
+      const usd = await indexer().usdPrices([]);
+
+      expect(usd.get("So11111111111111111111111111111111111111112")).toBeCloseTo(104.17, 2);
+      expect(usd.get("UsdcMint111111111111111111111111111111111111")).toBe(1);
+    });
+
+    it("does not invert the anchor when the pool names SOL as token1", async () => {
+      // lastPrice0 is the USD price of token0, so a stable/SOL pool's stored
+      // price describes the stable and carries no anchor. Reading it as SOL's
+      // price — or inverting it — would misprice every token on the chain by
+      // the same factor, which is the hardest kind of error to notice.
+      indexedPool.findMany.mockResolvedValue([
+        {
+          token0: "UsdcMint111111111111111111111111111111111111",
+          token1: "So11111111111111111111111111111111111111112",
+          lastPrice0: 1.0,
+          liquidityUsd: 5_000_000,
+        },
+      ]);
+      indexedToken.findMany.mockResolvedValue([
+        { symbol: "SOL", priceUsd: 104.17, liquidityUsd: 1_000_000 },
+      ]);
+
+      const usd = await indexer().usdPrices([]);
+
+      // Falls through to the cross-chain anchor rather than reporting SOL at
+      // $1.00 (the stable's price) or $1.00 inverted.
+      expect(usd.get("So11111111111111111111111111111111111111112")).toBe(104.17);
+    });
+
+    it("anchors SOL cross-chain when no local pool can price it", async () => {
+      indexedPool.findMany.mockResolvedValue([]);
+      indexedToken.findMany.mockResolvedValue([
+        { symbol: "SOL", priceUsd: 98.5, liquidityUsd: 1_000_000 },
+      ]);
+
+      const usd = await indexer().usdPrices([]);
+
+      expect(usd.get("So11111111111111111111111111111111111111112")).toBe(98.5);
+    });
+
+    it("leaves SOL unpriced rather than guessing when nothing can anchor it", async () => {
+      // A wrong anchor misprices every token on the chain by the same factor,
+      // which is far harder to notice than a missing one.
+      indexedPool.findMany.mockResolvedValue([]);
+      indexedToken.findMany.mockResolvedValue([]);
+
+      const usd = await indexer().usdPrices([]);
+
+      expect(usd.has("So11111111111111111111111111111111111111112")).toBe(false);
+      expect(usd.get("UsdcMint111111111111111111111111111111111111")).toBe(1);
+    });
+  });
+
   describe("forward pass", () => {
     it("spends its budget on the oldest unread signatures, not the newest", async () => {
       // The RPC returns the newest `limit` signatures and silently omits the
       // rest, so a pool busier than one tick's budget used to lose everything
       // between the cursor and the newest page — a hole no cursor could
       // describe, and therefore one nothing would ever retry.
-      indexedPool.findUnique.mockResolvedValue({ lastSignature: "sig-caught-up" });
+      const pool = poolAt("sig-caught-up");
       serve(() => signatures("sig", 120));
 
-      const { progress } = await indexer().ingestPool(POOL, new Map(), []);
+      const { progress } = await indexer().ingestPool(pool, new Map(), []);
 
       // 120 unread, budget of 50: the walk stops 50 above where it resumed,
       // contiguous with the last tick rather than adjacent to the head.
@@ -156,7 +245,7 @@ describe("solana ingestion cursors", () => {
     });
 
     it("pages the signature list rather than trusting one call to reach the cursor", async () => {
-      indexedPool.findUnique.mockResolvedValue({ lastSignature: "sig-caught-up" });
+      const pool = poolAt("sig-caught-up");
 
       let page = 0;
       serve((params) => {
@@ -165,7 +254,7 @@ describe("solana ingestion cursors", () => {
         return page++ === 0 ? signatures("first", 1_000) : signatures("second", 10);
       });
 
-      await indexer().ingestPool(POOL, new Map(), []);
+      await indexer().ingestPool(pool, new Map(), []);
 
       const listings = calls.filter((c) => c.method === "getSignaturesForAddress");
       expect(listings).toHaveLength(2);
@@ -175,10 +264,10 @@ describe("solana ingestion cursors", () => {
     it("advances past signatures that held no decodable swap", async () => {
       // Otherwise a pool whose traffic this indexer cannot decode re-reads the
       // same page every tick forever, at full cost, learning nothing.
-      indexedPool.findUnique.mockResolvedValue({ lastSignature: "sig-caught-up" });
+      const pool = poolAt("sig-caught-up");
       serve(() => signatures("sig", 5));
 
-      const { swaps, progress } = await indexer().ingestPool(POOL, new Map(), []);
+      const { swaps, progress } = await indexer().ingestPool(pool, new Map(), []);
 
       expect(swaps).toBe(0);
       expect(progress?.signature).toBe("sig-4");
@@ -187,24 +276,23 @@ describe("solana ingestion cursors", () => {
     it("seeds the downward walk from the first pass, and only the first", async () => {
       // A pool's first pass reads the newest page; its oldest signature is
       // exactly where a walk into that pool's past has to start.
-      indexedPool.findUnique.mockResolvedValue({ lastSignature: null });
+      const pool = poolAt(null);
       serve(() => signatures("sig", 30));
 
-      const first = await indexer().ingestPool(POOL, new Map(), []);
+      const first = await indexer().ingestPool(pool, new Map(), []);
       expect(first.progress?.backfillSeed).toBe("sig-0");
 
-      indexedPool.findUnique.mockResolvedValue({ lastSignature: "sig-29" });
-      const second = await indexer().ingestPool(POOL, new Map(), []);
+      const second = await indexer().ingestPool(poolAt("sig-29"), new Map(), []);
       expect(second.progress?.backfillSeed).toBeUndefined();
     });
 
     it("does not write a price it never learned", async () => {
       // lastPrice0 of zero would erase a real price with the absence of one,
       // and the deepest pool's price is what a token displays.
-      indexedPool.findUnique.mockResolvedValue({ lastSignature: "sig-caught-up" });
+      const pool = poolAt("sig-caught-up");
       serve(() => signatures("sig", 5));
 
-      await indexer().ingest([POOL], 300_000n);
+      await indexer().ingest([pool], 300_000n);
 
       const writes = transaction.mock.calls[0]?.[0] as unknown[];
       const data = (indexedPool.update.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;

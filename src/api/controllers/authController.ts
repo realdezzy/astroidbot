@@ -13,6 +13,7 @@ import {
   InternalError,
   NotFoundError,
 } from "../errors.js";
+import { JWT_ALGORITHM, JWT_ISSUER } from "../jwtOptions.js";
 
 function generateTokens(userId: number, telegramId?: string): { accessToken: string; refreshToken: string } {
   const config = ConfigManager.getInstance().config;
@@ -22,6 +23,8 @@ function generateTokens(userId: number, telegramId?: string): { accessToken: str
 
   const accessToken = jwt.sign(payload, config.JWT_SECRET, {
     expiresIn: config.JWT_EXPIRY as jwt.SignOptions["expiresIn"],
+    algorithm: JWT_ALGORITHM,
+    issuer: JWT_ISSUER,
   });
 
   const refreshToken = crypto.randomBytes(48).toString("hex");

@@ -196,16 +196,27 @@ describe("TokenDiscoveryService", () => {
       expect(created[0]).toMatchObject({ contractId: "0xnew", symbol: "NEW", decimals: 18 });
     });
 
-    it("only promotes tokens that cleared the liquidity floor and a rollup", async () => {
+    it("only promotes tokens that cleared the floor and a rollup", async () => {
       // The indexer catalogues every token with a pool, scams included. The
-      // catalogue is a listing decision, so the floor is applied on the way in.
+      // catalogue is a listing decision, so a bar is applied on the way in.
+      //
+      // Deep *or* traded, not deep alone: liquidity is measured from pool
+      // balances and volume from swaps, and a token can genuinely have the
+      // second without the first — a thin pool doing real turnover is worth
+      // listing, and requiring depth would hide exactly the new tokens the
+      // discovery pages exist to surface.
       tradableChains.push({ chainId: "base:mainnet" });
       mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
 
       await service.syncAll();
 
       const where = mockIndexedToken.findMany.mock.calls[0]![0].where;
-      expect(where.liquidityUsd).toEqual({ gte: MIN_LIQUIDITY_USD });
+      expect(where.OR).toEqual([
+        { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },
+        { volume24h: { gt: 0 } },
+      ]);
+      // No rollup yet means no liquidity reading either, so neither branch
+      // above can be trusted to have been applied to real numbers.
       expect(where.lastRolledUpAt).toEqual({ not: null });
     });
   });
@@ -246,6 +257,8 @@ describe("TokenDiscoveryService", () => {
       expect(where.OR).toEqual([
         { liquidityUsd: null },
         { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },
+        // A token that traded stays listed whatever its measured depth says.
+        { volume24h: { gt: 0 } },
       ]);
     });
 

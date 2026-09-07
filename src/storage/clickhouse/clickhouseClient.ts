@@ -10,8 +10,8 @@ export class ClickHouseClient {
 
   private constructor() {
     const config = ConfigManager.getInstance().config;
-    this.enabled = process.env.CLICKHOUSE_ENABLED === "true";
-    this.url = process.env.CLICKHOUSE_URL || "http://localhost:8123";
+    this.enabled = config.CLICKHOUSE_ENABLED;
+    this.url = config.CLICKHOUSE_URL;
   }
 
   static getInstance(): ClickHouseClient {

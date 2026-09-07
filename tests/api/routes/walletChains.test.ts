@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { createServer } from "../../../src/api/server.js";
 import { ConfigManager } from "../../../src/config.js";
 import type { Server } from "node:http";
+import { JWT_ALGORITHM, JWT_ISSUER } from "../../../src/api/jwtOptions.js";
 
 // Wallet provisioning across chain families. Before this path existed,
 // generate/import called the Stacks keypair helpers directly and createWallet
@@ -124,7 +125,10 @@ describe("Wallet provisioning across chain families", () => {
     if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
     ConfigManager.load();
     server = createServer();
-    token = jwt.sign({ userId: 10 }, ConfigManager.getInstance().config.JWT_SECRET);
+    token = jwt.sign({ userId: 10 }, ConfigManager.getInstance().config.JWT_SECRET, {
+      algorithm: JWT_ALGORITHM,
+      issuer: JWT_ISSUER,
+    });
   });
 
   afterAll(() => {

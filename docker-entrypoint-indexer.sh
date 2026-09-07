@@ -8,9 +8,6 @@ until nc -z postgres 5432 2>/dev/null; do
 done
 echo "   Postgres is ready."
 
-echo "==> Generating Prisma client..."
-npx prisma generate
-
 # Deliberately no `prisma migrate deploy` here.
 #
 # The bot container owns migrations. Two containers racing `migrate deploy` on
@@ -21,4 +18,4 @@ npx prisma generate
 # and if it isn't, failing fast is the correct outcome.
 
 echo "==> Starting AstroidBot market-data indexer..."
-exec npx tsx src/indexer.ts
+exec node dist/src/indexer.js

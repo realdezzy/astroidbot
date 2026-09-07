@@ -9,8 +9,10 @@ import {
 } from "./balanceDeltas.js";
 import type { BackfillRun, ChainIndexer, IndexRunResult } from "../types.js";
 import { backfillCutoffMs, backfillEnabled, type IndexerSettings } from "../settings.js";
+import { resolveNativeUsd } from "../nativePricing.js";
 import type { ChainDescriptor, ChainId } from "../../../types/chain.js";
 import { requireSvmConfig } from "../../../types/chain.js";
+import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 
 /**
  * Swap ingestion for Solana.
@@ -54,6 +56,15 @@ interface SolanaPool {
   token1: string;
   decimals0: number;
   decimals1: number;
+  /**
+   * Where this pool's forward pass got to.
+   *
+   * Carried on the shape rather than re-read per pool: `trackedPools()` selects
+   * the whole row and used to project this away, only for `ingestPool` to
+   * issue a `findUnique` to fetch it back — one round trip per tracked pool,
+   * per tick, for a column already in hand.
+   */
+  lastSignature: string | null;
 }
 
 /**
@@ -71,6 +82,16 @@ const SIGNATURE_PAGE_SIZE = 1_000;
  */
 const MAX_SIGNATURE_PAGES = 20;
 
+/**
+ * Wrapped SOL.
+ *
+ * Hardcoded as a last-resort anchor because it is the one mint on this chain
+ * that genuinely cannot change, and because resolving it through the DEX
+ * provider fails exactly when the provider is unreachable — which is when an
+ * anchor matters most.
+ */
+const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+
 /** What one pool's forward pass learned, written back after the batch. */
 interface PoolProgress {
   /** Newest signature *read* this pass, decodable or not. */
@@ -85,6 +106,11 @@ interface PoolProgress {
 export class SolanaIndexer implements ChainIndexer {
   readonly chainId: ChainId;
   private readonly svm;
+
+  /** Swappable-token list, memoised for the duration of one tick. */
+  private tokenList: Promise<{ symbol: string; contractId: string }[]> | null = null;
+  /** symbol (upper) -> mint, or null for "asked and not listed". Per tick. */
+  private mintCache = new Map<string, string | null>();
 
   constructor(
     private readonly descriptor: ChainDescriptor,
@@ -104,8 +130,7 @@ export class SolanaIndexer implements ChainIndexer {
   }
 
   private get rpcUrl(): string {
-    const key = `RPC_URL_${this.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-    return process.env[key] || this.svm.defaultRpcUrl;
+    return rpcUrlOverride(this.chainId, this.svm.defaultRpcUrl);
   }
 
   /**
@@ -124,17 +149,10 @@ export class SolanaIndexer implements ChainIndexer {
   private async rpcBatch<T>(calls: { method: string; params: unknown[] }[]): Promise<(T | null)[]> {
     if (calls.length === 0) return [];
 
-    const response = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        calls.map((call, id) => ({ jsonrpc: "2.0", id, method: call.method, params: call.params }))
-      ),
-    });
-
-    if (!response.ok) throw new Error(`Solana RPC ${response.status} for batch`);
-
-    const body = (await response.json()) as { id: number; result?: T; error?: unknown }[];
+    const body = await this.post<{ id: number; result?: T; error?: unknown }[]>(
+      calls.map((call, id) => ({ jsonrpc: "2.0", id, method: call.method, params: call.params })),
+      "batch"
+    );
 
     // Responses may come back in any order, so they are placed by id rather
     // than assumed to line up with the request array.
@@ -147,20 +165,65 @@ export class SolanaIndexer implements ChainIndexer {
   }
 
   private async rpc<T>(method: string, params: unknown[]): Promise<T> {
-    const response = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    });
+    const body = await this.post<{ result?: T; error?: { message?: string } }>(
+      { jsonrpc: "2.0", id: 1, method, params },
+      method
+    );
 
-    if (!response.ok) throw new Error(`Solana RPC ${response.status} for ${method}`);
-
-    const body = (await response.json()) as { result?: T; error?: { message?: string } };
     if (body.error) throw new Error(`Solana RPC ${method}: ${body.error.message ?? "error"}`);
     return body.result as T;
   }
 
+  /**
+   * One JSON-RPC POST, retried when the endpoint says to slow down.
+   *
+   * Every Solana call in this class goes through here, and the retry is why:
+   * a throttled response used to throw, be caught at the pool level, and be
+   * logged at `debug` — so a rate-limited endpoint looked exactly like a set of
+   * pools that had stopped trading. Measured against a metered provider at the
+   * concurrency this indexer actually uses, half the requests came back 429.
+   *
+   * `Retry-After` is honoured when the endpoint sends one; otherwise the wait
+   * doubles from the configured backoff. Bounded attempts, because a tick that
+   * spends its whole budget retrying one pool has starved the rest.
+   */
+  private async post<T>(payload: unknown, label: string): Promise<T> {
+    const RETRIES = 3;
+    let wait = this.settings.retryBackoffMs;
+
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(this.rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) return (await response.json()) as T;
+
+      const throttled = response.status === 429 || response.status === 503;
+      if (!throttled || attempt >= RETRIES) {
+        throw new Error(`Solana RPC ${response.status} for ${label}`);
+      }
+
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : wait;
+
+      logger.debug("[indexer] solana rpc throttled, backing off", {
+        chainId: this.chainId,
+        label,
+        status: response.status,
+        delayMs: delay,
+        attempt: attempt + 1,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      wait *= 2;
+    }
+  }
+
   async run(): Promise<IndexRunResult> {
+    this.resetTickCaches();
+
     const db = DatabaseService.getInstance();
     const slot = await this.rpc<number>("getSlot", [{ commitment: "finalized" }]);
 
@@ -392,14 +455,45 @@ export class SolanaIndexer implements ChainIndexer {
     }
   }
 
-  /** Resolves a symbol to its mint through the chain's DEX provider list. */
+  /**
+   * Resolves a symbol to its mint through the chain's DEX provider list.
+   *
+   * The list is fetched once per tick rather than once per lookup. Each call
+   * pulled the provider's entire swappable set to answer one symbol, and a tick
+   * asks at least five times — the stable and native mints during discovery,
+   * again while building the USD anchors, and again on the backfill pass.
+   */
   private async mintFor(symbol: string): Promise<string | null> {
-    const { DEXRegistry } = await import("../../dex/dexRegistry.js");
-    const tokens = await DEXRegistry.getInstance()
-      .getSwappableTokens(false, this.chainId)
-      .catch(() => []);
+    const key = symbol.toUpperCase();
 
-    return tokens.find((t) => t.symbol.toUpperCase() === symbol.toUpperCase())?.contractId ?? null;
+    const cached = this.mintCache.get(key);
+    if (cached !== undefined) return cached;
+
+    if (!this.tokenList) {
+      const { DEXRegistry } = await import("../../dex/dexRegistry.js");
+      this.tokenList = DEXRegistry.getInstance()
+        .getSwappableTokens(false, this.chainId)
+        .catch(() => []);
+    }
+
+    const tokens = await this.tokenList;
+    const mint = tokens.find((t) => t.symbol.toUpperCase() === key)?.contractId ?? null;
+
+    this.mintCache.set(key, mint);
+    return mint;
+  }
+
+  /**
+   * Drops the per-tick memoisation.
+   *
+   * Held for a tick and no longer: a token listed between ticks should be
+   * visible on the next one, and a provider that was unreachable must get
+   * another chance rather than having its empty list cached for the life of
+   * the process.
+   */
+  private resetTickCaches(): void {
+    this.tokenList = null;
+    this.mintCache.clear();
   }
 
   private async trackedPools(): Promise<SolanaPool[]> {
@@ -416,6 +510,7 @@ export class SolanaIndexer implements ChainIndexer {
       token1: r.token1,
       decimals0: r.decimals0,
       decimals1: r.decimals1,
+      lastSignature: r.lastSignature,
     }));
   }
 
@@ -489,14 +584,7 @@ export class SolanaIndexer implements ChainIndexer {
     usd: Map<string, number>,
     rawSwaps: RawSwap[]
   ): Promise<{ swaps: number; progress: PoolProgress | null }> {
-    const db = DatabaseService.getInstance();
-
-    const stored = await db.prisma.indexedPool.findUnique({
-      where: { id: pool.id },
-      select: { lastSignature: true },
-    });
-
-    const signatures = await this.newSignatures(pool.poolAddress, stored?.lastSignature ?? null);
+    const signatures = await this.newSignatures(pool.poolAddress, pool.lastSignature);
     if (signatures.length === 0) return { swaps: 0, progress: null };
 
     // Newest first from the RPC; applied oldest-first so a bucket's `open` is
@@ -527,7 +615,7 @@ export class SolanaIndexer implements ChainIndexer {
         at: decoded.at,
         // Only meaningful on the first pass; `undefined` on every later one so
         // the write is skipped rather than resetting the walk.
-        backfillSeed: stored?.lastSignature ? undefined : signatures.at(-1)?.signature,
+        backfillSeed: pool.lastSignature ? undefined : signatures.at(-1)?.signature,
       },
     };
   }
@@ -691,6 +779,7 @@ export class SolanaIndexer implements ChainIndexer {
             token1: row.token1,
             decimals0: row.decimals0,
             decimals1: row.decimals1,
+            lastSignature: row.lastSignature,
           },
           from,
           cutoffMs,
@@ -792,11 +881,21 @@ export class SolanaIndexer implements ChainIndexer {
   }
 
   /**
-   * USD price per mint. Stables anchor at 1; everything else is priced by the
-   * pool it traded in, and a mint with no priceable counterparty gets none.
+   * USD price per mint. Stables anchor at 1; the wrapped native is resolved the
+   * same way the EVM indexer resolves its own, and everything else is priced by
+   * the pool it traded in.
+   *
+   * SOL matters more here than the wrapped native does on an EVM chain, and its
+   * absence is why this method used to under-report. Jupiter routes most pairs
+   * through a SOL leg, so a discovered pool is far more likely to be quoted in
+   * SOL than in USDC — and with SOL unpriced, `decodeBatch` found neither side
+   * in this map, wrote `priceUsd: 0` and `volumeUsd: 0`, and the rollup
+   * faithfully reported `volume24h: null` for the whole chain. Nothing was
+   * broken and nothing was logged; Solana simply had no numbers.
    */
   private async usdPrices(pools: SolanaPool[]): Promise<Map<string, number>> {
     const usd = new Map<string, number>();
+
     const stable = await this.mintFor(this.descriptor.stableSymbol);
     if (stable) usd.set(stable, 1);
 
@@ -805,8 +904,77 @@ export class SolanaIndexer implements ChainIndexer {
     const usdt = await this.mintFor("USDT");
     if (usdt) usd.set(usdt, 1);
 
+    // Both spellings: pools name wrapped SOL by its mint, and the catalogue
+    // may carry either symbol depending on which provider listed it.
+    const nativeMints = [
+      await this.mintFor(this.descriptor.nativeSymbol),
+      await this.mintFor(`W${this.descriptor.nativeSymbol}`),
+      WRAPPED_SOL_MINT,
+    ].filter((mint): mint is string => Boolean(mint));
+
+    // One canonical spelling on both sides. `resolveNativeUsd` decides whether
+    // to invert a pool's price by comparing its token0 against this value, so
+    // an anchor row labelled with a different (but equally native) mint would
+    // be inverted — turning a $104 SOL into a $0.0096 one and mispricing every
+    // token on the chain by that factor, silently.
+    const canonicalNative = nativeMints[0] ?? WRAPPED_SOL_MINT;
+    const anchorPools = await this.nativeAnchorPools(nativeMints, usd, canonicalNative);
+
+    const nativeUsd = await resolveNativeUsd({
+      descriptor: this.descriptor,
+      anchorPools,
+      wrappedNative: canonicalNative,
+      stables: new Set(usd.keys()),
+    });
+
+    if (nativeUsd != null) {
+      for (const mint of new Set(nativeMints)) usd.set(mint, nativeUsd);
+    }
+
     void pools;
     return usd;
+  }
+
+  /**
+   * Local native/stable pools, in the shape `resolveNativeUsd` expects.
+   *
+   * `lastPrice0` on Solana is already a USD price rather than a token0/token1
+   * ratio, so a native/stable pool's stored price is the anchor directly. It is
+   * presented as `token0 === wrappedNative` so the resolver reads it without
+   * inverting.
+   */
+  private async nativeAnchorPools(
+    nativeMints: string[],
+    stables: Map<string, number>,
+    canonicalNative: string
+  ): Promise<{ token0: string; lastPrice0: number | null; liquidityUsd: number | null }[]> {
+    const stableMints = [...stables.keys()];
+    if (nativeMints.length === 0 || stableMints.length === 0) return [];
+
+    const rows = await DatabaseService.getInstance().prisma.indexedPool.findMany({
+      where: {
+        chainId: this.chainId,
+        OR: [
+          { token0: { in: nativeMints }, token1: { in: stableMints } },
+          { token0: { in: stableMints }, token1: { in: nativeMints } },
+        ],
+      },
+      select: { token0: true, token1: true, lastPrice0: true, liquidityUsd: true },
+    });
+
+    const native = new Set(nativeMints);
+
+    return rows.map((row) => ({
+      // Always the canonical spelling, whichever the pool happens to use, so
+      // the resolver's token0 comparison cannot mistake a native side for a
+      // non-native one and invert the price.
+      token0: canonicalNative,
+      // lastPrice0 is the USD price of token0. When the native side is token1
+      // the stored price describes the stable, which is ~1 and tells us
+      // nothing — so those rows carry no anchor.
+      lastPrice0: native.has(row.token0) ? row.lastPrice0 : null,
+      liquidityUsd: row.liquidityUsd,
+    }));
   }
 
   private async saveCursor(lastBlock: bigint): Promise<void> {

@@ -10,9 +10,9 @@ import type { PublicClient } from "viem";
  *
  * It only ever has to be *roughly*. The timestamp's whole job is to place a
  * swap in a 5-minute bucket, so accuracy to a few seconds is ample. So we
- * sample a bounded number of blocks across the range and linearly interpolate
- * between them: cost becomes constant in the size of the range rather than
- * linear in it.
+ * sample a bounded number of the blocks that actually produced a swap and
+ * linearly interpolate between them: cost becomes constant in the size of the
+ * range, and zero when the range held nothing.
  *
  * The error this introduces is the deviation of real block production from a
  * constant rate *within one sample interval*. Block times are near-constant on
@@ -27,34 +27,54 @@ export class BlockTimeOracle {
   constructor(
     private readonly client: PublicClient,
     /**
-     * Ceiling on sampled blocks per range. 200 across a 20k-block range is one
-     * sample per 100 blocks; for a 250ms-block L2 that is ~25 seconds of chain
-     * per interval, far finer than the 5-minute bucket it feeds.
+     * Ceiling on blocks actually read. 200 samples across a range of swaps
+     * spanning 20k blocks is one sample per 100 blocks; for a 250ms-block L2
+     * that is ~25 seconds of chain per interval, far finer than the 5-minute
+     * bucket it feeds.
      */
     private readonly maxSamples = 200,
     private readonly concurrency = 50
   ) {}
 
   /**
-   * Samples the range so `timeOf` can answer for any block within it.
+   * Samples exactly the blocks given, deduplicated.
    *
-   * Both endpoints are always sampled, so interpolation is never extrapolation
-   * for blocks inside the range.
+   * This is the cheap path, and the one ingestion uses. The timestamps exist
+   * only to place a swap in a 5-minute bucket, so the only blocks worth asking
+   * about are the ones a swap was actually found in — sampling the range they
+   * happen to span buys nothing and costs one read per block scanned.
+   *
+   * Above `maxSamples` distinct blocks it falls back to an evenly-spaced
+   * subset and interpolates between them: the bound on work is what keeps a
+   * busy range from becoming a thousand round trips.
    */
-  async prime(from: bigint, to: bigint): Promise<void> {
-    if (to < from) return;
+  async primeBlocks(blocks: (bigint | null | undefined)[]): Promise<void> {
+    const distinct = [...new Set(blocks.filter((b): b is bigint => b != null))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0
+    );
 
-    const span = to - from;
-    const stride =
-      span <= BigInt(this.maxSamples)
-        ? 1n
-        : span / BigInt(this.maxSamples) + 1n;
+    if (distinct.length === 0) return;
 
-    const wanted: bigint[] = [];
-    for (let block = from; block < to; block += stride) wanted.push(block);
-    wanted.push(to);
+    // Both endpoints are kept whatever the stride, so every other block in the
+    // set interpolates rather than extrapolates.
+    const wanted =
+      distinct.length <= this.maxSamples
+        ? distinct
+        : (() => {
+            const stride = Math.ceil(distinct.length / this.maxSamples);
+            const subset = distinct.filter((_, i) => i % stride === 0);
+            const last = distinct[distinct.length - 1]!;
+            if (subset[subset.length - 1] !== last) subset.push(last);
+            return subset;
+          })();
 
-    const missing = wanted.filter((b) => !this.samples.some((s) => s.block === b));
+    await this.fetchSamples(wanted);
+  }
+
+  /** Fetches and records any of `wanted` not already sampled. */
+  private async fetchSamples(wanted: bigint[]): Promise<void> {
+    const have = new Set(this.samples.map((s) => s.block));
+    const missing = wanted.filter((b) => !have.has(b));
 
     for (let i = 0; i < missing.length; i += this.concurrency) {
       const slice = missing.slice(i, i + this.concurrency);

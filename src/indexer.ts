@@ -47,6 +47,10 @@ function createHealthServer(): http.Server {
         service: "indexer",
         chains: IndexerService.getInstance().indexedChains(),
         chainHealth: ChainHealthMonitor.getInstance().snapshot(),
+        // Per-chain cursor progress. A stalled chain reports no errors and a
+        // rising run count, so neither of those can distinguish "caught up and
+        // quiet" from "every range refused" — this can.
+        ingestion: IndexerService.getInstance().progressSnapshot(),
         uptimeSeconds: Math.round((Date.now() - health.startedAt.getTime()) / 1000),
         lastRunAt: health.lastRunAt,
         lastRunMs: health.lastRunMs,

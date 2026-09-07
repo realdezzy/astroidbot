@@ -32,9 +32,8 @@ import perpRoutes from "./routes/perp/perp.js";
 import docsRoutes from "./routes/docs.js";
 import contactRoutes from "./routes/contact.js";
 import pushRoutes from "./routes/push.js";
+import aiRoutes from "./routes/ai.js";
 import { QueueManager, QUEUES } from "../services/queue.js";
-import { AIOrchestrator } from "../services/ai.js";
-import OpenAI, { toFile } from "openai";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -58,7 +57,12 @@ export function createServer(): HttpServer {
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
-          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://telegram.org"],
+          // No 'unsafe-eval': the dashboard is a Vite production build and has
+          // no need for it, and leaving it in removes most of what a CSP is
+          // for on a page that renders chain-supplied token names and symbols.
+          // 'unsafe-inline' stays only until the remaining inline scripts move
+          // to nonces; drop it here once they have.
+          scriptSrc: ["'self'", "'unsafe-inline'", "https://telegram.org"],
           frameSrc: ["'self'", "https://oauth.telegram.org", "https://telegram.org"],
           styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
           fontSrc: ["'self'", "https://fonts.gstatic.com"],
@@ -207,65 +211,7 @@ export function createServer(): HttpServer {
   app.use("/api/push", pushRoutes);
 
 
-  app.post("/api/ai/command", authenticate, async (req: Request, res: Response) => {
-    try {
-      const { input, history } = req.body as { input: string; history?: { role: "user" | "assistant"; content: string }[] };
-      if (!input?.trim()) return res.status(400).json({ error: "input is required" });
- 
-      const parsed = await AIOrchestrator.getInstance().parseCommand(req.userId!, input.trim(), history);
-      if (!parsed) return res.json({ action: "unknown", reason: "Failed to parse" });
- 
-      res.json(parsed);
-    } catch (error) {
-      logger.error("AI command failed", { error });
-      res.status(500).json({ error: "Internal error" });
-    }
-  });
- 
-  app.post("/api/ai/voice", authenticate, express.raw({ type: "audio/*", limit: "10mb" }), async (req: Request, res: Response) => {
-    try {
-      const buffer = req.body as Buffer;
-      if (!buffer || buffer.length === 0) {
-        return res.status(400).json({ error: "Audio data is required" });
-      }
- 
-      const openaiApiKey = ConfigManager.getInstance().config.OPENAI_API_KEY;
-      if (!openaiApiKey || openaiApiKey.startsWith("sk-...")) {
-        return res.status(500).json({ error: "OpenAI API key is not configured." });
-      }
- 
-      const openai = new OpenAI({ apiKey: openaiApiKey });
-      const fileObj = await toFile(buffer, "voice.webm", { type: "audio/webm" });
- 
-      const transcription = await openai.audio.transcriptions.create({
-        file: fileObj,
-        model: "whisper-1",
-      });
- 
-      const transcriptionText = transcription.text.trim();
-      if (!transcriptionText) {
-        return res.json({ text: "", parsed: null, error: "Could not hear or understand audio." });
-      }
- 
-      const historyQuery = req.query.history as string | undefined;
-      let history: { role: "user" | "assistant"; content: string }[] | undefined;
-      if (historyQuery) {
-        try {
-          history = JSON.parse(historyQuery);
-        } catch {}
-      }
-
-      const parsed = await AIOrchestrator.getInstance().parseCommand(req.userId!, transcriptionText, history);
- 
-      res.json({
-        text: transcriptionText,
-        parsed
-      });
-    } catch (error) {
-      logger.error("AI voice command failed", { error });
-      res.status(500).json({ error: "Internal error" });
-    }
-  });
+  app.use("/api/ai", aiRoutes);
   app.use("/api/bot", botRoutes);
   app.use("/api", tokenRoutes);
   // Registered AFTER tokenRoutes on purpose: discovery's
@@ -279,15 +225,25 @@ export function createServer(): HttpServer {
     res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
   });
 
-  const webDistPath = path.resolve(__dirname, "../../web/dist");
-  if (fs.existsSync(webDistPath)) {
+  // Resolved from the working directory first, and only then relative to this
+  // file. The two differ between running the sources under tsx
+  // (src/api/server.ts) and running the build (dist/src/api/server.js), so a
+  // purely __dirname-relative path is correct in exactly one of them — and the
+  // symptom of getting it wrong is the API serving JSON 404s where the
+  // dashboard should be, which reads as a frontend problem.
+  const webDistPath = [
+    path.resolve(process.cwd(), "web/dist"),
+    path.resolve(__dirname, "../../web/dist"),
+    path.resolve(__dirname, "../../../web/dist"),
+  ].find((candidate) => fs.existsSync(candidate));
+  if (webDistPath) {
     app.use(express.static(webDistPath));
 
     app.get(/.*/, (_req: Request, res: Response) => {
       res.sendFile(path.join(webDistPath, "index.html"));
     });
 
-    logger.info("Serving web dashboard from web/dist");
+    logger.info("Serving web dashboard", { path: webDistPath });
   } else {
     app.use((_req: Request, res: Response) => {
       res.status(404).json({ error: "Not found", code: "NOT_FOUND" });

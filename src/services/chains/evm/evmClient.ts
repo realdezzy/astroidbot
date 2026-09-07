@@ -11,16 +11,33 @@ import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js"
  */
 
 /**
+ * The env var that overrides a chain's RPC endpoint.
+ *
+ * Derived from the ChainId: `base:mainnet` → `RPC_URL_BASE_MAINNET`. One
+ * function so the convention is stated once — six files had grown their own
+ * copy of this expression, which is six chances for a deployment to set a
+ * variable that only some of its code paths read.
+ */
+export function rpcEnvKey(chainId: string): string {
+  return `RPC_URL_${chainId.toUpperCase().replace(/[:-]/g, "_")}`;
+}
+
+/**
  * Resolves a chain's RPC endpoint, preferring a per-deployment override.
  *
- * The env var name derives from the ChainId: `base:mainnet` →
- * `RPC_URL_BASE_MAINNET`. Deployments override the descriptor default to point
- * at a paid provider — public endpoints rate-limit hard, and the indexer is by
- * far the heaviest RPC consumer in the process.
+ * Deployments override the descriptor default to point at a paid provider —
+ * public endpoints rate-limit hard, and the indexer is by far the heaviest RPC
+ * consumer in the process.
+ *
+ * Works for any family, not just EVM: `defaultUrl` is what the caller falls
+ * back to, so Solana and Stacks resolve through the same convention.
  */
+export function rpcUrlOverride(chainId: string, defaultUrl: string): string {
+  return process.env[rpcEnvKey(chainId)] || defaultUrl;
+}
+
 export function rpcUrlFor(descriptor: ChainDescriptor): string {
-  const key = `RPC_URL_${descriptor.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-  return process.env[key] || requireEvmConfig(descriptor).defaultRpcUrl;
+  return rpcUrlOverride(descriptor.chainId, requireEvmConfig(descriptor).defaultRpcUrl);
 }
 
 /** A read-only viem client bound to the chain's descriptor and RPC. */

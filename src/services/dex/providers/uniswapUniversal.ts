@@ -2,26 +2,17 @@ import {
   createPublicClient,
   defineChain,
   http,
-  encodeFunctionData,
-  parseUnits,
-  formatUnits,
   type Address,
   type PublicClient,
 } from "viem";
-import { logger } from "../../../utils/logger.js";
 import type { SwappableToken, TransactionPayload } from "../../../types.js";
 import type { DEXQuote } from "../../../types/dexProvider.js";
-import {
-  ERC20_ABI,
-  UNISWAP_UNIVERSAL_ROUTER_ABI,
-  WRAPPED_NATIVE_ABI,
-} from "../../chains/evm/abis.js";
 import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
-import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 import { UniswapV3Provider } from "./uniswapV3.js";
 import { UniswapV2Provider } from "./uniswapV2.js";
+import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 
 /**
  * Universal Router DEX Provider.
@@ -62,8 +53,7 @@ export class UniswapUniversalProvider extends BaseDEXProvider {
   }
 
   private rpcUrl(): string {
-    const key = `RPC_URL_${this.descriptor.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-    return process.env[key] || this.evm.defaultRpcUrl;
+    return rpcUrlOverride(this.descriptor.chainId, this.evm.defaultRpcUrl);
   }
 
   private publicClient(): PublicClient {

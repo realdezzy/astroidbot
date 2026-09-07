@@ -87,12 +87,30 @@ export class RedisService {
   // The token exists so a holder whose lock expired mid-operation can't delete
   // the lock a *different* holder has since acquired — pass it back to
   // releaseLock. Truthy/falsy return keeps `if (!lock)` call sites working.
+  //
+  // A *failure* to reach Redis is not the same as the lock being held, and
+  // this used to return null for both. Callers read null as "someone else has
+  // it, skip and try next tick", so an unreachable Redis made every lock-guarded
+  // job skip itself forever while logging nothing above debug. Reaching Redis
+  // and being refused stays null; not reaching it at all throws, so the caller
+  // can decide — and so the failure is visible.
   async acquireLock(key: string, ttlMs = 30_000): Promise<string | null> {
+    const client = this.getClient();
+    const token = randomUUID();
+    const result = await client.set(key, token, "PX", ttlMs, "NX");
+    return result === "OK" ? token : null;
+  }
+
+  /**
+   * `acquireLock`, but treating an unreachable Redis as "held".
+   *
+   * For callers whose work is genuinely optional and who would rather skip a
+   * pass than surface an error. Anything whose skipping would be invisible
+   * should use `acquireLock` and let the failure propagate instead.
+   */
+  async tryAcquireLock(key: string, ttlMs = 30_000): Promise<string | null> {
     try {
-      const client = this.getClient();
-      const token = randomUUID();
-      const result = await client.set(key, token, "PX", ttlMs, "NX");
-      return result === "OK" ? token : null;
+      return await this.acquireLock(key, ttlMs);
     } catch {
       return null;
     }

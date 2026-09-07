@@ -1,4 +1,3 @@
-import { EventBus } from "./eventBus.js";
 import { logger } from "../../../utils/logger.js";
 import type { ChainId } from "../../../types/chain.js";
 

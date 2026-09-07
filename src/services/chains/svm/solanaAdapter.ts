@@ -13,6 +13,7 @@ import { logger } from "../../../utils/logger.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseChainAdapter } from "../baseChainAdapter.js";
 import { requireSvmConfig, type ChainDescriptor, type SvmChainConfig } from "../../../types/chain.js";
+import { rpcUrlOverride } from "../evm/evmClient.js";
 
 /**
  * Solana releases its lock after the signature is submitted, but confirmation
@@ -54,8 +55,7 @@ export class SolanaAdapter extends BaseChainAdapter {
   }
 
   private rpcUrl(): string {
-    const key = `RPC_URL_${this.descriptor.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-    return process.env[key] || this.svm.defaultRpcUrl;
+    return rpcUrlOverride(this.descriptor.chainId, this.svm.defaultRpcUrl);
   }
 
   connection(): Connection {

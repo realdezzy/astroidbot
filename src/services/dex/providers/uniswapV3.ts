@@ -21,6 +21,7 @@ import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
+import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 
 /**
  * Uniswap V3 and its forks, on any EVM chain.
@@ -82,8 +83,7 @@ export class UniswapV3Provider extends BaseDEXProvider {
   }
 
   private rpcUrl(): string {
-    const key = `RPC_URL_${this.descriptor.chainId.toUpperCase().replace(/[:-]/g, "_")}`;
-    return process.env[key] || this.evm.defaultRpcUrl;
+    return rpcUrlOverride(this.descriptor.chainId, this.evm.defaultRpcUrl);
   }
 
   private publicClient(): PublicClient {
