@@ -65,10 +65,19 @@ const envSchema = z.object({
   INDEXER_POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().optional(),
   INDEXER_PORT: z.coerce.number().int().positive().default(8007),
   INDEXER_LOCK_TTL_MS: z.coerce.number().int().positive().default(300_000),
+  // A floor in blocks. Chains that state a block time raise it to whatever
+  // covers INDEXER_CONFIRMATION_SECONDS — see settingsForChain.
   INDEXER_CONFIRMATIONS: z.coerce.number().int().min(0).default(12),
+  // The reorg depth that actually matters, in wall-clock seconds. 60s is
+  // comfortably past sequencer-level reorgs on every L2 here and does not
+  // reduce Ethereum, where 12 blocks is already 144s.
+  INDEXER_CONFIRMATION_SECONDS: z.coerce.number().int().min(0).default(60),
   INDEXER_BLOCK_CHUNK_SIZE: z.coerce.number().int().positive().default(2_000),
   INDEXER_MAX_BLOCKS_PER_RUN: z.coerce.number().int().positive().default(20_000),
   INDEXER_INITIAL_LOOKBACK_BLOCKS: z.coerce.number().int().positive().default(50_000),
+  // Recent history a never-indexed chain should reach on its first pass. The
+  // downward backfill walk fills in the rest, so this only has to bootstrap.
+  INDEXER_INITIAL_LOOKBACK_HOURS: z.coerce.number().int().positive().default(6),
   INDEXER_MAX_TX_PER_RUN: z.coerce.number().int().positive().default(300),
   INDEXER_MAX_POOLS_PER_CHAIN: z.coerce.number().int().positive().default(300),
   INDEXER_MAX_ADDRESSES_PER_FILTER: z.coerce.number().int().positive().default(100),

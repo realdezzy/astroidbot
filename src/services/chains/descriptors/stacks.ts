@@ -14,6 +14,9 @@ export const STACKS_MAINNET: ChainDescriptor = {
   tradable: true,
   explorerTxUrl: (txId) => `${explorerBase}/txid/${txId}?chain=mainnet`,
   explorerAddressUrl: (address) => `${explorerBase}/address/${address}?chain=mainnet`,
+  // Informational: Stacks ingestion is transaction-list paged, not block
+  // ranged, so the block-count margins are unused here.
+  indexer: { blockTimeSeconds: 600 },
   stacks: {
     apiUrl: "https://api.hiro.so",
     // One contract per protocol, not per pair — a Stacks AMM holds every pool

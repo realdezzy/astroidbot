@@ -11,6 +11,10 @@ export const SOLANA_MAINNET: ChainDescriptor = {
   tradable: true,
   explorerTxUrl: (txId) => `https://solscan.io/tx/${txId}`,
   explorerAddressUrl: (address) => `https://solscan.io/account/${address}`,
+  // Informational: Solana ingestion pages signatures per account rather than
+  // walking block ranges, so neither margin applies. Recorded so the health
+  // surfaces can reason about slot rates.
+  indexer: { blockTimeSeconds: 0.4 },
   svm: {
     defaultRpcUrl: "https://api.mainnet-beta.solana.com",
     // Jupiter's Swap API. `quote-api.jup.ag/v6` was here and is *gone* — the

@@ -28,6 +28,12 @@ export const ROBINHOOD_MAINNET = defineEvmChain({
   nativeSymbol: "ETH",
   stableSymbol: "USDG",
   explorerBaseUrl: "https://robinhoodchain.blockscout.com",
+  // Measured 0.1010 s/block over a 5,000-block span, and confirmed by the
+  // header stream at 497 blocks in 45 seconds. This is the fastest chain here
+  // by two orders of magnitude, and the reason the indexer's safety margins
+  // are derived from block time rather than fixed: at 100ms a block, the
+  // global 12-block confirmation depth was 1.2 seconds of reorg protection.
+  indexer: { blockTimeSeconds: 0.101 },
   // No bundler serves chain 4663, so EOA is the only workable custody here.
   custody: "eoa",
   wrappedNative: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",

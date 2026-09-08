@@ -23,6 +23,9 @@ export const ETHEREUM_MAINNET: ChainDescriptor = {
   tradable: true,
   explorerTxUrl: (txId) => `https://etherscan.io/tx/${txId}`,
   explorerAddressUrl: (address) => `https://etherscan.io/address/${address}`,
+  // 12 s slots. The one chain where the global 12-block default already
+  // exceeds the time target, so it is left exactly as it was.
+  indexer: { blockTimeSeconds: 12 },
   evm: {
     id: 1,
     // publicnode over llamarpc: the latter was returning Cloudflare 521s when

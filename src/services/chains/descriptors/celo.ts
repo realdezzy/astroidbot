@@ -27,6 +27,8 @@ export const CELO_MAINNET: ChainDescriptor = {
   tradable: true,
   explorerTxUrl: (txId) => `https://celoscan.io/tx/${txId}`,
   explorerAddressUrl: (address) => `https://celoscan.io/address/${address}`,
+  // Measured 1.0000 s/block over a 5,000-block span.
+  indexer: { blockTimeSeconds: 1 },
   evm: {
     id: 42220,
     defaultRpcUrl: "https://forno.celo.org",

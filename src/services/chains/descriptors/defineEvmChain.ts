@@ -1,4 +1,4 @@
-import type { ChainDescriptor, EvmChainConfig } from "../../../types/chain.js";
+import type { ChainDescriptor, EvmChainConfig, IndexerChainConfig } from "../../../types/chain.js";
 
 export interface EvmChainSpec {
   chainId: string;
@@ -16,6 +16,15 @@ export interface EvmChainSpec {
   wrappedNative?: `0x${string}`;
   dex?: EvmChainConfig["dex"];
   tokens?: EvmChainConfig["tokens"];
+  /**
+   * Per-chain ingestion tuning — most usefully `blockTimeSeconds`.
+   *
+   * Worth stating for any chain faster than a couple of seconds a block. The
+   * indexer's reorg margin is counted in blocks, so without this a sub-second
+   * chain inherits a global block count that buys it almost no protection:
+   * twelve blocks is 144 seconds on Ethereum and 1.2 on a 100ms chain.
+   */
+  indexer?: IndexerChainConfig;
 }
 
 /**
@@ -51,6 +60,7 @@ export function defineEvmChain(spec: EvmChainSpec): ChainDescriptor {
     tradable: Boolean(spec.dex),
     explorerTxUrl: (txId) => (explorer ? `${explorer}/tx/${txId}` : txId),
     explorerAddressUrl: (address) => (explorer ? `${explorer}/address/${address}` : address),
+    ...(spec.indexer ? { indexer: spec.indexer } : {}),
     evm: {
       id: spec.id,
       defaultRpcUrl: spec.rpcUrl,

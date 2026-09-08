@@ -11,6 +11,8 @@ export const BASE_MAINNET: ChainDescriptor = {
   tradable: true,
   explorerTxUrl: (txId) => `https://basescan.org/tx/${txId}`,
   explorerAddressUrl: (address) => `https://basescan.org/address/${address}`,
+  // Measured 2.05 s/block against the head, matching OP Stack's 2 s target.
+  indexer: { blockTimeSeconds: 2 },
   evm: {
     id: 8453,
     defaultRpcUrl: "https://mainnet.base.org",
@@ -46,6 +48,7 @@ export const BASE_SEPOLIA: ChainDescriptor = {
   tradable: true,
   explorerTxUrl: (txId) => `https://sepolia.basescan.org/tx/${txId}`,
   explorerAddressUrl: (address) => `https://sepolia.basescan.org/address/${address}`,
+  indexer: { blockTimeSeconds: 2 },
   evm: {
     id: 84532,
     defaultRpcUrl: "https://sepolia.base.org",

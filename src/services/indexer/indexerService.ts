@@ -6,7 +6,7 @@ import { logger } from "../../utils/logger.js";
 import { UniswapV3Indexer } from "./evm/uniswapV3Indexer.js";
 import { StacksIndexer } from "./stacks/stacksIndexer.js";
 import { SolanaIndexer } from "./svm/solanaIndexer.js";
-import { indexerSettings, type IndexerSettings } from "./settings.js";
+import { indexerSettings, settingsForChain, type IndexerSettings } from "./settings.js";
 import type { ChainIndexer, IndexRunResult } from "./types.js";
 import type { ChainDescriptor } from "../../types/chain.js";
 
@@ -113,7 +113,24 @@ export class IndexerService {
       }
 
       try {
-        this.indexers.set(descriptor.chainId, build.create(descriptor, settings));
+        // Settings are resolved per chain, not shared: the block-denominated
+        // safety margins mean different spans of time on a 100ms chain than on
+        // a 12s one, and one number for both protects neither well.
+        const chainSettings = settingsForChain(descriptor, settings);
+
+        if (chainSettings.confirmations !== settings.confirmations) {
+          logger.info("[indexer] chain-specific safety margins", {
+            chainId: descriptor.chainId,
+            blockTimeSeconds: descriptor.indexer?.blockTimeSeconds,
+            confirmations: chainSettings.confirmations,
+            reorgWindowSeconds: descriptor.indexer?.blockTimeSeconds
+              ? Math.round(chainSettings.confirmations * descriptor.indexer.blockTimeSeconds)
+              : undefined,
+            initialLookbackBlocks: chainSettings.initialLookbackBlocks,
+          });
+        }
+
+        this.indexers.set(descriptor.chainId, build.create(descriptor, chainSettings));
       } catch (error) {
         logger.warn("[indexer] failed to build indexer", {
           chainId: descriptor.chainId,

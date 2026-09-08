@@ -157,9 +157,40 @@ export interface ChainDescriptor {
   tradable: boolean;
   explorerTxUrl(txId: string): string;
   explorerAddressUrl(address: string): string;
+  /**
+   * Per-chain ingestion tuning.
+   *
+   * The indexer's safety margins are denominated in *blocks*, but what they
+   * actually protect is a span of *time* — and block times across the enabled
+   * set span two orders of magnitude, from Robinhood's ~100ms to Ethereum's
+   * ~12s. One global block count therefore means wildly different guarantees:
+   * `INDEXER_CONFIRMATIONS=12` was 144 seconds of reorg protection on Ethereum
+   * and 1.2 seconds on Robinhood.
+   *
+   * Stating the chain's block time here lets those margins be derived rather
+   * than guessed. Absent, the global block counts apply unchanged.
+   */
+  indexer?: IndexerChainConfig;
   evm?: EvmChainConfig;
   svm?: SvmChainConfig;
   stacks?: StacksChainConfig;
+}
+
+export interface IndexerChainConfig {
+  /**
+   * Mean seconds per block. A measured physical property of the chain, not a
+   * tuning knob — it is what the time-denominated targets are converted
+   * through. Chains whose ingestion isn't block-ranged (Stacks, Solana) may
+   * still state it for the health surfaces.
+   */
+  blockTimeSeconds?: number;
+  /**
+   * Explicit block count, overriding anything derived from `blockTimeSeconds`.
+   * For a chain whose reorg behaviour doesn't follow from its block rate.
+   */
+  confirmations?: number;
+  /** Explicit first-run lookback, overriding the derived value. */
+  initialLookbackBlocks?: number;
 }
 
 export function requireStacksConfig(d: ChainDescriptor): StacksChainConfig {
