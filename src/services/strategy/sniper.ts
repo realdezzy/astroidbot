@@ -31,8 +31,12 @@ export class SniperStrategy implements Strategy {
 
       // Gate: price ceiling check using a live quote before committing
       if (maxBuyPriceUsd > 0) {
-        const currentPrice = await registry.getTokenPrice(token.symbol).catch(() => 0);
-        if (currentPrice > 0 && currentPrice > maxBuyPriceUsd) continue;
+        const currentPrice = await registry.getTokenPrice(token.symbol).catch(() => null);
+        // A ceiling that cannot be checked is not a ceiling that passed. This
+        // read `currentPrice > 0 && ...`, so an unpriceable token skipped the
+        // gate entirely and was bought at whatever it cost.
+        if (currentPrice === null || currentPrice <= 0) continue;
+        if (currentPrice > maxBuyPriceUsd) continue;
       }
 
       const existingTrade = await db.prisma.trade.findFirst({

@@ -39,11 +39,11 @@ export class FeatureEngine {
     const registry = DEXRegistry.getInstance();
     const [candles, currentPrice] = await Promise.all([
       CandleService.getInstance().getCandles(token.toUpperCase(), "5m", 200),
-      registry.getTokenPrice(token).catch(() => 0),
+      registry.getTokenPrice(token).catch(() => null),
     ]);
 
-    if (candles.length < 30 || currentPrice === 0) {
-      return this.emptyFeatures(currentPrice);
+    if (candles.length < 30 || currentPrice === null || currentPrice === 0) {
+      return this.emptyFeatures(currentPrice ?? 0);
     }
 
     const closePrices = candles.map((c) => c.close);

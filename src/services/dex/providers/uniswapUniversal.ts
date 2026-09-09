@@ -91,15 +91,18 @@ export class UniswapUniversalProvider extends BaseDEXProvider {
     return v3Route || v2Route;
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
     if (this.v3Provider) {
       const price = await this.v3Provider.getTokenPrice(tokenSymbol);
-      if (price > 0) return price;
+      // A zero from V3 is still a failure to price, so it falls through to V2
+      // exactly as it did before — but null now says so rather than implying
+      // the token is worthless.
+      if (price !== null && price > 0) return price;
     }
     if (this.v2Provider) {
       return this.v2Provider.getTokenPrice(tokenSymbol);
     }
-    return 0;
+    return null;
   }
 
   async getQuote(tokenIn: string, tokenOut: string, amountIn: number): Promise<DEXQuote> {

@@ -85,15 +85,16 @@ export class UserController {
           const nativeSymbol = descriptor.nativeSymbol;
           const [tokens, price] = await Promise.all([
             registry.getSwappableTokens(false, chainId),
-            registry.getTokenPrice(nativeSymbol, chainId).catch(() => 0),
+            registry.getTokenPrice(nativeSymbol, chainId).catch(() => null),
           ]);
           perChain.set(chainId, {
             tokens,
             nativeSymbol,
-            // No fabricated fallback price for non-Stacks chains: this number
-            // feeds RiskManager position sizing, and a guessed price there is
-            // worse than an unpriced balance.
-            nativePrice: price || (descriptor.family === "stacks" ? 2.0 : 0),
+            // No fabricated fallback price: this number feeds RiskManager
+            // position sizing, and a guessed price there is worse than an
+            // unpriced balance. The comment above this line already said so
+            // while the expression substituted 2.0 for STX.
+            nativePrice: price ?? 0,
           });
         })
       );
@@ -454,8 +455,10 @@ export class UserController {
       const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!);
       const nativeBal = balances.find((b) => b.symbol === adapter.nativeSymbol)?.balance ?? 0;
 
-      const nativePrice = await registry.getTokenPrice(adapter.nativeSymbol, targetChain)
-        || (adapter.chainFamily === "stacks" ? 2.0 : 0);
+      // The Stacks branch of this used to substitute 2.0 for an unavailable
+      // STX price, which is a number nobody measured. Unpriced is 0 here, the
+      // same as every other chain.
+      const nativePrice = (await registry.getTokenPrice(adapter.nativeSymbol, targetChain)) ?? 0;
 
       await db.updateWalletBalance(wallet.id, nativeBal);
 

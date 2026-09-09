@@ -200,7 +200,7 @@ export class AlexDEXService implements DEXProvider {
     return calculateSwapAmount(this.pairs, tokenIn, tokenOut, amountIn);
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
     try {
       await this.ensureTokensLoaded();
       const cacheKey = `price:${tokenSymbol.toUpperCase()}`;
@@ -218,7 +218,7 @@ export class AlexDEXService implements DEXProvider {
 
       return price;
     } catch {
-      return 0;
+      return null;
     }
   }
 

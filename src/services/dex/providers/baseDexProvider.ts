@@ -53,7 +53,7 @@ export abstract class BaseDEXProvider implements DEXProvider {
     tokenOut: string,
     amountIn: number
   ): ReturnType<DEXProvider["getQuote"]>;
-  abstract getTokenPrice(tokenSymbol: string): Promise<number>;
+  abstract getTokenPrice(tokenSymbol: string): Promise<number | null>;
   abstract buildSwapPayload(
     tokenIn: string,
     tokenOut: string,

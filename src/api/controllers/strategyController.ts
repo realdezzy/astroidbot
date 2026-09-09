@@ -162,21 +162,51 @@ export class StrategyController {
         include: { wallet: { select: { chain: true, chainFamily: true } } },
       });
 
-      let pnl = 0;
-      let stxPrice = 2.0;
+      // No invented STX price. This was `getTokenPrice("STX") || 2.0` with a
+      // 2.0 initialiser behind it, so a failed lookup — or a genuine zero —
+      // valued every STX leg at two dollars and reported the result as P&L.
+      // STX has not been worth $2 for most of this repository's history.
+      let stxPrice: number | null = null;
       try {
-        stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX") || 2.0;
+        stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX");
       } catch {
-        // ignore price fetch failure, fallback to 2.0
+        // Leave it null: unpriced, not two dollars.
       }
 
+      // Trades whose USD value was recorded at execution are exact. The rest
+      // need a live price, and where that price is a guess the trade is
+      // excluded from the total rather than valued at a made-up number — a
+      // P&L short a few legs is recoverable, one quietly wrong is not.
+      let pnl = 0;
+      let unpricedTrades = 0;
+
       trades.forEach((t) => {
-        if (t.status === "CONFIRMED") {
-          const amountInUsd = t.amountInUsd ?? (t.tokenIn === "STX" ? t.amountIn * stxPrice : t.amountIn);
-          const amountOutUsd = t.amountOutUsd ?? (t.tokenOut === "STX" ? t.amountOut * stxPrice : t.amountOut);
-          pnl += t.direction === "BUY" ? -amountInUsd : amountOutUsd;
+        if (t.status !== "CONFIRMED") return;
+
+        const legUsd = (recorded: number | null, symbol: string, amount: number): number | null => {
+          if (recorded !== null) return recorded;
+          if (symbol !== "STX") return amount;
+          return stxPrice !== null ? amount * stxPrice : null;
+        };
+
+        const amountInUsd = legUsd(t.amountInUsd, t.tokenIn, t.amountIn);
+        const amountOutUsd = legUsd(t.amountOutUsd, t.tokenOut, t.amountOut);
+
+        const leg = t.direction === "BUY" ? amountInUsd : amountOutUsd;
+        if (leg === null) {
+          unpricedTrades++;
+          return;
         }
+
+        pnl += t.direction === "BUY" ? -leg : leg;
       });
+
+      if (unpricedTrades > 0) {
+        logger.warn("[strategy] P&L excludes trades with no priceable STX leg", {
+          strategyId: strategy.id,
+          unpricedTrades,
+        });
+      }
 
       res.json({
         strategy: {

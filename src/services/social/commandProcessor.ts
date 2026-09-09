@@ -244,11 +244,11 @@ export class SocialCommandProcessor {
 
     const price = await DEXRegistry.getInstance()
       .getTokenPrice(intent.token, chainId)
-      .catch(() => 0);
+      .catch(() => null);
 
     // An unpriceable token is treated as exceeding any limit rather than as
     // free. Returning 0 here would let an unpriced token bypass both caps.
-    return price > 0 ? intent.amount * price : Number.POSITIVE_INFINITY;
+    return price !== null && price > 0 ? intent.amount * price : Number.POSITIVE_INFINITY;
   }
 
   private async spentLast24h(socialAccountId: number): Promise<number> {

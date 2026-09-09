@@ -191,9 +191,13 @@ export class AgentService {
     const nativePrices: Record<string, number> = {};
     for (const symbol of nativeSymbols) {
       try {
-        nativePrices[symbol] = await DEXRegistry.getInstance().getTokenPrice(symbol);
+        const price = await DEXRegistry.getInstance().getTokenPrice(symbol);
+        // Absent from the map rather than present as 0 — a reader can tell
+        // "we could not price this" from "this is worthless" only if the
+        // unpriceable case leaves no entry behind.
+        if (price !== null) nativePrices[symbol] = price;
       } catch {
-        nativePrices[symbol] = 0;
+        // Same reasoning: leave the symbol out.
       }
     }
 

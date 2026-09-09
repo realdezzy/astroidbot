@@ -262,10 +262,10 @@ export class UniswapV3Provider extends BaseDEXProvider {
     return (await this.quoteRaw(tIn, tOut, probe)) !== null;
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
     const token = await this.resolveToken(tokenSymbol);
     const stable = this.tokenList.find((t) => t.symbol === this.descriptor.stableSymbol);
-    if (!token || !stable) return 0;
+    if (!token || !stable) return null;
     if (token.contractId.toLowerCase() === stable.contractId.toLowerCase()) return 1;
 
     const cacheKey = token.contractId.toLowerCase();
@@ -275,10 +275,10 @@ export class UniswapV3Provider extends BaseDEXProvider {
     try {
       const probe = parseUnits("1", token.decimals);
       const result = await this.quoteRaw(token, stable, probe);
-      if (!result) return 0;
+      if (!result) return null;
       return this.cachePrice(cacheKey, Number(formatUnits(result.amountOut, stable.decimals)));
     } catch {
-      return 0;
+      return null;
     }
   }
 
@@ -306,7 +306,8 @@ export class UniswapV3Provider extends BaseDEXProvider {
         this.getTokenPrice(tokenOut),
       ]);
       let priceImpact = 0;
-      if (priceIn > 0 && priceOut > 0 && amountOut > 0 && amountIn > 0) {
+      // Null is unpriceable; 0 is unusable as a divisor. Neither yields an impact.
+      if (priceIn && priceOut && amountOut > 0 && amountIn > 0) {
         // Both prices are "tokenOut per tokenIn". The execution side was
         // inverted — amountIn/amountOut — which made the ratio to spot
         // vanishingly small and drove the result to |1 - ~0| = 100% on every

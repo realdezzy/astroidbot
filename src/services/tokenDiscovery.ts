@@ -380,7 +380,7 @@ export class TokenDiscoveryService {
       );
 
       if (match) {
-        const spotPrice = await registry.getTokenPrice(match.symbol, chainId).catch(() => 0);
+        const spotPrice = await registry.getTokenPrice(match.symbol, chainId).catch(() => null);
         token = await db.prisma.token.upsert({
           where: { chainId_contractId: { chainId, contractId: match.contractId } },
           create: {
@@ -389,10 +389,10 @@ export class TokenDiscoveryService {
             symbol: match.symbol,
             name: match.name,
             decimals: match.decimals,
-            priceUsd: spotPrice > 0 ? spotPrice : null,
+            priceUsd: spotPrice !== null && spotPrice > 0 ? spotPrice : null,
           },
           update: {
-            priceUsd: spotPrice > 0 ? spotPrice : undefined,
+            priceUsd: spotPrice !== null && spotPrice > 0 ? spotPrice : undefined,
           },
         });
       }

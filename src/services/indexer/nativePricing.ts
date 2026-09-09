@@ -127,7 +127,8 @@ async function fromDexQuote(descriptor: ChainDescriptor): Promise<number | null>
       descriptor.nativeSymbol,
       descriptor.chainId
     );
-    return price > 0 ? price : null;
+    // The registry reports null directly now; this used to convert its 0.
+    return price !== null && price > 0 ? price : null;
   } catch {
     return null;
   }

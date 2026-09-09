@@ -161,10 +161,10 @@ export class JupiterProvider extends BaseDEXProvider {
     }
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
     const token = this.resolveToken(tokenSymbol);
     const stable = this.resolveToken(this.descriptor.stableSymbol);
-    if (!token || !stable) return 0;
+    if (!token || !stable) return null;
     if (token.contractId === stable.contractId) return 1;
 
     const cached = this.cachedPrice(token.contractId);
@@ -172,10 +172,10 @@ export class JupiterProvider extends BaseDEXProvider {
 
     try {
       const quote = await this.fetchQuote(token, stable, this.toRaw(1, token.decimals));
-      if (!quote) return 0;
+      if (!quote) return null;
       return this.cachePrice(token.contractId, this.fromRaw(quote.outAmount, stable.decimals));
     } catch {
-      return 0;
+      return null;
     }
   }
 

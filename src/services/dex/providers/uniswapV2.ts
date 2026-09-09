@@ -188,10 +188,10 @@ export class UniswapV2Provider extends BaseDEXProvider {
     return (await this.quoteRaw(tIn, tOut, probe)) !== null;
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
     const token = await this.resolveToken(tokenSymbol);
     const stable = this.tokenList.find((t) => t.symbol === this.descriptor.stableSymbol);
-    if (!token || !stable) return 0;
+    if (!token || !stable) return null;
     if (token.contractId.toLowerCase() === stable.contractId.toLowerCase()) return 1;
 
     const cacheKey = token.contractId.toLowerCase();
@@ -201,10 +201,10 @@ export class UniswapV2Provider extends BaseDEXProvider {
     try {
       const probe = parseUnits("1", token.decimals);
       const amountOut = await this.quoteRaw(token, stable, probe);
-      if (!amountOut) return 0;
+      if (!amountOut) return null;
       return this.cachePrice(cacheKey, Number(formatUnits(amountOut, stable.decimals)));
     } catch {
-      return 0;
+      return null;
     }
   }
 
@@ -231,7 +231,8 @@ export class UniswapV2Provider extends BaseDEXProvider {
         this.getTokenPrice(tokenOut),
       ]);
       let priceImpact = 0;
-      if (priceIn > 0 && priceOut > 0 && amountOut > 0 && amountIn > 0) {
+      // Null is unpriceable; 0 is unusable as a divisor. Neither yields an impact.
+      if (priceIn && priceOut && amountOut > 0 && amountIn > 0) {
         const spotPrice = priceIn / priceOut;
         const executionPrice = amountOut / amountIn;
         priceImpact = Math.abs(1 - executionPrice / spotPrice) * 100;

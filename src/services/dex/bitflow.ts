@@ -360,8 +360,11 @@ export class BitflowDEXService implements DEXProvider {
     }
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
-    return this.getPrice(tokenSymbol);
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
+    // getPrice still answers 0 for "no route", which is what this boundary
+    // exists to stop propagating.
+    const price = await this.getPrice(tokenSymbol);
+    return price > 0 ? price : null;
   }
 
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {

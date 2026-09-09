@@ -17,8 +17,11 @@ export async function processPerpLiquidationCheck(): Promise<{ checked: number; 
   for (const position of openPositions) {
     try {
       const symbol = position.market.split("-")[0] || position.market;
-      const currentPrice = await dex.getTokenPrice(symbol).catch(() => 0);
-      if (currentPrice <= 0) continue;
+      const currentPrice = await dex.getTokenPrice(symbol).catch(() => null);
+      // Liquidation is decided by comparing against this price. Without one
+      // there is no comparison to make, and defaulting to 0 would have made
+      // every LONG look liquidatable.
+      if (currentPrice === null || currentPrice <= 0) continue;
 
       const isLiquidationTarget =
         position.direction === "LONG"

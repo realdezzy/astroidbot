@@ -414,7 +414,11 @@ export class PortfolioAnalyticsService {
     }
 
     const { chainId, symbol } = splitKey(key);
-    return DEXRegistry.getInstance().getTokenPrice(symbol, chainId).catch(() => 0);
+    // Zero rather than null here is the existing deliberate choice documented
+    // above: an unpriced holding contributes nothing to the valuation instead
+    // of being valued at par. Threading nullability through the whole
+    // analytics pipeline is a larger change than this one.
+    return (await DEXRegistry.getInstance().getTokenPrice(symbol, chainId).catch(() => null)) ?? 0;
   }
 
   private formatDate(at: Date, timeframe: Timeframe): string {

@@ -31,7 +31,9 @@ export class DCAStrategy implements Strategy {
         // If we bought tokenOut, its USD value at time of trade was approximately what we paid (if STX, amountIn * stx price)
         // Or we can use amountOut * current price as a proxy, or just sum amountIn.
         // Let's sum the amountOut * price as a proxy, or fall back to amountIn if price is not available.
-        return sum + (t.amountOut * tokenOutPrice || t.amountIn); // Fallback to amountIn if tokenOutPrice is 0
+        // Falls back to what was actually paid when the token cannot be
+        // priced now, which is a real figure rather than an estimate of one.
+        return sum + (tokenOutPrice !== null ? t.amountOut * tokenOutPrice : 0 || t.amountIn);
       }, 0);
       if (totalSpent >= totalBudget) return [];
     }
@@ -49,7 +51,11 @@ export class DCAStrategy implements Strategy {
     }
 
     if (priceCondition !== "always" && priceThreshold > 0) {
-      const price = await registry.getTokenPrice(tokenOut).catch(() => 0);
+      const price = await registry.getTokenPrice(tokenOut).catch(() => null);
+      // A condition that cannot be evaluated must not be treated as met. While
+      // an unpriceable token read as 0, "below" was trivially satisfied and the
+      // buy went through without the check the user configured ever running.
+      if (price === null || price <= 0) return [];
       if (priceCondition === "below" && price >= priceThreshold) return [];
       if (priceCondition === "above" && price <= priceThreshold) return [];
     }

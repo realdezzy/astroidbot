@@ -160,7 +160,7 @@ export class VelarDEXService implements DEXProvider {
     }
   }
 
-  async getTokenPrice(tokenSymbol: string): Promise<number> {
+  async getTokenPrice(tokenSymbol: string): Promise<number | null> {
     try {
       await this.ensureInitialized();
       await this.ensureTokensLoaded();
@@ -169,7 +169,7 @@ export class VelarDEXService implements DEXProvider {
           t.symbol.toLowerCase() === tokenSymbol.toLowerCase() ||
           t.contractId.toLowerCase() === tokenSymbol.toLowerCase()
       );
-      if (!token) return 0;
+      if (!token) return null;
 
       const cacheKey = `velar:price:${token.symbol.toUpperCase()}`;
       try {
@@ -186,7 +186,7 @@ export class VelarDEXService implements DEXProvider {
       } catch {}
       return price;
     } catch {
-      return 0;
+      return null;
     }
   }
 
@@ -224,7 +224,8 @@ export class VelarDEXService implements DEXProvider {
       const priceIn = await this.getTokenPrice(tokenIn);
       const priceOut = await this.getTokenPrice(tokenOut);
       let priceImpact = 0;
-      if (priceIn > 0 && priceOut > 0) {
+      // Null is unpriceable; 0 is unusable as a divisor. Neither yields an impact.
+      if (priceIn && priceOut) {
         const spotPrice = priceIn / priceOut;
         const executionPrice = amountIn / amountOut;
         priceImpact = Math.abs(1 - executionPrice / spotPrice) * 100;

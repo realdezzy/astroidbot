@@ -31,9 +31,13 @@ export class TwapStrategy implements Strategy {
     // Abort condition check: if price deviates too much from the first slice
     if (maxPriceDeviationPct > 0 && completed.length > 0) {
       const firstTrade = completed[0]!;
-      const currentPrice = await registry.getTokenPrice(tokenOut).catch(() => 0);
+      const currentPrice = await registry.getTokenPrice(tokenOut).catch(() => null);
       const initialPrice = firstTrade.amountIn / (firstTrade.amountOut || 1); // approximate entry price
-      if (currentPrice > 0 && initialPrice > 0) {
+      // The deviation guard is the reason this branch exists. Unable to
+      // evaluate it, the strategy holds rather than sending the next slice
+      // unguarded; the next cycle tries again.
+      if (currentPrice === null || currentPrice <= 0) return [];
+      if (initialPrice > 0) {
         const deviation = Math.abs((currentPrice - initialPrice) / initialPrice) * 100;
         if (deviation > maxPriceDeviationPct) {
           return []; // Abort execution of subsequent slices

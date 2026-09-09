@@ -99,8 +99,9 @@ export class PortfolioManager {
       if (solBalance > 0) {
         // No invented fallback price: this figure feeds RiskManager position
         // sizing, and a guessed price is worse than an unpriced balance.
-        const solPrice = await registry.getTokenPrice("SOL", scope).catch(() => 0);
-        const usdValue = solBalance * solPrice;
+        const solPrice = await registry.getTokenPrice("SOL", scope).catch(() => null);
+        // Unpriced contributes nothing rather than a guess, per the note above.
+        const usdValue = solBalance * (solPrice ?? 0);
         if (ignoreDust || usdValue >= this.dustThresholdUsd) {
           balances.push({ token: "SOL", symbol: "SOL", balance: solBalance, usdValue });
         }
@@ -133,8 +134,8 @@ export class PortfolioManager {
 
         const known = bySymbol.get(mint);
         const symbol = known?.symbol ?? mint;
-        const price = await registry.getTokenPrice(symbol, scope).catch(() => 0);
-        const usdValue = amount * price;
+        const price = await registry.getTokenPrice(symbol, scope).catch(() => null);
+        const usdValue = amount * (price ?? 0);
 
         if (!ignoreDust && usdValue < this.dustThresholdUsd) continue;
 
@@ -208,7 +209,7 @@ export class PortfolioManager {
       // Scoped to this ChainId, not the bare "evm" family. A family scope
       // matches every EVM DEX on every EVM chain, so a Celo wallet's CELO
       // could be priced by a Base router that has never heard of it.
-      nativePrice = await registry.getTokenPrice(descriptor.nativeSymbol, resolvedChainId);
+      nativePrice = (await registry.getTokenPrice(descriptor.nativeSymbol, resolvedChainId)) ?? 0;
     } catch (err) {
       logger.warn("Failed to fetch native balance", {
         address,
@@ -384,7 +385,10 @@ export class PortfolioManager {
         token: "STX",
         symbol: "STX",
         balance: stxBalance,
-        usdValue: stxBalance * (stxPrice || 2.0),
+        // Unpriced contributes nothing, matching the EVM and Solana paths
+        // above. This substituted a flat $2.00 for an unavailable STX price,
+        // which then fed RiskManager position sizing as though measured.
+        usdValue: stxBalance * (stxPrice ?? 0),
       });
 
       const tokenMap = new Map(
@@ -486,10 +490,13 @@ export function runRebalance(
 
       if (stxValue < buyAmount) continue;
 
-      const stxPrice =
-        stxBalance && stxBalance.balance > 0
-          ? stxBalance.usdValue / stxBalance.balance
-          : 2.0;
+      // Derived from the balance we are holding, which is a real observation.
+      // The fallback here was a flat 2.0, and this price is the divisor that
+      // decides how much STX to spend — so a wrong one does not fail, it
+      // silently sizes the trade wrong.
+      if (!stxBalance || stxBalance.balance <= 0) continue;
+      const stxPrice = stxBalance.usdValue / stxBalance.balance;
+      if (!Number.isFinite(stxPrice) || stxPrice <= 0) continue;
       const stxToSpend = buyAmount / stxPrice;
 
       actions.push({

@@ -29,7 +29,15 @@ export interface DEXProvider {
   getSwappableTokens(refresh?: boolean): Promise<SwappableToken[]>;
   hasRoute(tokenIn: string, tokenOut: string): Promise<boolean>;
   getQuote(tokenIn: string, tokenOut: string, amountIn: number): Promise<DEXQuote>;
-  getTokenPrice(tokenSymbol: string): Promise<number>;
+  /**
+   * Spot price in the chain's stable asset, or null when it cannot be priced.
+   *
+   * Null rather than 0: an unroutable token is not a token worth nothing, and
+   * collapsing the two made every caller unable to distinguish them. Callers
+   * were already compensating — nativePricing wrote `price > 0 ? price : null`
+   * to undo it — which is the reliable sign that the sentinel was wrong.
+   */
+  getTokenPrice(tokenSymbol: string): Promise<number | null>;
   buildSwapPayload(
     tokenIn: string,
     tokenOut: string,

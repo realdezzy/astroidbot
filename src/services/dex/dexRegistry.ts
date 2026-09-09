@@ -179,19 +179,27 @@ export class DEXRegistry {
     return Array.from(tokensMap.values());
   }
 
-  // Returns the first provider with a nonzero price. Pass chainFamily whenever
-  // the price is for a specific wallet's holdings — unscoped, a symbol listed
-  // on more than one chain resolves to whichever provider was registered first,
-  // which is not necessarily the chain the caller is asking about.
-  async getTokenPrice(symbol: string, chainScope?: string): Promise<number> {
+  /**
+   * The first provider that can price this symbol, or null if none can.
+   *
+   * Pass chainScope whenever the price is for a specific wallet's holdings —
+   * unscoped, a symbol listed on more than one chain resolves to whichever
+   * provider was registered first, which is not necessarily the chain the
+   * caller is asking about.
+   *
+   * Null, not 0. "No provider could price this" and "this token is worth
+   * nothing" sort to opposite ends of every table built on top of this, and
+   * only one of them is ever true.
+   */
+  async getTokenPrice(symbol: string, chainScope?: string): Promise<number | null> {
     const candidates = chainScope ? this.getProvidersForChain(chainScope) : this.providers;
     for (const provider of candidates) {
       try {
         const price = await provider.getTokenPrice(symbol);
-        if (price > 0) return price;
+        if (price !== null && price > 0) return price;
       } catch { }
     }
-    return 0;
+    return null;
   }
 
   /**

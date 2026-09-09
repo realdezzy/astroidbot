@@ -89,10 +89,21 @@ export class MarketMakerService {
 
       const priceA = await registry.getTokenPrice(tokenA);
       const priceB = await registry.getTokenPrice(tokenB);
+
+      // Falling back to a mid price of 1.0 placed a full grid of real orders
+      // around a number that was never a price of anything. The last known mid
+      // is a real observation and is still worth using; in its absence there is
+      // nothing to quote around, so the pair is skipped this cycle.
+      const lastKnownMid = this.lastMidPrices.get(grid.tokenPair);
       const currentMidPrice =
-        priceA > 0 && priceB > 0
-          ? priceA / priceB
-          : (this.lastMidPrices.get(grid.tokenPair) ?? 1.0);
+        priceA && priceB ? priceA / priceB : lastKnownMid;
+
+      if (currentMidPrice === undefined) {
+        logger.info("[marketMaker] pair cannot be priced and has no last mid; skipping", {
+          tokenPair: grid.tokenPair,
+        });
+        continue;
+      }
 
       let config = {
         midPrice: grid.midPrice,

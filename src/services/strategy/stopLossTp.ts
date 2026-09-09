@@ -20,10 +20,11 @@ export class StopLossTpStrategy implements Strategy {
     if (!balance || balance.balance <= 0) return [];
 
     const registry = DEXRegistry.getInstance();
-    let currentPrice = await registry.getTokenPrice(token).catch(() => 0);
-    if (currentPrice <= 0) {
-      currentPrice = balance.usdValue / balance.balance;
-    }
+    const quoted = await registry.getTokenPrice(token).catch(() => null);
+    // The portfolio's own valuation is a real observation, not an invented
+    // one, so it remains the fallback when the router cannot quote.
+    const currentPrice =
+      quoted !== null && quoted > 0 ? quoted : balance.usdValue / balance.balance;
 
     const db = DatabaseService.getInstance();
 
