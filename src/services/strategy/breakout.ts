@@ -20,7 +20,8 @@ export class BreakoutStrategy implements Strategy {
 
     const high = await ph.computeHigh(tokenOut, lookback);
     const low = await ph.computeLow(tokenOut, lookback);
-    if (high === 0 || low === 0) return [];
+    // null is "no history", which is not a breakout in either direction.
+    if (high === null || low === null) return [];
 
     const isAboveHigh = currentPrice > high * (1 + breakoutPct / 100);
     const isBelowLow = currentPrice < low * (1 - breakoutPct / 100);

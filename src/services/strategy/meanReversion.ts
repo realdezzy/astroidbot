@@ -21,13 +21,19 @@ export class MeanReversionStrategy implements Strategy {
 
     const currentPrice = price[0]!;
     const ma = await ph.computeMovingAverage(tokenOut, maPeriods);
-    if (ma === 0) return [];
+    // No history means no mean, and without a mean there is nothing to revert to.
+    if (ma === null) return [];
 
     const deviation = ((currentPrice - ma) / ma) * 100;
 
     // Trend filter: long-term moving average to avoid catching falling knives
     if (enableTrendFilter) {
       const longMa = await ph.computeMovingAverage(tokenOut, maPeriods * 3);
+      // A filter that cannot be evaluated must not silently pass. If the long
+      // window has no data the downtrend check is unanswerable, and the
+      // knife this filter exists to avoid catching is exactly what a cold
+      // start is most likely to be looking at.
+      if (longMa === null) return [];
       if (longMa > 0 && currentPrice < longMa * 0.9) {
         // Price is significantly below the long-term MA, indicating a strong downtrend. Skip buy.
         return [];

@@ -335,6 +335,18 @@ model PushSubscription {
   @@index([userId])
 }
 
+// ORPHANED. Nothing reads or writes this table any more.
+//
+// It was only ever populated by CandleService.autoSeed, which generated OHLCV
+// from Math.random() — a random walk for prices and `1000 + random * 10000`
+// for volume — whenever a read found no rows. `recordPrice` was the only code
+// that would have written a real row and nothing ever called it, so every row
+// here was fabricated. Candles now come from PoolCandle, which the indexer
+// folds from swap logs it actually read.
+//
+// Kept for one release so an operator can inspect what was being served before
+// it goes; `scripts/purge-synthetic-candles.ts` empties it. Dropping the model
+// is a migration and a deliberate decision, not a side effect of this change.
 model Candle {
   id        Int      @id @default(autoincrement())
   // Network the token lives on. Without it the unique key collides across
@@ -488,12 +500,12 @@ model IndexedPool {
   lastSwapAt   DateTime?
   lastPrice0   Float? // token0 priced in token1, from the last swap's sqrtPriceX96
 
-  lifecycleState String    @default("ACTIVE") // "DISCOVERED" | "ACTIVE" | "INACTIVE" | "DEAD"
+  lifecycleState String @default("ACTIVE") // "DISCOVERED" | "ACTIVE" | "INACTIVE" | "DEAD"
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  swaps   IndexedSwap[]
+  swaps IndexedSwap[]
 
   // Per-pool ingestion cursor, used only by Solana.
   //
@@ -563,7 +575,7 @@ model IndexedSwap {
   blockNumber BigInt
   logIndex    Int    @default(0)
 
-  bucketStart DateTime
+  bucketStart   DateTime
   // Zero means "we saw this trade but could not price it" — distinct from a
   // trade at a price of zero, which is why the recompute filters it out of
   // OHLC rather than letting it drag the low to nothing.
@@ -602,21 +614,21 @@ model PoolCandle {
   volumeUsd Float @default(0)
   buys      Int   @default(0)
   sells     Int   @default(0)
-
-  @@unique([poolId, bucketStart])
-  // Window rollups scan by time first, then narrow to pools.
-  @@index([bucketStart])
   // No @@index([poolId, bucketStart]) — the unique constraint above already
   // creates a btree over exactly those columns in that order. Declaring both
   // built two identical indexes on the table every ingestion pass upserts
   // into, doubling its write cost for no read it could not already serve.
+
+  @@unique([poolId, bucketStart])
+  // Window rollups scan by time first, then narrow to pools.
+  @@index([bucketStart])
 }
 
 // Per-chain ingestion cursor. One row per chain; the indexer resumes from
 // lastBlock every tick, so a restart costs one block range rather than a
 // rescan from genesis.
 model IndexerCursor {
-  chainId       String   @id
+  chainId       String  @id
   // Last block whose logs are fully ingested. Held `confirmations` behind the
   // head so a reorg can't strand us ahead of canonical history.
   lastBlock     BigInt
@@ -638,7 +650,7 @@ model IndexerCursor {
   backfillFloor BigInt?
   // Set when the walk reaches the floor. Distinguishes "done" from "not
   // started", which otherwise look identical once backfillBlock == floor.
-  backfillDone  Boolean  @default(false)
+  backfillDone  Boolean @default(false)
 
   // Opaque per-source paging state, written and read only by the chain's own
   // indexer. Stacks needs it: its API is address-paged by offset rather than
@@ -652,7 +664,7 @@ model IndexerCursor {
   // nothing joins or filters on it. See StacksBackfillState in stacksIndexer.
   backfillState Json?
 
-  updatedAt     DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 model PoolStatsHistory {

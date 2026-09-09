@@ -81,6 +81,38 @@ describe("RotationalStrategy", () => {
     expect(buyAction!.tokenOut).toBe("ALEX");
   });
 
+  /**
+   * The ranking inversion `computeMomentum` used to cause.
+   *
+   * While "no history" was reported as momentum 0, an unscored token sorted
+   * above every token with genuinely negative momentum — so in a falling
+   * market this strategy preferentially bought the tokens it knew least
+   * about. Null has to be excluded from the ranking, not ranked at zero.
+   */
+  it("excludes tokens with no momentum history rather than ranking them at zero", async () => {
+    mockComputeMomentum.mockImplementation((symbol: string) => {
+      if (symbol === "ALEX") return null; // no recorded history
+      if (symbol === "DIKO") return -5.0; // real, and negative
+      if (symbol === "WELSH") return -2.0; // real, and less negative
+      return null;
+    });
+
+    const actions = await strategy.execute({ ...mockCtx, balances: [] }, {});
+
+    // Only DIKO and WELSH are scoreable, so top-2 is exactly those two.
+    // ALEX must not appear at all — under the old sentinel it would have
+    // ranked first, ahead of both.
+    expect(actions.map((a) => a.tokenOut)).not.toContain("ALEX");
+    expect(actions.map((a) => a.tokenOut)).toEqual(
+      expect.arrayContaining(["WELSH", "DIKO"])
+    );
+  });
+
+  it("produces no actions when nothing in the universe can be scored", async () => {
+    mockComputeMomentum.mockResolvedValue(null);
+    expect(await strategy.execute({ ...mockCtx, balances: [] }, {})).toEqual([]);
+  });
+
   it("should respect rebalancePeriodHours gating", async () => {
     // Mock that a trade occurred 5 hours ago in strategy state (rebalancePeriodHours is 24)
     const state: StrategyState = {

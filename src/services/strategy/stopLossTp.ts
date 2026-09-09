@@ -43,14 +43,16 @@ export class StopLossTpStrategy implements Strategy {
 
     // Apply Quantitative Adaptive Stop (ATR & Chandelier Exit)
     const ph = PriceHistoryService.getInstance();
-    const high = await ph.computeHigh(token, trailingLookback).catch(() => 0);
+    const high = await ph.computeHigh(token, trailingLookback).catch(() => null);
     const f = ctx.features?.get(token);
 
     if (f) {
       const exitPlanner = process.env.NODE_ENV === "test" 
         ? (await import("../quant/exitPlanner.js")).ExitPlanner.getInstance()
         : (await import("../quant/exitPlanner.js")).ExitPlanner.getInstance(); // Ensure ESM works in both environments
-      const decision = exitPlanner.computeAdaptiveStop(token, entryPrice, currentPrice, high || currentPrice, f);
+      // With no recorded high, the highest price seen is the one in front of
+      // us. That is a real statement about what we know, unlike a zero.
+      const decision = exitPlanner.computeAdaptiveStop(token, entryPrice, currentPrice, high ?? currentPrice, f);
       if (decision.shouldExit) {
         actions.push({
           tokenIn: token,
@@ -77,7 +79,9 @@ export class StopLossTpStrategy implements Strategy {
     }
 
     if (trailingSl > 0 && changePct > 0) {
-      if (high > 0) {
+      // A trailing stop measures the fall from a high. No high, no fall to
+      // measure — and selling on an unmeasured one would be a guess.
+      if (high !== null && high > 0) {
         const highChange = ((currentPrice - high) / high) * 100;
         if (highChange <= -trailingSl) {
           actions.push({

@@ -1,7 +1,31 @@
 import { DatabaseService } from "../db.js";
 import { logger } from "../../utils/logger.js";
 import { DEFAULT_CHAIN_ID } from "../chains/descriptors/index.js";
-import { Prisma } from "@prisma/client";
+import { BUCKET_MS } from "../indexer/types.js";
+
+/**
+ * Timeframe to span. `BUCKET_MS` (five minutes) is the index's resolution, so
+ * it is also the floor: anything below it cannot be served without inventing
+ * the difference.
+ */
+/** The columns every candle read needs, named once. */
+const BUCKET_FIELDS = {
+  bucketStart: true,
+  open: true,
+  high: true,
+  low: true,
+  close: true,
+  volumeUsd: true,
+} as const;
+
+const TIMEFRAME_MS: Record<string, number> = {
+  "1m": 60_000,
+  "5m": 300_000,
+  "15m": 900_000,
+  "1h": 3_600_000,
+  "4h": 14_400_000,
+  "1d": 86_400_000,
+};
 
 export interface CandleData {
   open: number;
@@ -58,71 +82,25 @@ export class CandleService {
   }
 
   /**
-   * Records a new swap/price tick and updates candles across all timeframes.
-   */
-  async recordPrice(
-    token: string,
-    price: number,
-    volume: number,
-    chainId: string = DEFAULT_CHAIN_ID
-  ): Promise<void> {
-    if (price <= 0) return;
-    const db = DatabaseService.getInstance();
-    const cleanToken = token.toUpperCase();
-    const now = Date.now();
-    const timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
-
-    await Promise.all(
-      timeframes.map(async (tf) => {
-        try {
-          const periodStart = this.getPeriodStart(now, tf);
-          
-          // Upsert logic inside database using prisma
-          await db.prisma.$transaction(async (tx) => {
-            const existing = await tx.candle.findFirst({
-              where: {
-                chainId,
-                token: cleanToken,
-                timeframe: tf,
-                timestamp: periodStart,
-              },
-            });
-
-            if (existing) {
-              await tx.candle.update({
-                where: { id: existing.id },
-                data: {
-                  high: Math.max(existing.high, price),
-                  low: Math.min(existing.low, price),
-                  close: price,
-                  volume: existing.volume + volume,
-                },
-              });
-            } else {
-              await tx.candle.create({
-                data: {
-                  chainId,
-                  token: cleanToken,
-                  timeframe: tf,
-                  timestamp: periodStart,
-                  open: price,
-                  high: price,
-                  low: price,
-                  close: price,
-                  volume,
-                },
-              });
-            }
-          });
-        } catch (e) {
-          logger.warn("Failed to update candle period", { token, timeframe: tf, error: e });
-        }
-      })
-    );
-  }
-
-  /**
-   * Retrieves historical candles for a token/timeframe.
+   * Historical candles for a token, from the swap index.
+   *
+   * These used to come from the `Candle` table, and when that table had no
+   * rows `autoSeed` generated some with `Math.random()` — prices as a random
+   * walk from spot, and a volume of `1000 + Math.random() * 10000`, which is
+   * not an approximation of anything. They were written with `createMany`, so
+   * the fabrication persisted and nothing downstream could tell it from a
+   * measurement. `recordPrice` is the only thing that would ever have written
+   * real rows there, and nothing calls it, so every row in that table was
+   * invented.
+   *
+   * They now come from `PoolCandle`, which the indexer folds from swap logs it
+   * actually read. When the index has nothing, this returns nothing: an empty
+   * chart is a true statement about a token nobody has traded, and an invented
+   * one is not.
+   *
+   * Price comes from the token's deepest pool, which is the same rule
+   * `RollupService` uses — averaging a deep pool with a dust pool moves the
+   * quoted price toward one nobody can trade at.
    */
   async getCandles(
     token: string,
@@ -130,116 +108,144 @@ export class CandleService {
     limit = 100,
     chainId: string = DEFAULT_CHAIN_ID
   ): Promise<CandleData[]> {
-    const db = DatabaseService.getInstance();
-    const cleanToken = token.toUpperCase();
+    const intervalMs = TIMEFRAME_MS[timeframe];
 
-    let candles = await db.prisma.candle.findMany({
-      where: {
-        chainId,
-        token: cleanToken,
-        timeframe,
-      },
-      orderBy: {
-        timestamp: "desc",
-      },
-      take: limit,
-    });
-
-    // Auto-seed to prevent cold-start data gaps
-    if (candles.length === 0) {
-      try {
-        const seeded = await this.autoSeed(cleanToken, timeframe, limit, chainId);
-        return seeded;
-      } catch (err) {
-        logger.warn("Candle auto-seeding failed", { token, error: err });
-      }
+    // The index's finest resolution is a five-minute bucket. Anything finer
+    // would have to be interpolated, which is the thing this method stopped
+    // doing.
+    if (!intervalMs || intervalMs < BUCKET_MS) {
+      logger.debug("[candles] timeframe finer than the index records", { token, timeframe });
+      return [];
     }
 
-    // Return in chronological order
-    return candles.reverse().map((c) => ({
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-      volume: c.volume,
-      timestamp: c.timestamp,
-    }));
+    const poolId = await this.deepestPoolFor(token, chainId);
+    if (poolId === null) return [];
+
+    // Over-read deliberately: `limit` counts aggregated candles, and each one
+    // consumes `intervalMs / BUCKET_MS` buckets.
+    const bucketsPerCandle = Math.max(1, Math.round(intervalMs / BUCKET_MS));
+    const rows = await DatabaseService.getInstance().prisma.poolCandle.findMany({
+      where: { poolId },
+      orderBy: { bucketStart: "desc" },
+      take: limit * bucketsPerCandle,
+      select: BUCKET_FIELDS,
+    });
+    if (rows.length === 0) return [];
+
+    return this.aggregate(rows.reverse(), timeframe).slice(-limit);
   }
 
   /**
-   * Seeds historical candles for testing/cold start
+   * The same candles, bounded by a date range rather than a count.
+   *
+   * Backtests need this shape: "every candle between these two dates" cannot
+   * be expressed as a limit, because how many candles that is depends on how
+   * much the token traded. It shares pool resolution and aggregation with
+   * `getCandles` so a backtest and a chart of the same window cannot disagree.
    */
-  private async autoSeed(
+  async getCandlesBetween(
     token: string,
     timeframe: string,
-    limit: number,
-    chainId: string
+    startDate: Date,
+    endDate: Date,
+    chainId: string = DEFAULT_CHAIN_ID
   ): Promise<CandleData[]> {
-    const db = DatabaseService.getInstance();
-    const registryModule = await import("../dex/dexRegistry.js");
-    const registry = registryModule.DEXRegistry.getInstance();
-    const currentPrice = await registry.getTokenPrice(token, chainId).catch(() => 1.0);
-    const startPrice = currentPrice > 0 ? currentPrice : 1.0;
-
-    const intervalMsMap: Record<string, number> = {
-      "1m": 60_000,
-      "5m": 300_000,
-      "15m": 900_000,
-      "1h": 3600_000,
-      "4h": 14400_000,
-      "1d": 86400_000,
-    };
-    const intervalMs = intervalMsMap[timeframe] ?? 60_000;
-    const now = Date.now();
-    const candlesToCreate: Prisma.CandleCreateManyInput[] = [];
-    let lastPrice = startPrice;
-
-    for (let i = limit; i >= 1; i--) {
-      const periodStart = this.getPeriodStart(now - i * intervalMs, timeframe);
-      const volatility = 0.005; // 0.5% period volatility
-      const change = 1 + (Math.random() - 0.5) * volatility;
-      const open = lastPrice;
-      const close = lastPrice * change;
-      const high = Math.max(open, close) * (1 + Math.random() * 0.002);
-      const low = Math.min(open, close) * (1 - Math.random() * 0.002);
-      const volume = 1000 + Math.random() * 10000;
-
-      candlesToCreate.push({
-        chainId,
-        token,
-        timeframe,
-        timestamp: periodStart,
-        open,
-        high,
-        low,
-        close,
-        volume,
-      });
-
-      lastPrice = close;
+    const intervalMs = TIMEFRAME_MS[timeframe];
+    if (!intervalMs || intervalMs < BUCKET_MS) {
+      logger.debug("[candles] timeframe finer than the index records", { token, timeframe });
+      return [];
     }
 
-    try {
-      // Ignore conflicts if other worker or test already seeded
-      await db.prisma.candle.createMany({
-        data: candlesToCreate,
-        skipDuplicates: true,
-      });
-    } catch {}
+    const poolId = await this.deepestPoolFor(token, chainId);
+    if (poolId === null) return [];
 
-    const candles = await db.prisma.candle.findMany({
-      where: { chainId, token, timeframe },
-      orderBy: { timestamp: "desc" },
-      take: limit,
+    const rows = await DatabaseService.getInstance().prisma.poolCandle.findMany({
+      where: { poolId, bucketStart: { gte: startDate, lte: endDate } },
+      orderBy: { bucketStart: "asc" },
+      select: BUCKET_FIELDS,
+    });
+    if (rows.length === 0) return [];
+
+    return this.aggregate(rows, timeframe);
+  }
+
+  /**
+   * The id of the deepest pool trading this symbol on this chain.
+   *
+   * The index keys pools by contract address while callers ask by symbol, so
+   * the symbol is resolved through `IndexedToken` first. Deepest rather than
+   * first because that is the rule `RollupService` applies when it decides a
+   * token's price — averaging a deep pool with a dust pool moves the quote
+   * toward one nobody can trade at, and a chart disagreeing with the price
+   * column above it is worse than either.
+   */
+  private async deepestPoolFor(token: string, chainId: string): Promise<number | null> {
+    const db = DatabaseService.getInstance();
+
+    const indexed = await db.prisma.indexedToken.findFirst({
+      where: { chainId, symbol: { equals: token.toUpperCase(), mode: "insensitive" } },
+      select: { contractId: true },
+    });
+    if (!indexed) return null;
+
+    const pool = await db.prisma.indexedPool.findFirst({
+      where: { chainId, baseToken: indexed.contractId },
+      orderBy: { liquidityUsd: { sort: "desc", nulls: "last" } },
+      select: { id: true },
     });
 
-    return candles.reverse().map((c) => ({
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-      volume: c.volume,
-      timestamp: c.timestamp,
-    }));
+    return pool?.id ?? null;
+  }
+
+  /**
+   * Folds five-minute buckets into wider candles.
+   *
+   * Open is the first bucket's open and close is the last bucket's close —
+   * not the extremes of the window. Taking the high as the open produces a
+   * chart that looks entirely plausible and is wrong, which is the worst
+   * available outcome.
+   *
+   * Input must be chronological.
+   */
+  private aggregate(
+    rows: {
+      bucketStart: Date;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volumeUsd: number;
+    }[],
+    timeframe: string
+  ): CandleData[] {
+    const out: CandleData[] = [];
+    let current: CandleData | null = null;
+    let currentStart = -1;
+
+    for (const row of rows) {
+      const periodStart = this.getPeriodStart(row.bucketStart.getTime(), timeframe).getTime();
+
+      if (!current || periodStart !== currentStart) {
+        if (current) out.push(current);
+        currentStart = periodStart;
+        current = {
+          open: row.open,
+          high: row.high,
+          low: row.low,
+          close: row.close,
+          volume: row.volumeUsd,
+          timestamp: new Date(periodStart),
+        };
+        continue;
+      }
+
+      current.high = Math.max(current.high, row.high);
+      current.low = Math.min(current.low, row.low);
+      current.close = row.close;
+      current.volume += row.volumeUsd;
+    }
+
+    if (current) out.push(current);
+    return out;
   }
 }

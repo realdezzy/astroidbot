@@ -1,4 +1,5 @@
 import { InlineKeyboard } from "grammy";
+import crypto from "node:crypto";
 import bcrypt from "bcrypt";
 import { logger } from "../utils/logger.js";
 import { ConfigManager } from "../config.js";
@@ -93,8 +94,13 @@ export async function handleText(ctx: BotContext): Promise<unknown> {
         return ctx.reply("This email is already linked to another Telegram account.");
       }
 
-      // Generate a 6-digit OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      // crypto, not Math.random: this code is the only thing establishing
+      // that the person linking this address controls the mailbox. V8's
+      // Math.random is a xorshift128+ PRNG whose internal state is recoverable
+      // from a handful of outputs, so an attacker who can trigger a few codes
+      // can predict the next one. Same reasoning as generateCode() in
+      // services/social/verification.ts.
+      const otp = crypto.randomInt(100_000, 1_000_000).toString();
       ctx.session.emailToLink = email;
       ctx.session.emailOtp = otp;
       ctx.session.emailOtpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes

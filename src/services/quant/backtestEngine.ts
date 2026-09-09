@@ -1,4 +1,4 @@
-import { DatabaseService } from "../db.js";
+import { CandleService } from "./candleService.js";
 import { logger } from "../../utils/logger.js";
 
 export interface BacktestParams {
@@ -41,21 +41,21 @@ export class BacktestEngine {
   }
 
   async runBacktest(params: BacktestParams): Promise<BacktestResult> {
-    const db = DatabaseService.getInstance();
     const chainId = params.chainId ?? "stacks:mainnet";
 
-    const candles = await db.prisma.candle.findMany({
-      where: {
-        chainId,
-        token: params.token,
-        timeframe: params.timeframe,
-        timestamp: {
-          gte: params.startDate,
-          lte: params.endDate,
-        },
-      },
-      orderBy: { timestamp: "asc" },
-    });
+    // Read through CandleService rather than the `Candle` table directly.
+    // That table was populated only by the fabricated auto-seed — a random
+    // walk with an invented volume — so every backtest run against it was
+    // measuring a strategy against noise and reporting the result as a return.
+    // Candles now come from the swap index, and a window the index has no data
+    // for produces the flat, zero-trade result below rather than a number.
+    const candles = await CandleService.getInstance().getCandlesBetween(
+      params.token,
+      params.timeframe,
+      params.startDate,
+      params.endDate,
+      chainId
+    );
 
     if (candles.length < 5) {
       return {

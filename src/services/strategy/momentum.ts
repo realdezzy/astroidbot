@@ -25,6 +25,10 @@ export class MomentumStrategy implements Strategy {
     // First, compute momentum score and check existing positions for all available tokens
     for (const token of available) {
       const momentum = await ph.computeMomentum(token.symbol, lookback);
+      // Unknown momentum is not a signal in either direction: it is no reason
+      // to open a position, and no reason to close one that is already open.
+      // Skipping leaves an existing position exactly as it was.
+      if (momentum === null) continue;
       const bal = balances.find(b => b.symbol.toUpperCase() === token.symbol.toUpperCase());
       const hasPosition = bal !== undefined && bal.balance > 0.0001;
       signals.push({

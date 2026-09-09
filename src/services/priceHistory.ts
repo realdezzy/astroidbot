@@ -35,6 +35,16 @@ export class PriceHistoryService {
     redis.set(key, JSON.stringify(points), 3600).catch(() => {});
   }
 
+  /**
+   * The prices actually observed for this token, oldest first.
+   *
+   * Returns fewer than `periods` when fewer have been recorded, and nothing at
+   * all when none have. It used to invent the difference: on a cold start it
+   * generated a hundred points of random walk from the current spot price and
+   * persisted them to Redis, so the fabrication outlived the process. Every
+   * indicator below is computed from this series, and those indicators size
+   * real trades — so an empty series has to read as empty.
+   */
   async getHistory(token: string, periods: number): Promise<number[]> {
     const key = `pricehistory:${token.toUpperCase()}`;
     let points = this.memory.get(key);
@@ -47,35 +57,9 @@ export class PriceHistoryService {
         try {
           points = JSON.parse(cached);
           this.memory.set(key, points!);
-        } catch {}
-      }
-    }
-
-    // Dynamic auto-seeding to solve the cold-start problem
-    if (!points || points.length === 0) {
-      try {
-        const registryModule = await import("./dex/dexRegistry.js");
-        const registry = registryModule.DEXRegistry.getInstance();
-        const currentPrice = await registry.getTokenPrice(token).catch(() => 0);
-        if (currentPrice > 0) {
-          points = [];
-          const now = Date.now();
-          // Generate 100 historical points (one per minute) with a small random walk (0.1% volatility)
-          let lastPrice = currentPrice;
-          for (let i = 100; i >= 0; i--) {
-            const change = 1 + (Math.random() - 0.5) * 0.002;
-            lastPrice = lastPrice * change;
-            points.push({
-              timestamp: now - i * 60000,
-              price: lastPrice,
-            });
-          }
-          this.memory.set(key, points);
-          const redis = RedisService.getInstance();
-          redis.set(key, JSON.stringify(points), 3600).catch(() => {});
+        } catch {
+          logger.warn("[priceHistory] discarding unparseable cached series", { token });
         }
-      } catch (err) {
-        logger.warn("Failed to auto-seed price history", { token, error: err });
       }
     }
 
@@ -84,9 +68,24 @@ export class PriceHistoryService {
     return points.slice(-periods).map((p) => p.price);
   }
 
-  async computeVolatility(token: string, periods: number): Promise<number> {
+  /**
+   * Standard deviation of period-over-period returns, or null.
+   *
+   * Every indicator here returns `number | null`, and the null is the point.
+   * Each used to return 0 when it had no data, but 0 is a measurement in all
+   * five: a flat price genuinely has zero volatility and zero momentum, and an
+   * average of zero is a token that costs nothing. Collapsing "no data" onto
+   * one of those made the two indistinguishable at every call site.
+   *
+   * It was not hypothetical. RotationalStrategy ranked tokens by momentum and
+   * bought the top K; a token with no history scored 0 and therefore outranked
+   * every token with genuinely negative momentum, so the strategy
+   * preferentially bought what it knew nothing about in exactly the market
+   * where that is most expensive.
+   */
+  async computeVolatility(token: string, periods: number): Promise<number | null> {
     const prices = await this.getHistory(token, periods);
-    if (prices.length < 2) return 0;
+    if (prices.length < 2) return null;
 
     const returns: number[] = [];
     for (let i = 1; i < prices.length; i++) {
@@ -98,29 +97,30 @@ export class PriceHistoryService {
     return Math.sqrt(variance);
   }
 
-  async computeMomentum(token: string, lookback: number): Promise<number> {
+  /** Percent change across the window, or null if there is nothing to compare. */
+  async computeMomentum(token: string, lookback: number): Promise<number | null> {
     const prices = await this.getHistory(token, lookback);
-    if (prices.length < 2) return 0;
+    if (prices.length < 2) return null;
     const first = prices[0]!;
     const last = prices[prices.length - 1]!;
     return ((last - first) / first) * 100;
   }
 
-  async computeMovingAverage(token: string, periods: number): Promise<number> {
+  async computeMovingAverage(token: string, periods: number): Promise<number | null> {
     const prices = await this.getHistory(token, periods);
-    if (prices.length === 0) return 0;
+    if (prices.length === 0) return null;
     return prices.reduce((s, p) => s + p, 0) / prices.length;
   }
 
-  async computeHigh(token: string, periods: number): Promise<number> {
+  async computeHigh(token: string, periods: number): Promise<number | null> {
     const prices = await this.getHistory(token, periods);
-    if (prices.length === 0) return 0;
+    if (prices.length === 0) return null;
     return Math.max(...prices);
   }
 
-  async computeLow(token: string, periods: number): Promise<number> {
+  async computeLow(token: string, periods: number): Promise<number | null> {
     const prices = await this.getHistory(token, periods);
-    if (prices.length === 0) return 0;
+    if (prices.length === 0) return null;
     return Math.min(...prices);
   }
 }

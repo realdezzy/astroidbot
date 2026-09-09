@@ -28,6 +28,12 @@ export class RotationalStrategy implements Strategy {
 
     for (const t of universe) {
       const momentum = await ph.computeMomentum(t.symbol, 50); // Increased periods to 50
+      // A token we cannot score is not a token scoring zero. While
+      // computeMomentum returned 0 for "no history", an unknown token
+      // outranked every token with genuinely negative momentum — so this
+      // strategy preferentially bought what it knew nothing about, in exactly
+      // the market conditions where that is most expensive.
+      if (momentum === null) continue;
       scored.push({ symbol: t.symbol, momentum });
     }
 

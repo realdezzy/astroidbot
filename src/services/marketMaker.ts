@@ -104,30 +104,40 @@ export class MarketMakerService {
       const ageMs = Date.now() - new Date(grid.lastUpdated).getTime();
       if (ageMs > 30 * 60 * 1000) {
         const volatility = await this.computeVolatility(tokenA, tokenB);
-        try {
-          const aiConfig = await ai.generateGridSpreads(
-            userId,
-            grid.tokenPair,
-            volatility,
-            currentMidPrice
-          );
-
-          await db.upsertGrid({
-            userId,
-            walletId,
+        // Asking the model to size spreads from a volatility we invented is
+        // worse than not re-sizing them. The grid keeps the configuration it
+        // already has until there is history to justify changing it — the
+        // same outcome as the catch below, reached deliberately.
+        if (volatility === null) {
+          logger.info("[marketMaker] no volatility history; keeping cached grid configuration", {
             tokenPair: grid.tokenPair,
-            midPrice: aiConfig.midPrice,
-            gridLevels: aiConfig.levels,
-            spreadBps: aiConfig.spreadBps,
           });
+        } else {
+          try {
+            const aiConfig = await ai.generateGridSpreads(
+              userId,
+              grid.tokenPair,
+              volatility,
+              currentMidPrice
+            );
 
-          config = {
-            midPrice: aiConfig.midPrice,
-            levels: aiConfig.levels,
-            spreadBps: aiConfig.spreadBps,
-          };
-        } catch (err) {
-          logger.warn("Failed to refresh grid configuration from AI, falling back to cached configuration", { error: err });
+            await db.upsertGrid({
+              userId,
+              walletId,
+              tokenPair: grid.tokenPair,
+              midPrice: aiConfig.midPrice,
+              gridLevels: aiConfig.levels,
+              spreadBps: aiConfig.spreadBps,
+            });
+
+            config = {
+              midPrice: aiConfig.midPrice,
+              levels: aiConfig.levels,
+              spreadBps: aiConfig.spreadBps,
+            };
+          } catch (err) {
+            logger.warn("Failed to refresh grid configuration from AI, falling back to cached configuration", { error: err });
+          }
         }
       }
 
@@ -171,15 +181,28 @@ export class MarketMakerService {
     return actions;
   }
 
+  /**
+   * Realised volatility of the pair, or null when neither leg has history.
+   *
+   * Both legs used to fall back to a flat 0.02 on any failure, so a pair with
+   * no recorded prices at all produced a confident "2% volatility" that the
+   * model then sized real grid spreads from. One leg is enough to form a view;
+   * neither is not.
+   */
   private async computeVolatility(
     tokenA: string,
     tokenB: string
-  ): Promise<number> {
+  ): Promise<number | null> {
     const ph = PriceHistoryService.getInstance();
-    // Compute true volatility over 30 periods using PriceHistoryService
-    const volA = await ph.computeVolatility(tokenA, 30).catch(() => 0.02);
-    const volB = await ph.computeVolatility(tokenB, 30).catch(() => 0.02);
-    const combinedVol = Math.max(volA, volB, 0.02);
-    return Math.min(0.5, combinedVol);
+    const volA = await ph.computeVolatility(tokenA, 30).catch(() => null);
+    const volB = await ph.computeVolatility(tokenB, 30).catch(() => null);
+
+    const known = [volA, volB].filter((v): v is number => v !== null);
+    if (known.length === 0) return null;
+
+    // The floor stays: a measured near-zero volatility still needs a spread
+    // wide enough to cover fees, which is a property of trading rather than of
+    // the measurement.
+    return Math.min(0.5, Math.max(...known, 0.02));
   }
 }
