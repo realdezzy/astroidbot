@@ -3,6 +3,7 @@ import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
 import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
 import { ConfigManager } from "../../../config.js";
+import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 import { requireSvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 import type { SwappableToken, TransactionPayload } from "../../../types.js";
 import type { DEXQuote } from "../../../types/dexProvider.js";
@@ -38,6 +39,15 @@ export class JupiterProvider extends BaseDEXProvider {
   readonly name: string;
   private readonly apiUrl: string;
   private readonly apiKey: string | undefined;
+  private readonly rpcUrl: string;
+  /**
+   * Mint -> decimals, or null for "asked and could not read it".
+   *
+   * Cached for the life of the process because an SPL mint's decimals are
+   * fixed at initialisation and cannot change — the same reasoning as the
+   * permanent ERC-20 decimals cache on the EVM side.
+   */
+  private readonly decimalsCache = new Map<string, number | null>();
 
   constructor(descriptor: ChainDescriptor) {
     super(descriptor);
@@ -57,6 +67,7 @@ export class JupiterProvider extends BaseDEXProvider {
     // Per-chain name so the registry can hold providers for mainnet and any
     // other SVM network simultaneously — a shared name would silently drop one.
     this.name = `Jupiter-${descriptor.chainId}`;
+    this.rpcUrl = rpcUrlOverride(descriptor.chainId, svm.defaultRpcUrl);
   }
 
   private get breaker() {
@@ -82,7 +93,7 @@ export class JupiterProvider extends BaseDEXProvider {
     return this.tokenList();
   }
 
-  private resolveToken(symbolOrMint: string): SwappableToken | null {
+  private async resolveToken(symbolOrMint: string): Promise<SwappableToken | null> {
     const needle = symbolOrMint.toUpperCase();
     const curated = CURATED_TOKENS[needle];
     if (curated) {
@@ -96,20 +107,71 @@ export class JupiterProvider extends BaseDEXProvider {
       };
     }
 
-    // A raw mint address: base58, 32-44 chars. Decimals default to 9 (SOL's),
-    // which is wrong for many SPL tokens — so an unknown mint is usable but
-    // its amounts should not be trusted for sizing without a decimals lookup.
-    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(symbolOrMint)) {
-      return {
-        contractId: symbolOrMint,
-        symbol: symbolOrMint,
-        name: symbolOrMint,
-        decimals: this.descriptor.nativeDecimals,
-        chainFamily: this.descriptor.family,
-        chainId: this.descriptor.chainId,
-      };
+    // A raw mint address: base58, 32-44 chars.
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(symbolOrMint)) return null;
+
+    // Decimals used to default to the descriptor's native 9, which is wrong
+    // for most SPL tokens — USDC and USDT are both 6, BONK is 5. That number
+    // is not advisory: it reaches `toRaw()` in buildSwapPayload and scales the
+    // amount actually spent, so treating a 6-decimal mint as 9-decimal asks to
+    // move a thousand times more than the user typed. Discovery puts a Trade
+    // button next to arbitrary mints, so this is the normal path, not an edge.
+    const decimals = await this.mintDecimals(symbolOrMint);
+    if (decimals === null) return null;
+
+    return {
+      contractId: symbolOrMint,
+      symbol: symbolOrMint,
+      name: symbolOrMint,
+      decimals,
+      chainFamily: this.descriptor.family,
+      chainId: this.descriptor.chainId,
+    };
+  }
+
+  /**
+   * Decimals straight from the SPL mint account, or null if unreadable.
+   *
+   * Null fails the resolve, which surfaces as "no route" — a cheap and visible
+   * failure. A wrong scale factor is neither.
+   */
+  private async mintDecimals(mint: string): Promise<number | null> {
+    const cached = this.decimalsCache.get(mint);
+    if (cached !== undefined) return cached;
+
+    let decimals: number | null = null;
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getAccountInfo",
+          params: [mint, { encoding: "jsonParsed" }],
+        }),
+      });
+
+      if (response.ok) {
+        const body = (await response.json()) as {
+          result?: { value?: { data?: { parsed?: { info?: { decimals?: number } } } } };
+        };
+        const value = body.result?.value?.data?.parsed?.info?.decimals;
+        if (typeof value === "number") decimals = value;
+      }
+    } catch {
+      // Left null; the caller declines to resolve.
     }
-    return null;
+
+    if (decimals === null) {
+      logger.warn("[jupiter] could not read mint decimals; refusing to resolve", {
+        chainId: this.descriptor.chainId,
+        mint,
+      });
+    }
+
+    this.decimalsCache.set(mint, decimals);
+    return decimals;
   }
 
   private async fetchQuote(
@@ -149,8 +211,10 @@ export class JupiterProvider extends BaseDEXProvider {
   }
 
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {
-    const tIn = this.resolveToken(tokenIn);
-    const tOut = this.resolveToken(tokenOut);
+    const [tIn, tOut] = await Promise.all([
+      this.resolveToken(tokenIn),
+      this.resolveToken(tokenOut),
+    ]);
     if (!tIn || !tOut || tIn.contractId === tOut.contractId) return false;
 
     try {
@@ -162,8 +226,10 @@ export class JupiterProvider extends BaseDEXProvider {
   }
 
   async getTokenPrice(tokenSymbol: string): Promise<number | null> {
-    const token = this.resolveToken(tokenSymbol);
-    const stable = this.resolveToken(this.descriptor.stableSymbol);
+    const [token, stable] = await Promise.all([
+      this.resolveToken(tokenSymbol),
+      this.resolveToken(this.descriptor.stableSymbol),
+    ]);
     if (!token || !stable) return null;
     if (token.contractId === stable.contractId) return 1;
 
@@ -180,8 +246,10 @@ export class JupiterProvider extends BaseDEXProvider {
   }
 
   async getQuote(tokenIn: string, tokenOut: string, amountIn: number): Promise<DEXQuote> {
-    const tIn = this.resolveToken(tokenIn);
-    const tOut = this.resolveToken(tokenOut);
+    const [tIn, tOut] = await Promise.all([
+      this.resolveToken(tokenIn),
+      this.resolveToken(tokenOut),
+    ]);
     if (!tIn || !tOut || amountIn <= 0) {
       return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
     }
@@ -226,8 +294,10 @@ export class JupiterProvider extends BaseDEXProvider {
     minAmountOut: number,
     senderAddress: string
   ): Promise<TransactionPayload | null> {
-    const tIn = this.resolveToken(tokenIn);
-    const tOut = this.resolveToken(tokenOut);
+    const [tIn, tOut] = await Promise.all([
+      this.resolveToken(tokenIn),
+      this.resolveToken(tokenOut),
+    ]);
     if (!tIn || !tOut) return null;
 
     try {

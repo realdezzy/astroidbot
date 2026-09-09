@@ -93,6 +93,82 @@ describe("JupiterProvider", () => {
     expect((await provider.getQuote("SOL", "USDC", 1)).amountOut).toBe(0);
   });
 
+  /**
+   * An unknown mint's decimals used to default to the descriptor's native 9,
+   * with a comment saying so and adding that "its amounts should not be
+   * trusted for sizing". They were used for sizing: `resolveToken` feeds
+   * `toRaw(amount, decimals)` in `buildSwapPayload`, which is the number of
+   * base units actually spent.
+   *
+   * This is the same bug the EVM path fixed by reading `decimals()` on-chain —
+   * "treating a 6-decimal token as 18-decimal turns 'swap 1 token' into a
+   * request to spend 10^12 times more". Discovery surfaces arbitrary mints
+   * with a Trade button, so unknown mints are the normal case, not the edge.
+   */
+  describe("decimals for an unknown mint", () => {
+    // A real base58 mint that is not in the curated list.
+    const MINT = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
+
+    const mintAccount = (decimals: number) => ({
+      ok: true,
+      json: async () => ({
+        result: { value: { data: { parsed: { info: { decimals } } } } },
+      }),
+    });
+
+    it("reads them from the SPL mint account instead of assuming 9", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).includes("jup.ag") ? quoteResponse("1000000") : mintAccount(6)
+      );
+
+      await provider.getQuote(MINT, "USDC", 1);
+
+      const quoteUrl = fetchMock.mock.calls.map(String).find((u) => u.includes("jup.ag"))!;
+      // 1 token at 6 decimals is 1_000_000 base units. At the old default of 9
+      // it would have asked to move 1_000_000_000 — a thousand times more.
+      // Anchored: "amount=1000000000" contains "amount=1000000" as a
+      // substring, so a `toContain` here passes against the very bug it is
+      // meant to catch.
+      expect(quoteUrl).toMatch(/[?&]amount=1000000(&|$)/);
+    });
+
+    it("caches the lookup, since an SPL mint's decimals cannot change", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).includes("jup.ag") ? quoteResponse("1000000") : mintAccount(6)
+      );
+
+      await provider.getQuote(MINT, "USDC", 1);
+      await provider.getQuote(MINT, "USDC", 1);
+
+      const rpcCalls = fetchMock.mock.calls.filter((c) => !String(c[0]).includes("jup.ag"));
+      expect(rpcCalls).toHaveLength(1);
+    });
+
+    it("refuses to resolve a mint whose decimals cannot be read", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).includes("jup.ag")
+          ? quoteResponse("1000000")
+          : { ok: true, json: async () => ({ result: { value: null } }) }
+      );
+
+      // "No route" is a cheap, visible failure. A wrong scale factor is not.
+      expect(await provider.hasRoute(MINT, "USDC")).toBe(false);
+      expect((await provider.getQuote(MINT, "USDC", 1)).amountOut).toBe(0);
+    });
+
+    it("still resolves curated symbols without an RPC round trip", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      fetchMock.mockResolvedValue(quoteResponse("74000000"));
+
+      await provider.getQuote("SOL", "USDC", 1);
+
+      expect(fetchMock.mock.calls.every((c) => String(c[0]).includes("jup.ag"))).toBe(true);
+    });
+  });
+
   it("converts Jupiter's fractional price impact to a percentage", async () => {
     const provider = new JupiterProvider(SOLANA_MAINNET);
     fetchMock.mockResolvedValue(quoteResponse("74000000"));

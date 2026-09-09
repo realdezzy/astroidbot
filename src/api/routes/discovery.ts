@@ -89,7 +89,10 @@ router.get("/tokens/discover", async (req: Request, res: Response) => {
     res.json({
       ...result,
       items: result.items.map(serialiseToken),
-      priceSource: "dex",
+      // The provider that actually answered, not a constant. This was
+      // hardcoded to "dex" on both routes regardless of where the numbers came
+      // from — a field asserting a provenance it had not checked.
+      priceSource: TokenDiscoveryService.getInstance().marketData().name,
     });
   } catch (error) {
     logger.error("Token discovery failed", { error });
@@ -113,7 +116,10 @@ router.get("/tokens/:chainId/:contractId", async (req: Request, res: Response) =
 
     res.json({
       ...token,
-      priceSource: "dex",
+      // The provider that actually answered, not a constant. This was
+      // hardcoded to "dex" on both routes regardless of where the numbers came
+      // from — a field asserting a provenance it had not checked.
+      priceSource: TokenDiscoveryService.getInstance().marketData().name,
       chain: descriptor
         ? {
             chainId: descriptor.chainId,

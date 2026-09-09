@@ -105,6 +105,16 @@ export interface ChainAdapter {
     decimals?: number;
   }): Promise<{ txId: string } | { error: string }>;
 
+  /**
+   * `poll` is honoured by the Stacks adapter only.
+   *
+   * EVM and SVM deliberately ignore it: both read a receipt once and then age
+   * the trade out via `ageOutOrPending` rather than blocking on a chain that
+   * may never include the transaction. Documented here because a parameter
+   * that some implementations quietly drop is worse than one that isn't
+   * offered — a caller passing `true` should know what it does and does not
+   * buy them.
+   */
   confirmTransaction(
     txId: string,
     tradeId: number,

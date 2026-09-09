@@ -98,10 +98,15 @@ export class SolanaAdapter extends BaseChainAdapter {
   /**
    * Signs and sends a transaction an aggregator already built.
    *
-   * `transactionBase64` is a serialized VersionedTransaction. A priority fee is
-   * prepended when the transaction doesn't already carry one — Solana drops
-   * transactions that don't outbid the fee market during congestion, and
-   * silent non-inclusion is worse than a fraction of a cent.
+   * `transactionBase64` is a serialized VersionedTransaction.
+   *
+   * The priority fee comes from Jupiter, which sets one when it builds the
+   * transaction; the descriptor's `priorityFeeMicroLamports` applies to the
+   * `transfer` path below and not to this one. This comment previously claimed
+   * that a fee was prepended here when the transaction didn't already carry
+   * one, and no such code existed — worth stating plainly, because a fee that
+   * is documented but absent shows up as silent non-inclusion during
+   * congestion, which is the hardest failure on this chain to attribute.
    */
   async executeSvmCall(params: {
     transactionBase64: string;
@@ -202,6 +207,13 @@ export class SolanaAdapter extends BaseChainAdapter {
     });
   }
 
+  /**
+   * `_poll` is accepted for interface compatibility and deliberately ignored,
+   * as on EVM: this reads the signature status once and ages the trade out
+   * rather than blocking on a transaction the cluster may never include. A
+   * Solana blockhash is only valid for ~150 slots, so "still pending" resolves
+   * itself within `SVM_CONFIRMATION_TIMEOUT_MS` either way.
+   */
   async confirmTransaction(
     txId: string,
     tradeId: number,
