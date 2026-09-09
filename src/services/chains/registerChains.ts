@@ -5,7 +5,7 @@ import { DEXRegistry } from "../dex/dexRegistry.js";
 import { StacksAdapter } from "./stacksAdapter.js";
 import { EvmChainAdapter } from "./evm/evmChainAdapter.js";
 import { SolanaAdapter } from "./svm/solanaAdapter.js";
-import { rpcUrlOverride } from "./evm/evmClient.js";
+import { hasRpcOverride, rpcUrlOverride } from "./evm/evmClient.js";
 import { UniswapV3Provider } from "../dex/providers/uniswapV3.js";
 import { UniswapV2Provider } from "../dex/providers/uniswapV2.js";
 import { UniswapUniversalProvider } from "../dex/providers/uniswapUniversal.js";
@@ -123,7 +123,11 @@ function rpcHostFor(descriptor: ChainDescriptor): string {
   if (!fallback) return "n/a";
 
   const url = rpcUrlOverride(descriptor.chainId, fallback);
-  const overridden = url !== fallback;
+  // Asked of the environment rather than inferred by comparing the resolved
+  // URL to the default — an override deliberately set to the default value is
+  // still an override, and reporting it as "(default)" tells an operator their
+  // setting had no effect.
+  const overridden = hasRpcOverride(descriptor.chainId);
 
   try {
     return `${new URL(url).host}${overridden ? " (override)" : " (default)"}`;

@@ -4,6 +4,10 @@ web/dist/
 .vite/
 .env
 .env.docker
+# Any local copy of a real env file. `.env` alone did not cover `.env.backup`,
+# `.env.local` or `.env.production`, each of which holds the same secrets.
+.env.*
+!.env.example
 *.log
 *.tsbuildinfo
 .DS_Store

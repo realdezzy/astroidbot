@@ -113,6 +113,133 @@ const envSchema = z.object({
 
 type EnvConfig = z.infer<typeof envSchema>;
 
+/** The subset of the environment that carries a secret worth checking. */
+export interface PlaceholderCheckInput {
+  AES_KEY: string;
+  JWT_SECRET: string;
+  AI_PROVIDER: "openai" | "google" | "deepseek";
+  OPENAI_API_KEY?: string;
+  GOOGLE_AI_API_KEY?: string;
+  DEEPSEEK_API_KEY?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_ADMIN_IDS?: string;
+}
+
+/** Values copied out of `.env.example` and never replaced. */
+const PLACEHOLDER_PATTERNS: RegExp[] = [
+  /^\.{2,}$/, //                     "..."
+  /^sk-\.{2,}$/, //                  "sk-..."
+  /^vx-\.{2,}$/,
+  /^pim_\.{2,}$/,
+  /change-me/i,
+  /^your-/i,
+  /^generate-a-random-string/i,
+  /^1234567890:ABCdefGHIjklMNOpqrsTUVwxyz$/,
+];
+
+function looksLikePlaceholder(value: string): boolean {
+  return PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+
+/**
+ * Why the AES key gets its own check rather than a pattern match.
+ *
+ * A 32-byte key drawn from a CSPRNG has each byte uniform over 0-255, so the
+ * chance that all 32 land in printable ASCII is (95/256)^32 — about one in
+ * 10^14. A value that decodes to nothing but printable characters is therefore
+ * a string somebody typed, whatever it says. That is the check that catches a
+ * key `z.string().min(1)` was happy with.
+ */
+function aesKeyProblem(value: string): string | null {
+  const trimmed = value.trim();
+  const decoded = Buffer.from(trimmed, "base64");
+
+  // Buffer's base64 decoder ignores characters it doesn't recognise, so a
+  // round trip is what actually establishes the input was base64 rather than
+  // prose that happens to contain some base64 alphabet.
+  if (decoded.toString("base64").replace(/=+$/, "") !== trimmed.replace(/=+$/, "")) {
+    return "is not valid base64";
+  }
+  if (decoded.length !== 32) {
+    return `decodes to ${decoded.length} bytes, but AES-256 needs exactly 32`;
+  }
+  if (decoded.every((byte) => byte >= 0x20 && byte <= 0x7e)) {
+    return "decodes to nothing but printable ASCII, so it is a typed string rather than a random key";
+  }
+  return null;
+}
+
+/**
+ * Refuses to boot on a secret that was never filled in.
+ *
+ * Every value here already had a validator, and every one of them passed:
+ * `AES_KEY` was `z.string().min(1)` and held a 40-character sentence;
+ * `JWT_SECRET` was `z.string().min(32)` and still read `change-me-in-…`. The
+ * checks measured length where the property that matters is entropy.
+ *
+ * This runs at startup rather than at first use on purpose. A placeholder
+ * OpenAI key surfaces as a 401 on somebody's request an hour later, and a
+ * placeholder `AES_KEY` does not surface at all — it encrypts wallet keys
+ * perfectly happily under a value anyone can read in the repository.
+ *
+ * Every offender is reported together. Reporting the first one turns a
+ * container under `set -e` into a crash loop that discloses its causes one
+ * restart at a time.
+ */
+export function assertNoPlaceholders(env: PlaceholderCheckInput): void {
+  const problems: string[] = [];
+
+  const aes = aesKeyProblem(env.AES_KEY);
+  if (aes) {
+    problems.push(
+      `AES_KEY ${aes}. This key encrypts every wallet private key. ` +
+        `Generate one with: node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))" ` +
+        `(or: openssl rand -base64 32).`
+    );
+  }
+
+  if (looksLikePlaceholder(env.JWT_SECRET)) {
+    problems.push(
+      `JWT_SECRET is the placeholder from .env.example, so every session token is forgeable. ` +
+        `Generate one with: node -e "console.log(require('node:crypto').randomBytes(48).toString('base64'))".`
+    );
+  }
+
+  // Only the selected provider's credential has to be real. A stale
+  // placeholder in a slot nothing reads is untidy, not a reason to refuse.
+  const providerKey = {
+    openai: ["OPENAI_API_KEY", env.OPENAI_API_KEY],
+    google: ["GOOGLE_AI_API_KEY", env.GOOGLE_AI_API_KEY],
+    deepseek: ["DEEPSEEK_API_KEY", env.DEEPSEEK_API_KEY],
+  }[env.AI_PROVIDER] as [string, string | undefined];
+
+  if (providerKey[1] && looksLikePlaceholder(providerKey[1])) {
+    problems.push(
+      `${providerKey[0]} is a placeholder, and AI_PROVIDER is "${env.AI_PROVIDER}", ` +
+        `so every AI request would fail with a 401 at request time.`
+    );
+  }
+
+  // Absent is a decision — a deployment with no Telegram bot is valid, and
+  // must not be made to invent a credential in order to boot. Only a value
+  // that is set *and* fake is a problem.
+  if (env.TELEGRAM_BOT_TOKEN && looksLikePlaceholder(env.TELEGRAM_BOT_TOKEN)) {
+    problems.push("TELEGRAM_BOT_TOKEN is the example token. Unset it, or set a real one.");
+  }
+  if (env.TELEGRAM_ADMIN_IDS?.trim() === "123456789") {
+    problems.push(
+      "TELEGRAM_ADMIN_IDS is the example id, so the admin gate names a user that does not exist."
+    );
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      `Refusing to start: ${problems.length} placeholder secret(s) found in the environment.\n` +
+        problems.map((p) => `  - ${p}`).join("\n")
+    );
+  }
+}
+
 export class ConfigManager {
   private static instance: ConfigManager;
   public readonly config: EnvConfig;
@@ -126,6 +253,14 @@ export class ConfigManager {
     }
 
     this.config = result.data;
+
+    // Armed everywhere but the test suite, whose fixtures deliberately use
+    // fake secrets across 44 files. `assertNoPlaceholders` is covered directly
+    // in tests/config/placeholders.test.ts, so skipping it here costs no
+    // coverage — it only stops the fixtures from having to carry real entropy.
+    if (process.env.NODE_ENV !== "test") {
+      assertNoPlaceholders(this.config);
+    }
 
     if (this.config.AI_PROVIDER === "openai" && !this.config.OPENAI_API_KEY) {
       throw new Error("OPENAI_API_KEY is required when AI_PROVIDER is openai");

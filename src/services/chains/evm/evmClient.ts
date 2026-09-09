@@ -36,6 +36,20 @@ export function rpcUrlOverride(chainId: string, defaultUrl: string): string {
   return process.env[rpcEnvKey(chainId)] || defaultUrl;
 }
 
+/**
+ * Whether this chain has an explicit endpoint configured.
+ *
+ * Callers used to answer this by comparing the resolved URL against the
+ * descriptor default, which is right until a deployment sets an override to
+ * the same value the default already had — and then reports that an explicit
+ * setting did nothing. Asking the environment directly cannot be wrong about
+ * it, and this is the same expression `rpcUrlOverride` falls back on, so the
+ * two can never disagree about which endpoint is in use.
+ */
+export function hasRpcOverride(chainId: string): boolean {
+  return Boolean(process.env[rpcEnvKey(chainId)]);
+}
+
 export function rpcUrlFor(descriptor: ChainDescriptor): string {
   return rpcUrlOverride(descriptor.chainId, requireEvmConfig(descriptor).defaultRpcUrl);
 }

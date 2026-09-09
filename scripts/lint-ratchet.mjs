@@ -17,7 +17,7 @@ const BASELINE_PATH = new URL("../.lint-baseline.json", import.meta.url);
 
 let raw;
 try {
-  raw = execSync("npx eslint src tests --format json", {
+  raw = execSync("npx eslint src tests scripts --format json", {
     maxBuffer: 1024 * 1024 * 128,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

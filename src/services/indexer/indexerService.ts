@@ -1,5 +1,6 @@
 import { ChainAdapterRegistry } from "../chains/chainAdapterRegistry.js";
 import { ChainHealthMonitor } from "../chains/chainHealth.js";
+import { hasRpcOverride, rpcEnvKey } from "../chains/evm/evmClient.js";
 import { ConfigManager } from "../../config.js";
 import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
@@ -127,6 +128,22 @@ export class IndexerService {
               ? Math.round(chainSettings.confirmations * descriptor.indexer.blockTimeSeconds)
               : undefined,
             initialLookbackBlocks: chainSettings.initialLookbackBlocks,
+          });
+        }
+
+        // An indexed chain on a public default endpoint will be throttled, and
+        // by the time that shows up it looks like a chain with no swaps rather
+        // than like a client being refused. This is the one place that knows a
+        // chain is *actually* being indexed — `registerChains` would have to
+        // duplicate the `canIndex` predicates to say the same thing, and a
+        // duplicated predicate drifts.
+        if (!hasRpcOverride(descriptor.chainId)) {
+          logger.warn("[indexer] chain is indexed but has no RPC override", {
+            chainId: descriptor.chainId,
+            envVar: rpcEnvKey(descriptor.chainId),
+            hint:
+              "Ingestion is the heaviest RPC consumer here and public endpoints " +
+              "rate-limit hard. Point this chain at a paid endpoint.",
           });
         }
 

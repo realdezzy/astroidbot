@@ -5,6 +5,6 @@
   // under tests/ fails with "not found in any of the provided project(s)"
   // and is silently never linted.
   "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "shared/**/*.ts", "tests/**/*.ts"],
+  "include": ["src/**/*.ts", "shared/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist", "web"]
 }
