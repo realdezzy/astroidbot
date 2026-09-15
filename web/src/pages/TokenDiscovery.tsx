@@ -6,6 +6,7 @@ import { apiFetch } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { classNames } from "../lib/utils";
 import { ChainDexBadge } from "../components/ChainDexBadge";
+import { useAppRoutes } from "../lib/appRoutes";
 
 interface DiscoveredToken {
   contractId: string;
@@ -98,6 +99,7 @@ function Change({ value }: { value: number | null }) {
 
 export function TokenDiscovery() {
   const navigate = useNavigate();
+  const routes = useAppRoutes();
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
 
@@ -171,8 +173,51 @@ export function TokenDiscovery() {
         ))}
       </div>
 
-      {/* Discovery Table */}
-      <div className="overflow-x-auto glass-card">
+      {routes.isTelegram && (
+        <div className="space-y-2">
+          {isLoading && tokens.length === 0 ? (
+            <div className="glass-card p-8 text-center text-sm text-muted-text">Loading tokens…</div>
+          ) : tokens.length === 0 ? (
+            <div className="glass-card p-8 text-center text-sm text-muted-text">
+              No tokens match those filters.
+            </div>
+          ) : tokens.map((token) => (
+            <button
+              key={`${token.chainId}:${token.contractId}`}
+              type="button"
+              onClick={() => navigate(routes.tokenDetail(token.chainId, token.contractId))}
+              className="glass-card w-full p-3 text-left active:scale-[0.99]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-title-text">{token.symbol}</span>
+                    <span className="truncate text-xs text-muted-text">{token.name}</span>
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <ChainDexBadge chainId={token.chainId} dexId={token.dexId} />
+                    <span className="text-[10px] font-bold uppercase text-muted-text">
+                      {token.chainName} · {token.dexId}
+                    </span>
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-mono text-sm font-bold text-title-text">{usd(token.priceUsd)}</div>
+                  <div className="text-xs"><Change value={token.priceChange.h24} /></div>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 border-t border-card-border/60 pt-2 text-xs">
+                <div><span className="block text-[10px] uppercase text-muted-text">Volume</span>{usd(token.volume24h)}</div>
+                <div><span className="block text-[10px] uppercase text-muted-text">Liquidity</span>{usd(token.liquidityUsd)}</div>
+                <div><span className="block text-[10px] uppercase text-muted-text">Age</span>{age(token.pairCreatedAt)}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Desktop discovery table */}
+      <div className={classNames("overflow-x-auto glass-card", routes.isTelegram && "hidden")}>
         <table className="w-full min-w-[1000px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-card-border text-[11px] uppercase tracking-wide text-muted-text">
@@ -209,9 +254,7 @@ export function TokenDiscovery() {
                 <tr
                   key={`${token.chainId}:${token.contractId}`}
                   onClick={() =>
-                    navigate(
-                      `/tokens/${encodeURIComponent(token.chainId)}/${encodeURIComponent(token.contractId)}`
-                    )
+                    navigate(routes.tokenDetail(token.chainId, token.contractId))
                   }
                   className="cursor-pointer border-b border-card-border/50 transition-colors last:border-0 hover:bg-bg-hover"
                 >

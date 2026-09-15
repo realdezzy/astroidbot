@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiFetch, saveTokens, clearTokens, isAuthenticated } from "./api";
+import { useTelegram } from "./telegram/TelegramProvider";
 
 interface User {
   id: number;
@@ -37,6 +38,7 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const telegram = useTelegram();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -139,7 +141,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated()) {
+    if (telegram.initData && !isAuthenticated()) {
+      apiFetch<{ accessToken: string; refreshToken: string; user: User }>("/auth/telegram-mini-app", {
+        method: "POST",
+        body: JSON.stringify({ initData: telegram.initData }),
+      })
+        .then((data) => {
+          saveTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+          setUser(data.user);
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : "Telegram authentication failed"))
+        .finally(() => setLoading(false));
+    } else if (isAuthenticated()) {
       apiFetch<User>("/me")
         .then(setUser)
         .catch(() => clearTokens())
@@ -147,7 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       setLoading(false);
     }
-  }, []);
+  }, [telegram.initData]);
 
   return (
     <AuthContext.Provider value={{ user, loading, error, login, loginWithEmail, register, logout }}>

@@ -22,6 +22,9 @@ import { Settings } from "./pages/Settings";
 import { Account } from "./pages/Account";
 import { Wallets } from "./pages/Wallets";
 import { Docs } from "./pages/Docs";
+import { TelegramProvider } from "./lib/telegram/TelegramProvider";
+import { TelegramShell } from "./components/TelegramShell";
+import { TelegramHome } from "./pages/TelegramHome";
 
 
 const queryClient = new QueryClient({
@@ -68,6 +71,15 @@ function AppRoutes() {
         <Route path="/docs" element={<Docs />} />
         <Route path="/docs/:slug" element={<Docs />} />
 
+        <Route element={<ProtectedRoute />}>
+          <Route element={<TelegramShell />}>
+            <Route path="/tg" element={<TelegramHome />} />
+            <Route path="/tg/portfolio" element={<Portfolio />} />
+            <Route path="/tg/tokens" element={<TokenDiscovery />} />
+            <Route path="/tg/tokens/:chainId/:contractId" element={<TokenDetail />} />
+          </Route>
+        </Route>
+
         {/* Dedicated Layout Shell for DexScreener Tokens Discovery & Detail views */}
         <Route element={<TokensLayout />}>
           <Route path="/tokens" element={<TokenDiscovery />} />
@@ -102,10 +114,11 @@ function AppRoutes() {
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <TelegramProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </TelegramProvider>
     </QueryClientProvider>
   );
 }
-

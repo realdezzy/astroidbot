@@ -18,6 +18,8 @@ import { useAuth } from "../lib/auth";
 import { classNames, formatNumber } from "../lib/utils";
 import { ChainDexBadge } from "../components/ChainDexBadge";
 import { TradingViewChart, CandleData } from "../components/TradingViewChart";
+import { useAppRoutes } from "../lib/appRoutes";
+import { useTelegram } from "../lib/telegram/TelegramProvider";
 
 interface TokenDetailData {
   chainId: string;
@@ -155,12 +157,31 @@ export function TokenDetail() {
   const { chainId = "", contractId = "" } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const routes = useAppRoutes();
+  const { webApp } = useTelegram();
 
   const [selectedTimeframe, setSelectedTimeframe] = useState<string>("5m");
   const [activeTab, setActiveTab] = useState<"transactions" | "traders" | "kols" | "holders">("transactions");
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [liveSwaps, setLiveSwaps] = useState<SwapTx[]>([]);
+  const [openingChat, setOpeningChat] = useState(false);
+
+  const continueInChat = async () => {
+    if (!token || openingChat) return;
+    setOpeningChat(true);
+    try {
+      const link = await apiFetch<{ url: string }>("/me/deep-links", {
+        method: "POST",
+        body: JSON.stringify({ kind: "token", chainId: token.chainId, contractId: token.contractId }),
+      });
+      webApp?.HapticFeedback?.impactOccurred("light");
+      if (webApp?.openTelegramLink) webApp.openTelegramLink(link.url);
+      else window.location.assign(link.url);
+    } finally {
+      setOpeningChat(false);
+    }
+  };
 
   const { data: token, isLoading, error } = useQuery<TokenDetailData>({
     queryKey: ["token-detail", chainId, contractId],
@@ -281,7 +302,7 @@ export function TokenDetail() {
     return (
       <div className="min-h-[400px] p-10 text-center text-muted-text">
         <p>Token specification not found.</p>
-        <Link to="/tokens" className="mt-4 inline-block text-brand-400 font-semibold hover:underline">
+        <Link to={routes.tokenList} className="mt-4 inline-block text-brand-400 font-semibold hover:underline">
           Back to Token Discovery
         </Link>
       </div>
@@ -298,7 +319,7 @@ export function TokenDetail() {
       <div className="glass-card px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <Link
-            to="/tokens"
+            to={routes.tokenList}
             className="inline-flex items-center text-xs text-muted-text hover:text-title-text transition-colors"
           >
             <ArrowLeft className="w-4 h-4 mr-1" /> Tokens
@@ -768,16 +789,14 @@ export function TokenDetail() {
               </span>
             </div>
             <button
-              onClick={() =>
-                navigate(
-                  `/trade?chainId=${encodeURIComponent(token.chainId)}&tokenOut=${encodeURIComponent(
-                    token.contractId
-                  )}`
-                )
+              onClick={() => routes.isTelegram
+                ? void continueInChat()
+                : navigate(`/trade?chainId=${encodeURIComponent(token.chainId)}&tokenOut=${encodeURIComponent(token.contractId)}`)
               }
+              disabled={openingChat}
               className="w-full py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-sm shadow-lg shadow-brand-500/25 transition-all flex items-center justify-center space-x-2 cursor-pointer"
             >
-              <span>Trade {token.symbol}</span>
+              <span>{routes.isTelegram ? (openingChat ? "Opening chat…" : `Continue ${token.symbol} in chat`) : `Trade ${token.symbol}`}</span>
               <ExternalLink className="w-4 h-4" />
             </button>
           </div>
