@@ -14,6 +14,7 @@ import { useAuth } from "../lib/auth";
 import { apiFetch } from "../lib/api";
 import { classNames } from "../lib/utils";
 import { MarqueeTicker } from "./MarqueeTicker";
+import { AstroidMark } from "./Brand/AstroidMark";
 
 interface ChainInfo {
   chainId: string;
@@ -96,9 +97,11 @@ export function TokensLayout() {
         {/* Mobile Header */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 bg-sidebar-bg border-b border-sidebar-border transition-colors duration-300">
           <NavLink to="/tokens" className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="AstroidBot Logo" className="w-7 h-7 object-contain shrink-0" />
+            <div className="w-7 h-7 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+              <AstroidMark className="w-4 h-4 text-brand-400" />
+            </div>
             <div>
-              <h1 className="text-sm font-bold text-title-text leading-tight">AstroidBot</h1>
+              <h1 className="text-sm font-bold text-title-text leading-tight tracking-tight">AstroidBot</h1>
             </div>
           </NavLink>
           <div className="flex items-center gap-2">
@@ -114,10 +117,13 @@ export function TokensLayout() {
         {/* Tokens Sidebar (Search & Chains Rail) */}
         <aside className="hidden md:flex w-60 bg-sidebar-bg border-r border-sidebar-border flex-col shrink-0 transition-colors duration-300">
           <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
-            <NavLink to="/tokens" className="flex items-center gap-2.5">
-              <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
+            <NavLink to="/" className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+                <AstroidMark className="w-5 h-5 text-brand-400" />
+              </div>
               <div>
-                <h1 className="text-base font-bold text-title-text leading-tight">AstroidBot</h1>
+                <h1 className="text-base font-bold text-title-text leading-tight tracking-tight">AstroidBot</h1>
+                <p className="text-[10px] text-brand-400 font-mono uppercase tracking-wider">Radar</p>
               </div>
             </NavLink>
           </div>
@@ -233,9 +239,11 @@ export function TokensLayout() {
             <aside className="relative w-64 max-w-xs bg-sidebar-bg border-r border-sidebar-border flex flex-col z-10 transition-colors duration-300">
               <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <img src="/logo.png" alt="AstroidBot Logo" className="w-7 h-7 object-contain shrink-0" />
+                  <div className="w-7 h-7 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+                    <AstroidMark className="w-4 h-4 text-brand-400" />
+                  </div>
                   <div>
-                    <h1 className="text-sm font-bold text-title-text">AstroidBot</h1>
+                    <h1 className="text-sm font-bold text-title-text tracking-tight">AstroidBot</h1>
                   </div>
                 </div>
                 <button

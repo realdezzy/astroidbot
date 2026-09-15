@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { Search, BookOpen, ChevronRight, FileText, Loader2, Bot, ArrowRight, Menu, X, Home } from "lucide-react";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { useAuth } from "../lib/auth";
+import { AstroidMark } from "../components/Brand/AstroidMark";
 
 interface DocMeta {
   slug: string;
@@ -145,20 +146,16 @@ export function Docs() {
 
   return (
     <div className="min-h-screen bg-main-bg text-main-text selection:bg-brand-500/30 overflow-x-hidden font-sans flex flex-col">
-      {/* Background glow effects */}
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-brand-500/10 rounded-full filter blur-[120px] pointer-events-none" />
-      <div className="absolute top-[800px] right-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full filter blur-[160px] pointer-events-none" />
-
       {/* Header / Navigation */}
-      <header className="sticky top-0 z-50 backdrop-blur-md bg-main-bg/80 border-b border-sidebar-border">
+      <header className="sticky top-0 z-50 backdrop-blur-md bg-main-bg/90 border-b border-sidebar-border">
         <div className="w-full max-w-full px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link to="/" className="w-9 h-9 rounded-xl flex items-center justify-center hover:opacity-80 transition-opacity">
-              <img src="/logo.png" alt="AstroidBot Logo" className="w-9 h-9 object-contain" />
+            <Link to="/" className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center hover:opacity-80 transition-opacity">
+              <AstroidMark className="w-5 h-5 text-brand-400" />
             </Link>
             <div>
               <Link to="/" className="font-bold text-title-text text-lg tracking-tight hover:text-brand-400 transition-colors">AstroidBot</Link>
-              <span className="text-xs block text-muted-text -mt-1 font-mono">DOCUMENTATION</span>
+              <span className="text-[10px] block text-brand-400 font-mono -mt-0.5 uppercase tracking-wider">Documentation</span>
             </div>
           </div>
 

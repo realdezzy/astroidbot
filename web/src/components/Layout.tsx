@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { usePushNotifications } from "../hooks/usePushNotifications";
+import { AstroidMark } from "./Brand/AstroidMark";
 
 const navItems = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -30,7 +31,7 @@ const navItems = [
   { to: "/perp", icon: TrendingUp, label: "Perp" },
   { to: "/limit-orders", icon: Clock, label: "Limit Orders" },
   { to: "/agents", icon: Bot, label: "Agents" },
-  { to: "/tokens", icon: Coins, label: "Tokens" },
+  // { to: "/tokens", icon: Coins, label: "Tokens" },
   { to: "/settings", icon: Settings, label: "Settings" },
   { to: "/account", icon: UserCog, label: "Account" },
 ];
@@ -59,10 +60,12 @@ export function Layout() {
       {/* Mobile Top Header */}
       <header className="md:hidden flex items-center justify-between px-6 py-4 bg-sidebar-bg border-b border-sidebar-border transition-colors duration-300">
         <a href="/" className="flex items-center gap-3">
-          <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
+          <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+            <AstroidMark className="w-5 h-5 text-brand-400" />
+          </div>
           <div>
-            <h1 className="text-md font-bold text-title-text">AstroidBot</h1>
-            <p className="text-[10px] text-muted-text">AI Trading</p>
+            <h1 className="text-md font-bold text-title-text tracking-tight">AstroidBot</h1>
+            <p className="text-[10px] text-brand-400 font-mono -mt-0.5 uppercase tracking-wider">Trading</p>
           </div>
         </a>
         <div className="flex items-center gap-3">
@@ -91,10 +94,12 @@ export function Layout() {
       <aside className="hidden md:flex w-64 bg-sidebar-bg border-r border-sidebar-border flex-col transition-colors duration-300 shrink-0">
         <div className="p-6 border-b border-sidebar-border flex items-center justify-between">
           <a href="/" className="flex items-center gap-3">
-            <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
+            <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+              <AstroidMark className="w-5 h-5 text-brand-400" />
+            </div>
             <div>
-              <h1 className="text-lg font-bold text-title-text">AstroidBot</h1>
-              <p className="text-xs text-muted-text">AI Trading</p>
+              <h1 className="text-lg font-bold text-title-text tracking-tight">AstroidBot</h1>
+              <p className="text-xs text-brand-400 font-mono -mt-0.5 uppercase tracking-wider">Trading Terminal</p>
             </div>
           </a>
         </div>
@@ -167,10 +172,12 @@ export function Layout() {
           <aside className="relative w-64 max-w-xs bg-sidebar-bg border-r border-sidebar-border flex flex-col z-10 transition-colors duration-300">
             <div className="p-6 border-b border-sidebar-border flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img src="/logo.png" alt="AstroidBot Logo" className="w-8 h-8 object-contain shrink-0" />
+                <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+                  <AstroidMark className="w-5 h-5 text-brand-400" />
+                </div>
                 <div>
-                  <h1 className="text-md font-bold text-title-text">AstroidBot</h1>
-                  <p className="text-[10px] text-muted-text">AI Trading</p>
+                  <h1 className="text-md font-bold text-title-text tracking-tight">AstroidBot</h1>
+                  <p className="text-[10px] text-brand-400 font-mono -mt-0.5 uppercase tracking-wider">Trading</p>
                 </div>
               </div>
               <button

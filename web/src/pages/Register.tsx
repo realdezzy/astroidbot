@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Bot } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import { AstroidMark } from "../components/Brand/AstroidMark";
 
 export function Register() {
   const { user, register, loading, error } = useAuth();
@@ -45,9 +46,11 @@ export function Register() {
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <img src="/logo.png" alt="AstroidBot Logo" className="w-16 h-16 object-contain mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-white">Create Account</h1>
-          <p className="text-gray-400 mt-1">Join AstroidBot and start trading</p>
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#4B4032]/40 border border-[#DEA34F]/30 mx-auto mb-4">
+            <AstroidMark className="w-10 h-10 text-brand-400" />
+          </div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Create Account</h1>
+          <p className="text-gray-400 mt-1 text-xs font-mono uppercase tracking-wider">Join AstroidBot Trading Terminal</p>
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
