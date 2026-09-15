@@ -33,7 +33,8 @@ export class BlockTimeOracle {
      * bucket it feeds.
      */
     private readonly maxSamples = 200,
-    private readonly concurrency = 50
+    private readonly concurrency = 50,
+    private readonly strict = false
   ) {}
 
   /**
@@ -83,7 +84,8 @@ export class BlockTimeOracle {
           try {
             const header = await this.client.getBlock({ blockNumber: block });
             return { block, ms: Number(header.timestamp) * 1000 };
-          } catch {
+          } catch (error) {
+            if (this.strict) throw error;
             // A missing sample only widens the interval either side of it.
             return null;
           }

@@ -38,13 +38,15 @@ function createHealthServer(): http.Server {
       return;
     }
 
-    const healthy = health.consecutiveFailures < UNHEALTHY_AFTER_CONSECUTIVE_FAILURES;
+    const ingestionHealth = IndexerService.getInstance().healthSnapshot();
+    const healthy = ingestionHealth.healthy && health.consecutiveFailures < UNHEALTHY_AFTER_CONSECUTIVE_FAILURES;
 
     res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
         status: healthy ? "ok" : "degraded",
         service: "indexer",
+        ingestionHealth,
         chains: IndexerService.getInstance().indexedChains(),
         chainHealth: ChainHealthMonitor.getInstance().snapshot(),
         // Per-chain cursor progress. A stalled chain reports no errors and a
@@ -63,6 +65,7 @@ function createHealthServer(): http.Server {
   });
 }
 
+let activePass: Promise<void> | null = null;
 async function runPass(): Promise<void> {
   const startedAt = Date.now();
   try {
@@ -106,10 +109,12 @@ async function main(): Promise<void> {
     chains: IndexerService.getInstance().indexedChains(),
   });
 
-  await runPass();
+  activePass = runPass();
+  await activePass;
+  activePass = null;
 
   const timer = setInterval(() => {
-    void runPass();
+    if (!activePass) activePass = runPass().finally(() => { activePass = null; });
   }, intervalSeconds * 1000);
 
   const shutdown = async (signal: string): Promise<void> => {
@@ -117,6 +122,7 @@ async function main(): Promise<void> {
     clearInterval(timer);
 
     await new Promise<void>((resolve) => healthServer.close(() => resolve()));
+    await activePass;
     await DatabaseService.getInstance().disconnect();
     await RedisService.getInstance().shutdown();
 

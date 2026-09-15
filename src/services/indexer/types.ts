@@ -19,6 +19,7 @@ export interface TrackedPool {
   decimals0: number;
   decimals1: number;
   feeTier: number | null;
+  baseToken?: string | null;
 }
 
 /**
@@ -91,4 +92,8 @@ export interface IndexRunResult {
   bucketsWritten: number;
   fromBlock: bigint;
   toBlock: bigint;
+  /** Actual target, used to distinguish catch-up from a quiet chain. */
+  targetBlock?: bigint;
+  discoveryBlock?: bigint;
+  sourcesProcessed?: number;
 }

@@ -63,6 +63,12 @@ export class RedisService {
     } catch {}
   }
 
+  /** Atomically stores a value only when the key does not already exist. */
+  async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.getClient().set(key, value, "EX", ttlSeconds, "NX");
+    return result === "OK";
+  }
+
   async incr(key: string): Promise<number> {
     try {
       return await this.getClient().incr(key);
@@ -75,6 +81,20 @@ export class RedisService {
     try {
       await this.getClient().del(key);
     } catch {}
+  }
+
+  /** Atomically reads and removes a single-use value. */
+  async getDel(key: string): Promise<string | null> {
+    try {
+      const value = await this.getClient().eval(
+        "local v = redis.call('get', KEYS[1]); if v then redis.call('del', KEYS[1]) end; return v",
+        1,
+        key
+      );
+      return typeof value === "string" ? value : null;
+    } catch {
+      return null;
+    }
   }
 
   async expire(key: string, ttlSeconds: number): Promise<void> {
@@ -99,6 +119,15 @@ export class RedisService {
     const token = randomUUID();
     const result = await client.set(key, token, "PX", ttlMs, "NX");
     return result === "OK" ? token : null;
+  }
+
+  /** Extend only the lease this process still owns. */
+  async renewLock(key: string, token: string, ttlMs: number): Promise<boolean> {
+    const renewed = await this.getClient().eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+      1, key, token, String(ttlMs)
+    );
+    return renewed === 1;
   }
 
   /**

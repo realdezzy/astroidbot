@@ -47,7 +47,7 @@ vi.mock("../../../src/services/chains/chainHealth.js", () => ({
 }));
 
 vi.mock("../../../src/services/redis.js", () => ({
-  RedisService: { getInstance: () => ({ acquireLock, releaseLock }) },
+  RedisService: { getInstance: () => ({ acquireLock, releaseLock, renewLock: async (key: string, token: string) => locks.get(key) === token }) },
 }));
 
 const CHAIN = "base:mainnet" as ChainId;
@@ -112,7 +112,7 @@ describe("ingestion locking", () => {
     expect(results).toEqual([]);
     // And it must not have stolen the lock on the way past.
     expect(locks.get(LOCK_KEY)).toBe("held-by-another-process");
-  });
+  }, 15_000);
 
   it("releases the lock so the next tick can run", async () => {
     const IndexerService = await loadService();

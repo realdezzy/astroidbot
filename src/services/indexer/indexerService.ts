@@ -1,3 +1,4 @@
+import { withIngestionLease } from "./ingestionLease.js";
 import { ChainAdapterRegistry } from "../chains/chainAdapterRegistry.js";
 import { ChainHealthMonitor } from "../chains/chainHealth.js";
 import { hasRpcOverride, rpcEnvKey } from "../chains/evm/evmClient.js";
@@ -56,6 +57,7 @@ const STALL_TICKS = 5;
 /** What we know about one chain's forward progress. */
 interface ChainProgress {
   lastToBlock: bigint;
+  lastDiscoveryBlock?: bigint;
   stalledSince: Date | null;
   ticks: number;
 }
@@ -85,6 +87,8 @@ export class IndexerService {
   private running = new Set<string>();
   private progress = new Map<string, ChainProgress>();
   private initialised = false;
+  private errors = new Map<string, string>();
+  private lastSuccess = new Map<string, number>();
 
   static getInstance(): IndexerService {
     if (!IndexerService.instance) IndexerService.instance = new IndexerService();
@@ -214,12 +218,21 @@ export class IndexerService {
 
     this.running.add(chainId);
     const startedAt = Date.now();
+    let leaseLost = false;
+    const checkLease = async () => {
+      if (leaseLost || !(await redis.renewLock(lockKey(chainId), token, ttl))) {
+        leaseLost = true;
+        throw new Error(`Ingestion lease lost for ${chainId}`);
+      }
+    };
+    const renewal = setInterval(() => { void checkLease().catch(() => { leaseLost = true; }); }, Math.max(1, Math.floor(ttl / 3)));
+    renewal.unref();
 
     try {
       // Tracked for per-chain health: the indexer touches every indexed chain
       // every tick, which makes it by far the best signal for "can this
       // process reach that chain at all".
-      const result = await ChainHealthMonitor.getInstance().track(chainId, () => indexer.run());
+      const result = await ChainHealthMonitor.getInstance().track(chainId, () => withIngestionLease(checkLease, () => indexer.run()));
 
       if (result.swapsIngested > 0 || result.poolsDiscovered > 0) {
         logger.info("[indexer] ingested", {
@@ -232,15 +245,19 @@ export class IndexerService {
         });
       }
 
+      this.errors.delete(chainId);
+      this.lastSuccess.set(chainId, Date.now());
       this.noteProgress(chainId, result);
       return result;
     } catch (error) {
+      this.errors.set(chainId, error instanceof Error ? error.message : String(error));
       logger.warn("[indexer] run failed", {
         chainId,
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
     } finally {
+      clearInterval(renewal);
       this.running.delete(chainId);
       await redis.releaseLock(lockKey(chainId), token);
     }
@@ -258,10 +275,12 @@ export class IndexerService {
    */
   private noteProgress(chainId: string, result: IndexRunResult): void {
     const previous = this.progress.get(chainId);
-    const advanced = previous == null || result.toBlock > previous.lastToBlock;
+    const advanced = previous == null || result.toBlock > previous.lastToBlock ||
+      (result.discoveryBlock != null && result.discoveryBlock > (previous.lastDiscoveryBlock ?? -1n)) ||
+      (result.targetBlock != null && result.toBlock >= result.targetBlock) || result.poolsDiscovered > 0 || (result.sourcesProcessed ?? 0) > 0;
 
     if (advanced) {
-      this.progress.set(chainId, { lastToBlock: result.toBlock, stalledSince: null, ticks: 0 });
+      this.progress.set(chainId, { lastToBlock: result.toBlock, lastDiscoveryBlock: result.discoveryBlock, stalledSince: null, ticks: 0 });
       return;
     }
 
@@ -306,6 +325,19 @@ export class IndexerService {
     return out;
   }
 
+  healthSnapshot(): { healthy: boolean; errors: Record<string, string>; lastSuccess: Record<string, string> } {
+    const config = ConfigManager.getInstance().config;
+    const staleAfter = Math.max(config.INDEXER_LOCK_TTL_MS, 3 * (config.INDEXER_POLL_INTERVAL_SECONDS ?? config.POLL_INTERVAL_SECONDS) * 1000);
+    const errors = Object.fromEntries(this.errors);
+    for (const chainId of this.indexers.keys()) {
+      const at = this.lastSuccess.get(chainId);
+      if (at == null || Date.now() - at > staleAfter) errors[chainId] ??= "No recent successful ingestion";
+      if ((this.progress.get(chainId)?.ticks ?? 0) >= STALL_TICKS) errors[chainId] ??= "Ingestion cursor stalled";
+    }
+    return { healthy: Object.keys(errors).length === 0 && this.indexers.size > 0, errors,
+      lastSuccess: Object.fromEntries([...this.lastSuccess].map(([chain, at]) => [chain, new Date(at).toISOString()])) };
+  }
+
   /** Test seam — lets a suite install a stub indexer for a chain. */
   register(indexer: ChainIndexer): void {
     this.initialised = true;
@@ -316,6 +348,8 @@ export class IndexerService {
     this.indexers.clear();
     this.running.clear();
     this.progress.clear();
+    this.errors.clear();
+    this.lastSuccess.clear();
     this.initialised = false;
   }
 }

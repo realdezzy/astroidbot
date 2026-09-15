@@ -95,12 +95,12 @@ export class RollupService {
         COALESCE(SUM(c."sells")
           FILTER (WHERE c."bucketStart" >= NOW() - INTERVAL '24 hours'), 0)    AS "sells24h"
 
-      FROM "PoolCandle" c
-      JOIN "IndexedPool" p
+      FROM "IndexedPool" p
+      LEFT JOIN "PoolCandle" c
         ON p."id" = c."poolId"
+        AND c."bucketStart" >= NOW() - INTERVAL '24 hours'
       WHERE p."chainId" = ${chainId}
         AND p."baseToken" IS NOT NULL
-        AND c."bucketStart" >= NOW() - INTERVAL '24 hours'
       GROUP BY p."id"
     `);
 
@@ -216,7 +216,7 @@ export class RollupService {
 
       // A pool below the floor is noise — its "price" is whatever the last
       // trader decided. Activity still counts; the quote doesn't.
-      const trustPrice = m.liquidityUsd >= minLiquidity;
+      const trustPrice = m.bestDepth >= minLiquidity;
 
       // Trades we saw but couldn't value — the chain has no USD anchor — are
       // reported as unknown volume, not zero. Zero would claim the token
@@ -245,7 +245,7 @@ export class RollupService {
                   priceChange6h: m.change6h,
                   priceChange24h: m.change24h,
                 }
-              : {}),
+              : { priceChange5m: null, priceChange1h: null, priceChange6h: null, priceChange24h: null }),
             ...(m.pairCreatedAt ? { pairCreatedAt: m.pairCreatedAt } : {}),
             lastRolledUpAt: new Date(),
           },

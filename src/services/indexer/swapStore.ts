@@ -1,3 +1,4 @@
+import { assertIngestionLease } from "./ingestionLease.js";
 import { Prisma } from "@prisma/client";
 import { DatabaseService } from "../db.js";
 import { ConfigManager } from "../../config.js";
@@ -41,6 +42,7 @@ export interface RawSwap {
 export async function persistSwaps(swaps: RawSwap[]): Promise<number> {
   if (swaps.length === 0) return 0;
 
+  await assertIngestionLease();
   const db = DatabaseService.getInstance();
 
   await db.prisma.indexedSwap.createMany({
@@ -79,6 +81,7 @@ export async function persistSwaps(swaps: RawSwap[]): Promise<number> {
 export async function recomputeCandles(poolIds: number[], buckets: Date[]): Promise<number> {
   if (poolIds.length === 0 || buckets.length === 0) return 0;
 
+  await assertIngestionLease();
   const db = DatabaseService.getInstance();
 
   const written = await db.prisma.$executeRaw(Prisma.sql`
@@ -122,6 +125,7 @@ export async function recomputeCandles(poolIds: number[], buckets: Date[]): Prom
  * without discarding the pool's candles entirely.
  */
 export async function rollbackFrom(chainId: string, fromBlock: bigint): Promise<number> {
+  await assertIngestionLease();
   const db = DatabaseService.getInstance();
 
   const affected = await db.prisma.indexedSwap.findMany({

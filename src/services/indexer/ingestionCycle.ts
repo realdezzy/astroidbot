@@ -19,14 +19,9 @@ let runCount = 0;
 
 export async function runMarketDataIngestion(): Promise<void> {
   const results = await IndexerService.getInstance().runAll();
-  if (results.length === 0) return;
-
-  // Roll up only the chains that actually moved. A chain with no new swaps has
-  // no new candles, and re-aggregating it would be a full scan for an
-  // unchanged answer.
-  const touched = results
-    .filter((r) => r.swapsIngested > 0 || r.poolsDiscovered > 0)
-    .map((r) => r.chainId);
+  // Time windows expire even on quiet or temporarily unavailable chains.
+  const touched = IndexerService.getInstance().indexedChains();
+  void results;
 
   if (touched.length > 0) {
     const updated = await RollupService.getInstance().rollupAll(touched);
