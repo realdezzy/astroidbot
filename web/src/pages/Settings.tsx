@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, CheckCircle2, Zap, Share2, Trash2, Plus, ShieldCheck, AtSign, Loader2, Fuel, Info, Sliders } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { useChains } from "../hooks/useChains";
+import { AlertPreferences } from "../components/AlertPreferences";
 
 interface TradeSettings {
   context: string;
@@ -241,6 +242,8 @@ export function Settings() {
 
         {/* Gas sponsorship, per chain */}
         <GasSponsorshipSection />
+
+        <AlertPreferences />
 
         {/* Social Trading Accounts Section */}
         <SocialAccountsSection />
@@ -824,4 +827,3 @@ function SocialAccountsSection() {
     </div>
   );
 }
-
