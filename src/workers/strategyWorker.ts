@@ -20,6 +20,7 @@ import { logger } from "../utils/logger.js";
 import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
 import { resolveTradeSettings } from "../services/tradeSettings.js";
 import { Prisma } from "@prisma/client";
+import { AgentDecisionService } from "../services/agentDecisionService.js";
 
 
 export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void> {
@@ -97,6 +98,16 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   if (!regimeAllowed) {
     const regime = await regimeService.detectRegime(primaryToken);
     logger.info("Strategy suppressed by regime gate", { strategyId, strategyType: strategy.type, regime, token: primaryToken });
+    await AgentDecisionService.getInstance().record({
+      userId,
+      strategyId,
+      agentId: strategy.agentId,
+      outcome: "SUPPRESSED",
+      observed: { chainId, token: primaryToken, regime, balanceCount: balances.length },
+      triggeredRule: "market_regime_gate",
+      expectedRisk: { maxPositionPct: settings.maxPositionPct, slippageBps: settings.slippageBps },
+      explanation: `${strategy.type} was paused for this cycle because the detected ${regime} regime is outside its allowed conditions.`,
+    });
     return;
   }
 
@@ -199,6 +210,25 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   }
 
   logger.info("Strategy job complete", { strategyId, strategyType, executed, attempted });
+  const outcome = attempted === 0 ? "NO_ACTION" : executed > 0 ? "EXECUTED" : "FAILED";
+  await AgentDecisionService.getInstance().record({
+    userId,
+    strategyId,
+    agentId: strategy.agentId,
+    outcome,
+    observed: {
+      chainId,
+      token: primaryToken,
+      walletValueUsd: totalWalletValueUsd,
+      candidatesEvaluated: tokenSymbols.length,
+    },
+    triggeredRule: actions.map((action) => action.reason).filter(Boolean).join(" | ") || undefined,
+    expectedRisk: { maxPositionPct: settings.maxPositionPct, slippageBps },
+    action: { proposed: actions.length, attempted, executed },
+    explanation: attempted === 0
+      ? `${strategy.type} evaluated the market and found no rule that required a trade.`
+      : `${strategy.type} proposed ${actions.length} action(s); ${executed} of ${attempted} approved execution(s) completed.`,
+  });
 }
 
 async function handleStrategyFailure(

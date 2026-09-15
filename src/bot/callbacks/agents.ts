@@ -15,6 +15,7 @@ import {
 import type { CallbackRoutes } from "./registry.js";
 import { numericArg } from "./registry.js";
 import type { BotContext } from "../../types/bot.js";
+import { ConfigManager } from "../../config.js";
 
 /** Agent management and the strategy-creation wizard. */
 
@@ -29,6 +30,11 @@ async function detailsScreen(ctx: BotContext, id: number) {
 async function strategiesMenu(ctx: BotContext, agentId: number) {
   const { agentStrategiesMenuScreen } = await import("../screens/agentDetailsScreen.js");
   return agentStrategiesMenuScreen(ctx, agentId);
+}
+
+async function reportsScreen(ctx: BotContext, agentId: number) {
+  const { agentReportsScreen } = await import("../screens/agentDetailsScreen.js");
+  return agentReportsScreen(ctx, agentId);
 }
 
 export const agentRoutes: CallbackRoutes = {
@@ -66,6 +72,17 @@ export const agentRoutes: CallbackRoutes = {
       const user = await currentUser(ctx);
 
       if (user && ctx.session.activeAgentId && ctx.session.tempStrategyType) {
+        const agent = await db.prisma.tradeAgent.findUnique({ where: { id: ctx.session.activeAgentId } });
+        const walletIds = ctx.session.tempStrategyWalletIds ?? [];
+        const ownedWallets = await db.prisma.wallet.findMany({
+          where: { userId: user.id, id: { in: walletIds } },
+          select: { id: true },
+        });
+        if (!agent || agent.userId !== user.id || ownedWallets.length !== walletIds.length || walletIds.length === 0) {
+          clearStrategyDraft(ctx);
+          await ctx.reply("❌ Strategy setup expired or contains unavailable wallets. Please start again.");
+          return agentsScreen(ctx);
+        }
         await db.prisma.tradingStrategy.create({
           data: {
             userId: user.id,
@@ -73,7 +90,7 @@ export const agentRoutes: CallbackRoutes = {
             type: ctx.session.tempStrategyType,
             config: {
               ...ctx.session.tempStrategyConfig,
-              walletIds: ctx.session.tempStrategyWalletIds,
+              walletIds,
             },
             isActive: true,
           },
@@ -94,6 +111,10 @@ export const agentRoutes: CallbackRoutes = {
   },
 
   prefix: {
+    "agent_reports:": async (ctx, args) => {
+      const id = numericArg(args);
+      return id === null ? mainMenu(ctx) : reportsScreen(ctx, id);
+    },
     // Longest-first resolution in CallbackRouter is what lets these coexist
     // with the shorter "agent_toggle:" / "agent_delete:" routes below.
     "agent_details:": async (ctx, args) => {
@@ -151,6 +172,7 @@ export const agentRoutes: CallbackRoutes = {
 
     "agent_ai:": async (ctx, args) => {
       const aiMode = args.join(":");
+      if (!["off", "advisor", "autonomous"].includes(aiMode)) return agentsScreen(ctx);
       const user = await currentUser(ctx);
       if (!user) return;
 
@@ -158,7 +180,7 @@ export const agentRoutes: CallbackRoutes = {
       const context = ctx.session.tempAgentContext || "custom";
 
       await DatabaseService.getInstance().prisma.tradeAgent.create({
-        data: { userId: user.id, name, context, aiMode, config: {}, model: "deepseek-v4-pro" },
+        data: { userId: user.id, name, context, aiMode, config: {}, model: ConfigManager.getInstance().config.AI_MODEL },
       });
 
       ctx.session.waitingFor = null;
@@ -200,6 +222,11 @@ export const agentRoutes: CallbackRoutes = {
       const walletId = numericArg(args);
       if (walletId === null) return promptStrategyWallets(ctx);
 
+      const user = await currentUser(ctx);
+      const wallet = user
+        ? await DatabaseService.getInstance().prisma.wallet.findFirst({ where: { id: walletId, userId: user.id } })
+        : null;
+      if (!wallet) return promptStrategyWallets(ctx);
       const current = ctx.session.tempStrategyWalletIds ?? [];
       ctx.session.tempStrategyWalletIds = current.includes(walletId)
         ? current.filter((id) => id !== walletId)
@@ -213,9 +240,11 @@ export const agentRoutes: CallbackRoutes = {
       if (strategyId === null) return agentsScreen(ctx);
 
       const db = DatabaseService.getInstance();
+      const user = await currentUser(ctx);
+      if (!user) return;
       const strategy = await db.prisma.tradingStrategy.findUnique({ where: { id: strategyId } });
 
-      if (strategy) {
+      if (strategy && strategy.userId === user.id) {
         await db.prisma.tradingStrategy.update({
           where: { id: strategyId },
           data: { isActive: !strategy.isActive },
@@ -233,9 +262,13 @@ export const agentRoutes: CallbackRoutes = {
       const strategyId = numericArg(args);
       if (strategyId === null) return agentsScreen(ctx);
 
-      await DatabaseService.getInstance().prisma.tradingStrategy.delete({
-        where: { id: strategyId },
-      });
+      const db = DatabaseService.getInstance();
+      const user = await currentUser(ctx);
+      const strategy = user
+        ? await db.prisma.tradingStrategy.findUnique({ where: { id: strategyId } })
+        : null;
+      if (!strategy || strategy.userId !== user!.id) return agentsScreen(ctx);
+      await db.prisma.tradingStrategy.delete({ where: { id: strategyId } });
       await ctx.reply(`Strategy #${strategyId} deleted.`);
 
       if (ctx.session.activeAgentId) {
@@ -245,3 +278,13 @@ export const agentRoutes: CallbackRoutes = {
     },
   },
 };
+
+function clearStrategyDraft(ctx: BotContext): void {
+  ctx.session.waitingFor = null;
+  delete ctx.session.tempStrategyType;
+  delete ctx.session.tempStrategyConfig;
+  delete ctx.session.tempStrategyWalletIds;
+  delete ctx.session.tempStrategyFields;
+  delete ctx.session.tempStrategyFieldIndex;
+  delete ctx.session.activeAgentId;
+}

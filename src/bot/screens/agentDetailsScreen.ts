@@ -2,6 +2,7 @@ import { InlineKeyboard } from "grammy";
 import type { BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
 import { escapeMd } from "../utils.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function agentDetailsScreen(ctx: BotContext, agentId: number): Promise<void> {
   ctx.session.backScreen = "agents";
@@ -69,17 +70,55 @@ export async function agentDetailsScreen(ctx: BotContext, agentId: number): Prom
     .text("🔧 Manage Strategies", `action:agent_strategies_menu:${agent.id}`)
     .row()
     .text("▶ Run Cycle", `action:agent_run_details:${agent.id}`)
+    .text("📋 Reports", `action:agent_reports:${agent.id}`)
+    .row()
     .text("🗑 Delete Agent", `action:agent_delete_details:${agent.id}`)
     .row()
     .text("← Back to Agents", "screen:agents")
     .text("🏠 Home", "home");
 
   const messageText = lines.join("\n");
-  try {
-    await ctx.editMessageText(messageText, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {
-    await ctx.reply(messageText, { parse_mode: "Markdown", reply_markup: keyboard });
+  await renderScreen(ctx, markdownView(messageText, keyboard));
+}
+
+export async function agentReportsScreen(ctx: BotContext, agentId: number): Promise<void> {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const db = DatabaseService.getInstance();
+  const user = await db.findUserByTelegramId(BigInt(telegramId));
+  const agent = user ? await db.prisma.tradeAgent.findFirst({ where: { id: agentId, userId: user.id } }) : null;
+  if (!user || !agent) return void await ctx.reply("❌ Agent not found.");
+
+  const reports = await db.prisma.agentDecision.findMany({
+    where: { userId: user.id, agentId },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+  });
+  const lines = [`📋 *${escapeMd(agent.name)} — Decision Reports*`, "═════════════════════════"];
+  if (reports.length === 0) {
+    lines.push("No cycles have been reported yet. Run the agent once to generate its first report.");
+  } else {
+    for (const report of reports) {
+      const icon = report.outcome === "EXECUTED" ? "✅" : report.outcome === "FAILED" ? "❌" : report.outcome === "SUPPRESSED" ? "🛡" : "⏸";
+      const risk = report.expectedRisk as Record<string, unknown>;
+      lines.push(
+        "",
+        `${icon} *${report.outcome.replaceAll("_", " ")}* · ${report.createdAt.toISOString().slice(0, 16).replace("T", " ")} UTC`,
+        escapeMd(report.explanation),
+        report.triggeredRule ? `Rule: _${escapeMd(report.triggeredRule.slice(0, 240))}_` : "Rule: _No trade rule triggered_",
+        `Risk: max position ${escapeMd(String(risk.maxPositionPct ?? "—"))}% · slippage ${escapeMd(String(risk.slippageBps ?? "—"))} bps`,
+        report.confidence == null ? "" : `Confidence: ${(report.confidence * 100).toFixed(0)}%`,
+      );
+    }
   }
+
+  const keyboard = new InlineKeyboard()
+    .text(agent.isActive ? "⏸ Pause Agent" : "✅ Activate Agent", `action:agent_toggle_details:${agent.id}`)
+    .text("▶ Run Cycle", `action:agent_run_details:${agent.id}`)
+    .row()
+    .text("← Agent", `action:agent_details:${agent.id}`)
+    .text("🏠 Home", "home");
+  await renderScreen(ctx, markdownView(lines.filter(Boolean).join("\n"), keyboard));
 }
 
 export async function agentAiModeMenuScreen(ctx: BotContext, agentId: number): Promise<void> {
@@ -90,9 +129,7 @@ export async function agentAiModeMenuScreen(ctx: BotContext, agentId: number): P
     .text("← Back", `action:agent_details:${agentId}`);
 
   const text = "🧠 *Change Agent AI Decision Mode*\n\nSelect a new mode for the agent:";
-  try {
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {}
+  await renderScreen(ctx, markdownView(text, keyboard));
 }
 
 export async function agentStrategiesMenuScreen(ctx: BotContext, agentId: number): Promise<void> {
@@ -137,7 +174,5 @@ export async function agentStrategiesMenuScreen(ctx: BotContext, agentId: number
     .text("🏠 Home", "home");
 
   const text = lines.join("\n");
-  try {
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {}
+  await renderScreen(ctx, markdownView(text, keyboard));
 }

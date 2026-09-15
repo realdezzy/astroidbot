@@ -4,6 +4,7 @@ import { DatabaseService } from "../../services/db.js";
 import { AgentService } from "../../services/agentService.js";
 import { escapeMd } from "../utils.js";
 import { STRATEGY_FIELDS, STRATEGY_LABELS } from "../../../shared/strategies.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function agentsScreen(ctx: BotContext): Promise<void> {
   ctx.session.backScreen = "main";
@@ -20,18 +21,10 @@ export async function agentsScreen(ctx: BotContext): Promise<void> {
   });
 
   if (agents.length === 0) {
-    try {
-      await ctx.editMessageText(
-        "🤖 *Trading Agents*\n\nNo agents found. Create one right here from the bot or via the web dashboard.",
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard()
-            .text("➕ Create Agent", "action:agent_create")
-            .row()
-            .text("🏠 Home", "home")
-        }
-      );
-    } catch {}
+    await renderScreen(ctx, markdownView(
+      "🤖 *Trading Agents*\n\nNo agents found. Create one right here from the bot or via the web dashboard.",
+      new InlineKeyboard().text("➕ Create Agent", "action:agent_create").row().text("🏠 Home", "home")
+    ));
     return;
   }
 
@@ -58,9 +51,7 @@ export async function agentsScreen(ctx: BotContext): Promise<void> {
     .text("🔄 Refresh", "action:refresh_agents")
     .text("🏠 Home", "home");
 
-  try {
-    await ctx.editMessageText(lines.join("\n"), { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {}
+  await renderScreen(ctx, markdownView(lines.join("\n"), keyboard));
 }
 
 export async function createAgentWizardStart(ctx: BotContext): Promise<void> {
@@ -68,15 +59,7 @@ export async function createAgentWizardStart(ctx: BotContext): Promise<void> {
   const text = "🤖 *Create AI Agent* (1/3)\n\nPlease enter a name for your new trading agent:\n\nType /cancel to cancel.";
   const keyboard = new InlineKeyboard().text("❌ Cancel", "action:cancel_agent_create");
 
-  if (ctx.callbackQuery) {
-    try {
-      await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
-  } else {
-    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  }
+  await renderScreen(ctx, markdownView(text, keyboard));
 }
 
 export async function promptAgentContext(ctx: BotContext, name: string): Promise<void> {
@@ -101,15 +84,7 @@ export async function promptAgentAiMode(ctx: BotContext, name: string, context: 
     .text("🤖 Autonomous (Self-Trading)", "action:agent_ai:autonomous").row()
     .text("❌ Cancel", "action:cancel_agent_create");
 
-  if (ctx.callbackQuery) {
-    try {
-      await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
-  } else {
-    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  }
+  await renderScreen(ctx, markdownView(text, keyboard));
 }
 
 export async function startStrategyWizard(ctx: BotContext, agentId: number): Promise<void> {
@@ -132,9 +107,7 @@ export async function startStrategyWizard(ctx: BotContext, agentId: number): Pro
     .text("← Back", `action:agent_details:${agentId}`);
 
   const text = "➕ *Add Trading Strategy - Step 1*\n\nSelect the strategy type you want to add to this agent:";
-  try {
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {}
+  await renderScreen(ctx, markdownView(text, keyboard));
 }
 
 export async function promptStrategyWallets(ctx: BotContext): Promise<void> {
@@ -164,9 +137,7 @@ export async function promptStrategyWallets(ctx: BotContext): Promise<void> {
     .text("❌ Cancel", "action:cancel_session");
 
   const text = "➕ *Add Trading Strategy - Step 2*\n\nSelect the wallets to execute this strategy:";
-  try {
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {}
+  await renderScreen(ctx, markdownView(text, keyboard));
 }
 
 export async function promptStrategyField(ctx: BotContext): Promise<void> {
@@ -281,6 +252,10 @@ export async function setAgentAiMode(ctx: BotContext, agentId: number, mode: str
   const user = await db.findUserByTelegramId(BigInt(telegramId));
   if (!user) return;
 
+  if (!["off", "advisor", "autonomous"].includes(mode)) {
+    await ctx.reply("❌ Unsupported AI mode.");
+    return;
+  }
   const agent = await db.prisma.tradeAgent.findUnique({ where: { id: agentId } });
   if (!agent || agent.userId !== user.id) {
     await ctx.reply("❌ Agent not found.");
