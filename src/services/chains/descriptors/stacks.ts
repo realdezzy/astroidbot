@@ -25,6 +25,8 @@ export const STACKS_MAINNET: ChainDescriptor = {
     swapContracts: [
       { contractId: "SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.amm-pool-v2-01", dexId: "alex" },
       { contractId: "SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-core", dexId: "velar" },
+      { contractId: "SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.xyk-core-v-1-2", dexId: "bitflow" },
+      { contractId: "SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-core-v-1-2", dexId: "bitflow" },
     ],
   },
 };

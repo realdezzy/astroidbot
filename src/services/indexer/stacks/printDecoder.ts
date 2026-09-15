@@ -128,17 +128,17 @@ function decodeBitflow(repr: string): DecodedStacksSwap | null {
   const action = stringField(repr, "action") ?? stringField(repr, "op");
   if (action !== "swap" && action !== "swap-x-for-y" && action !== "swap-y-for-x" && action !== "swap-tokens") return null;
 
-  const token0 = principalField(repr, "token-x") ?? principalField(repr, "token0") ?? principalField(repr, "token-in");
-  const token1 = principalField(repr, "token-y") ?? principalField(repr, "token1") ?? principalField(repr, "token-out");
-  const amount0 = uintField(repr, "dx") ?? uintField(repr, "amt-in") ?? uintField(repr, "amount-in");
-  const amount1 = uintField(repr, "dy") ?? uintField(repr, "amt-out") ?? uintField(repr, "amount-out");
+  const token0 = principalField(repr, "x-token") ?? principalField(repr, "token-x") ?? principalField(repr, "token0") ?? principalField(repr, "token-in");
+  const token1 = principalField(repr, "y-token") ?? principalField(repr, "token-y") ?? principalField(repr, "token1") ?? principalField(repr, "token-out");
+  const amount0 = uintField(repr, "x-amount") ?? uintField(repr, "dx") ?? uintField(repr, "amt-in") ?? uintField(repr, "amount-in");
+  const amount1 = uintField(repr, "y-amount") ?? uintField(repr, "dy") ?? uintField(repr, "amt-out") ?? uintField(repr, "amount-out");
 
   if (!token0 || !token1 || amount0 === null || amount1 === null) return null;
 
   const zeroForOne = action === "swap-x-for-y" || principalField(repr, "token-in") === token0;
 
   return {
-    poolKey: uintField(repr, "pool-id")?.toString() ?? `${token0}/${token1}`,
+    poolKey: principalField(repr, "pool-contract") ?? uintField(repr, "pool-id")?.toString() ?? `${token0}/${token1}`,
     token0,
     token1,
     amount0,

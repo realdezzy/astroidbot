@@ -92,7 +92,8 @@ function serve(pages: (contract: string, offset: number, limit: number) => unkno
           json: async () => ({ results: pages(contract, offset, limit), total: 5_000 }),
         };
       }
-      return { ok: true, json: async () => ({}) };
+      const detail = Object.fromEntries(parsed.searchParams.getAll("tx_id").map((id) => [id, { found: true, result: { events: [], event_count: 0 } }]));
+      return { ok: true, json: async () => detail };
     })
   );
 }
@@ -110,7 +111,7 @@ describe("stacks backfill", () => {
   });
 
   function indexer() {
-    return new StacksIndexer(STACKS_MAINNET, indexerSettings()) as unknown as BackfillSeam;
+    return new StacksIndexer({ ...STACKS_MAINNET, stacks: { ...STACKS_MAINNET.stacks!, swapContracts: STACKS_MAINNET.stacks!.swapContracts.slice(0, 2) } }, indexerSettings()) as unknown as BackfillSeam;
   }
 
   function state() {

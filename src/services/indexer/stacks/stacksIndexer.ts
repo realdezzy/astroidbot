@@ -1,3 +1,5 @@
+import { assertIngestionLease } from "../ingestionLease.js";
+import { cvToString, deserializeCV } from "@stacks/transactions";
 import { DatabaseService } from "../../db.js";
 import { ConfigManager } from "../../../config.js";
 import { logger } from "../../../utils/logger.js";
@@ -49,6 +51,7 @@ interface StacksTx {
 
 interface StacksEvent {
   event_type: string;
+  event_index?: number;
   contract_log?: { contract_id?: string; value?: { repr?: string } };
 }
 
@@ -165,38 +168,76 @@ export class StacksIndexer implements ChainIndexer {
     }
 
     const fromBlock = cursor.lastBlock;
-    if (BigInt(tip) <= fromBlock) {
-      const backfilled = await this.backfillStep();
-      return this.merge(this.empty(fromBlock, BigInt(tip)), backfilled);
+    const state = (cursor.forwardState ?? {}) as Record<string, {
+      lastBlock: number; offset: number; total: number; target: number;
+    }>;
+    let poolsDiscovered = 0;
+    let swapsIngested = 0;
+    let bucketsWritten = 0;
+    const errors: unknown[] = [];
+    for (const contract of this.stacks.swapContracts) {
+      const entry = state[contract.contractId] ?? {
+        lastBlock: Number(fromBlock), offset: 0, total: 0, target: tip,
+      };
+      try {
+        const page = await this.forwardPage(contract, entry, tip);
+        // Store before checkpointing. Retrying a page after a crash is idempotent.
+        if (page.swaps.length) {
+          const result = await this.ingest(page.swaps, fromBlock);
+          poolsDiscovered += result.poolsDiscovered;
+          bucketsWritten += result.bucketsWritten;
+          swapsIngested += page.swaps.length;
+        }
+        state[contract.contractId] = page.next;
+        await db.prisma.indexerCursor.update({
+          where: { chainId: this.chainId }, data: { forwardState: state },
+        });
+      } catch (error) { errors.push(error); }
     }
-
-    const swaps = await this.collectSwaps(fromBlock);
-    if (swaps.length === 0) {
-      // Nothing traded. The cursor still advances — leaving it behind would
-      // re-walk the same empty range every tick forever.
-      await this.saveCursor({ lastBlock: BigInt(tip) });
-      const backfilled = await this.backfillStep();
-      return this.merge(this.empty(fromBlock, BigInt(tip)), backfilled);
-    }
-
-    const { bucketsWritten, poolsDiscovered } = await this.ingest(swaps, BigInt(tip));
-
-    // History is walked only after the live pass has been served. The forward
-    // pass is what the product is for; backfill is a correctness nicety, and a
-    // chain catching up must not spend its request budget walking backwards.
+    const committed = BigInt(Math.min(...this.stacks.swapContracts.map(
+      (c) => state[c.contractId]?.lastBlock ?? Number(fromBlock)
+    )));
+    await this.saveCursor({ lastBlock: committed });
+    if (errors.length) throw new AggregateError(errors, "Stacks sources incomplete; checkpoints retained");
     const backfilled = await this.backfillStep();
+    return this.merge({ chainId: this.chainId, poolsDiscovered, swapsIngested,
+      bucketsWritten, fromBlock, toBlock: committed, targetBlock: BigInt(tip) }, backfilled);
+  }
 
-    return this.merge(
-      {
-        chainId: this.chainId,
-        poolsDiscovered,
-        swapsIngested: swaps.length,
-        bucketsWritten,
-        fromBlock,
-        toBlock: BigInt(tip),
-      },
-      backfilled
-    );
+  private async forwardPage(
+    contract: StacksSwapContract,
+    entry: { lastBlock: number; offset: number; total: number; target: number },
+    tip: number
+  ) {
+    const path = `/extended/v2/addresses/${contract.contractId}/transactions`;
+    const probe = await this.fetchJson<TxPage>(`${path}?limit=1&offset=0`);
+    if (typeof probe.total !== "number") throw new Error("Stacks pagination requires total");
+    const total = probe.total;
+    const target = entry.offset > 0 ? entry.target : tip;
+    let offset = entry.offset > 0 ? entry.offset + Math.max(0, total - entry.total) : 0;
+    const pending: StacksTx[] = [];
+    let complete = false;
+    let inspected = 0;
+    while (inspected < this.settings.maxTxPerRun && !complete) {
+      const limit = Math.min(50, this.settings.maxTxPerRun - inspected);
+      const page = await this.fetchJson<TxPage>(`${path}?limit=${limit}&offset=${offset}`);
+      // A shifting offset is unsafe. Restart from the head on the next tick.
+      if (page.total !== total) throw new Error("Stacks transaction list changed during scan");
+      if (!Array.isArray(page.results)) throw new Error("Missing Stacks transaction page");
+      for (const row of page.results) {
+        const tx = row.tx ?? row as unknown as StacksTx;
+        if (!tx.tx_id || !Number.isInteger(tx.block_height)) throw new Error("Invalid Stacks transaction");
+        offset++; inspected++;
+        if (tx.block_height <= entry.lastBlock) { complete = true; break; }
+        if (tx.block_height <= target && tx.tx_status === "success") pending.push(tx);
+      }
+      if (page.results.length < limit) complete = true;
+    }
+    const swaps = await this.swapsInTxs(pending, contract);
+    swaps.sort((a, b) => a.blockHeight - b.blockHeight || a.eventIndex - b.eventIndex);
+    return { swaps, next: complete
+      ? { lastBlock: target, offset: 0, total, target }
+      : { lastBlock: entry.lastBlock, offset, total, target } };
   }
 
   /** Folds a backfill pass's counts into the run result the forward pass built. */
@@ -230,82 +271,6 @@ export class StacksIndexer implements ChainIndexer {
   }
 
   /**
-   * Every swap print newer than the cursor, across all watched contracts.
-   *
-   * Walks *backwards* from the tip because that is the only ordering the API
-   * offers, then reverses: candles record `open` from the first write, so
-   * swaps must be applied oldest-first or every bucket's open price would be
-   * the last trade in it.
-   */
-  private async collectSwaps(fromBlock: bigint): Promise<DecodedSwapAt[]> {
-    const collected: DecodedSwapAt[] = [];
-
-    for (const contract of this.stacks.swapContracts) {
-      try {
-        collected.push(...(await this.collectForContract(contract, fromBlock)));
-      } catch (error) {
-        // One protocol's contract failing must not cost us the others. The
-        // cursor is shared, so this range will be re-walked next tick — which
-        // is safe because candle writes are keyed and the cursor only advances
-        // to what was actually read.
-        logger.warn("[indexer] stacks contract read failed", {
-          chainId: this.chainId,
-          contract: contract.contractId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return collected.sort((a, b) => a.blockHeight - b.blockHeight || a.eventIndex - b.eventIndex);
-  }
-
-  private async collectForContract(
-    contract: StacksSwapContract,
-    fromBlock: bigint
-  ): Promise<DecodedSwapAt[]> {
-    const found: DecodedSwapAt[] = [];
-    const pending: StacksTx[] = [];
-    const pageSize = 50;
-    let offset = 0;
-    let inspected = 0;
-
-    while (inspected < this.settings.maxTxPerRun) {
-      const page = await this.fetchJson<{ results: { tx?: StacksTx }[] }>(
-        `/extended/v2/addresses/${contract.contractId}/transactions?limit=${pageSize}&offset=${offset}`
-      );
-
-      const rows = page.results ?? [];
-      if (rows.length === 0) break;
-
-      let reachedCursor = false;
-
-      for (const row of rows) {
-        const tx = row.tx ?? (row as unknown as StacksTx);
-        if (!tx?.tx_id || typeof tx.block_height !== "number") continue;
-
-        // The API returns newest first, so the first transaction at or below
-        // the cursor means everything after it is already ingested.
-        if (BigInt(tx.block_height) <= fromBlock) {
-          reachedCursor = true;
-          break;
-        }
-
-        inspected++;
-        if (tx.tx_status !== "success") continue;
-
-        pending.push(tx);
-      }
-
-      if (reachedCursor || rows.length < pageSize) break;
-      offset += pageSize;
-    }
-
-    if (pending.length > 0) found.push(...(await this.swapsInTxs(pending, contract)));
-
-    return found;
-  }
-
-  /**
    * The swap prints inside a batch of transactions.
    *
    * The transaction list returns an empty `events` array, so the payloads have
@@ -325,11 +290,25 @@ export class StacksIndexer implements ChainIndexer {
       const query = batch.map((tx) => `tx_id=${tx.tx_id}`).join("&");
 
       const detail = await this.fetchJson<
-        Record<string, { found?: boolean; result?: { events?: StacksEvent[] } }>
+        Record<string, { found?: boolean; result?: { events?: StacksEvent[]; event_count?: number } }>
       >(`/extended/v1/tx/multiple?${query}&event_limit=100`);
 
       for (const tx of batch) {
-        const events = detail[tx.tx_id]?.result?.events ?? [];
+        const result = detail[tx.tx_id]?.result;
+        if (!result || !Array.isArray(result.events)) throw new Error(`Missing Stacks transaction ${tx.tx_id}`);
+        const events = [...result.events];
+        // Fetch every event, including transactions with more than 100 prints.
+        const count = result.event_count ?? events.length;
+        if (result.event_count == null && events.length === 100) {
+          throw new Error(`Unknown event count for full page: ${tx.tx_id}`);
+        }
+        while (events.length < count) {
+          const page = await this.fetchJson<{ events?: StacksEvent[] }>(
+            `/extended/v1/tx/${tx.tx_id}?event_limit=100&event_offset=${events.length}`
+          );
+          if (!page.events?.length) throw new Error(`Incomplete events: ${tx.tx_id}`);
+          events.push(...page.events);
+        }
 
         for (const [index, event] of events.entries()) {
           if (event.event_type !== "smart_contract_log") continue;
@@ -349,7 +328,7 @@ export class StacksIndexer implements ChainIndexer {
             blockHeight: tx.block_height,
             // Stacks reports seconds; bucket boundaries are milliseconds.
             timestampMs: tx.block_time * 1000,
-            eventIndex: index,
+            eventIndex: event.event_index ?? index,
           });
         }
       }
@@ -373,10 +352,11 @@ export class StacksIndexer implements ChainIndexer {
 
     const bucketsWritten = await persistSwaps(rawSwaps);
 
+    await assertIngestionLease();
     await db.prisma.$transaction([
       ...[...poolState.entries()].map(([poolId, state]) =>
-        db.prisma.indexedPool.update({
-          where: { id: poolId },
+        db.prisma.indexedPool.updateMany({
+          where: { id: poolId, OR: [{ lastSwapAt: null }, { lastSwapAt: { lte: state.at } }] },
           data: { lastPrice0: state.price, lastSwapAt: state.at },
         })
       ),
@@ -634,7 +614,7 @@ export class StacksIndexer implements ChainIndexer {
 
   /** `contract#poolKey` — unique per pool and stable across restarts. */
   private poolAddressOf(swap: DecodedSwapAt): string {
-    return `${swap.contractId}#${swap.poolKey}`;
+    return swap.dexId === "bitflow" && swap.poolKey.includes(".") ? swap.poolKey : `${swap.contractId}#${swap.poolKey}`;
   }
 
   /**
@@ -740,8 +720,8 @@ export class StacksIndexer implements ChainIndexer {
 
       const body = (await response.json()) as { okay?: boolean; result?: string };
       // Clarity encodes `(ok uN)`; the trailing hex word is the value.
-      const match = body.result?.match(/0[xX]0703([0-9a-fA-F]{32})$/) ?? null;
-      const decimals = match ? Number(BigInt(`0x${match[1]}`)) : NaN;
+      const match = body.result && body.okay ? cvToString(deserializeCV(body.result)).match(/^\(ok u(\d+)\)$/) : null;
+      const decimals = match ? Number(match[1]) : NaN;
 
       if (Number.isInteger(decimals) && decimals >= 0 && decimals <= 36) {
         this.decimalsCache.set(contractId, decimals);
@@ -857,19 +837,39 @@ export class StacksIndexer implements ChainIndexer {
 
     for (const swap of swaps) {
       const pool = pools.get(this.poolAddressOf(swap));
-      if (!pool || swap.reserve0 === null || swap.reserve1 === null) continue;
+      if (!pool) continue;
+      let raw0 = swap.reserve0, raw1 = swap.reserve1;
+      if ((raw0 === null || raw1 === null) && swap.dexId === "bitflow" && swap.poolKey.includes(".")) {
+        const [address, name] = swap.poolKey.split(".");
+        const response = await fetch(`${this.api}/v2/contracts/call-read/${address}/${name}/get-pool`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sender: address, arguments: [] }),
+        });
+        if (!response.ok) throw new Error("Bitflow pool state unavailable");
+        const body = await response.json() as { okay?: boolean; result?: string };
+        if (!body.okay || !body.result) throw new Error("Invalid Bitflow pool state");
+        const repr = cvToString(deserializeCV(body.result));
+        const x = repr.match(/\(x-balance u(\d+)\)/)?.[1];
+        const y = repr.match(/\(y-balance u(\d+)\)/)?.[1];
+        if (x == null || y == null) throw new Error("Bitflow reserves missing");
+        raw0 = BigInt(x); raw1 = BigInt(y);
+      }
+      if (raw0 === null || raw1 === null) continue;
 
       const price0 = usd.get(pool.token0);
       const price1 = usd.get(pool.token1);
       if (!price0 && !price1) continue;
 
-      const reserve0 = Number(swap.reserve0) / 10 ** pool.decimals0;
-      const reserve1 = Number(swap.reserve1) / 10 ** pool.decimals1;
+      const reserve0 = Number(raw0) / 10 ** pool.decimals0;
+      const reserve1 = Number(raw1) / 10 ** pool.decimals1;
 
       // One priced side doubled, matching how the EVM indexer values a pool:
       // an AMM holds equal value on both sides by construction.
-      const value = price0 ? reserve0 * price0 * 2 : reserve1 * price1! * 2;
-      if (Number.isFinite(value) && value > 0) latest.set(pool.id, value);
+      const ratio = (Number(swap.amount1) / 10 ** pool.decimals1) / (Number(swap.amount0) / 10 ** pool.decimals0);
+      const usd0 = price0 ?? ratio * price1!;
+      const usd1 = price1 ?? price0! / ratio;
+      const value = reserve0 * usd0 + reserve1 * usd1;
+      if (Number.isFinite(value) && value >= 0) latest.set(pool.id, value);
     }
 
     await Promise.all(
@@ -916,6 +916,7 @@ export class StacksIndexer implements ChainIndexer {
     backfillDone?: boolean;
   }): Promise<void> {
     const db = DatabaseService.getInstance();
+    await assertIngestionLease();
     await db.prisma.indexerCursor.upsert({
       where: { chainId: this.chainId },
       create: {
