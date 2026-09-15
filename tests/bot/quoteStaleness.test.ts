@@ -16,6 +16,9 @@ const enqueueTrade = vi.fn();
 vi.mock("../../src/services/queue.js", () => ({
   QueueManager: { getInstance: () => ({ enqueueTrade }) },
 }));
+vi.mock("../../src/services/actions/pendingActionService.js", () => ({
+  PendingActionService: { getInstance: () => ({ confirmTrade: enqueueTrade }) },
+}));
 
 const tradeScreen = vi.fn();
 vi.mock("../../src/bot/screens/tradeScreen.js", () => ({ tradeScreen }));
@@ -77,6 +80,7 @@ function contextWith(quote: QuotedTrade | undefined) {
       tradeTokenOut: "USDCx",
       tradeAmount: 10,
       tradeQuote: quote,
+      pendingActionId: "action-1",
     },
     reply: vi.fn(),
     answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
@@ -96,11 +100,7 @@ describe("Telegram quote staleness", () => {
     await confirm(ctx as unknown as BotContext, [], "trade_confirm_elite");
 
     expect(enqueueTrade).toHaveBeenCalledTimes(1);
-    expect(enqueueTrade.mock.calls[0]![0]).toMatchObject({
-      tokenIn: "STX",
-      tokenOut: "USDCx",
-      amountIn: 10,
-    });
+    expect(enqueueTrade).toHaveBeenCalledWith("action-1", 7);
   });
 
   it("refuses a quote older than its validity window", async () => {

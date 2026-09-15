@@ -72,11 +72,11 @@ export class QueueManager {
     return this.queues.get(name)!;
   }
 
-  async enqueueTrade(data: TradeJob): Promise<string> {
+  async enqueueTrade(data: TradeJob, idempotencyKey?: string): Promise<string> {
     const job = await this.getQueue(QUEUES.TRADE_EXECUTION).add(
       "execute-trade",
       data,
-      { ...DEFAULT_OPTS, priority: data.direction === "SELL" ? 1 : 2 }
+      { ...DEFAULT_OPTS, priority: data.direction === "SELL" ? 1 : 2, ...(idempotencyKey ? { jobId: idempotencyKey } : {}) }
     );
     logger.info("Trade enqueued", { jobId: job.id, tokenIn: data.tokenIn, tokenOut: data.tokenOut });
     return job.id!;

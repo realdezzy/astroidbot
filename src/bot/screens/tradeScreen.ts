@@ -1,11 +1,13 @@
 import { InlineKeyboard } from "grammy";
-import { activeChain, activeChainTokens } from "../chainContext.js";
+import { activeChain, activeChainTokens, setActiveChain } from "../chainContext.js";
 import { breadcrumb } from "../keyboards/builders.js";
 import { walletDescriptor } from "../../services/chains/walletChain.js";
 import { QUOTE_TTL_MS, type BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
 import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { escapeMd } from "../utils.js";
+import { markdownView, renderScreen } from "../ui/render.js";
+import { PendingActionService } from "../../services/actions/pendingActionService.js";
 
 /**
  * Symbols offered as one-tap buttons: the chain's native and stable assets
@@ -36,10 +38,13 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     return;
   }
 
-  if (!stage || stage === "pick_wallet") {
+  // "pick_pair" is kept as a compatibility alias for older buttons and the
+  // slash command; the current flow starts by choosing the funding wallet.
+  if (!stage || stage === "pick_wallet" || stage === "pick_pair") {
     ctx.session.backScreen = "main";
     if (wallets.length === 1) {
       ctx.session.tradeWalletId = wallets[0]!.id;
+      setActiveChain(ctx, walletDescriptor(wallets[0]!).chainId);
       return tradeScreen(ctx, "pick_token_in");
     }
 
@@ -50,11 +55,7 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     keyboard.text("🏠 Home", "home");
 
     const text = "🛒 *Quick Trade - Step 1/5*\n\nSelect the wallet to trade from:";
-    try {
-      await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
+    await renderScreen(ctx, markdownView(text, keyboard));
     return;
   }
 
@@ -70,15 +71,12 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     keyboard.row()
       .text("🔍 Enter Custom Token Symbol", "action:trade_token_in_custom")
       .row()
+      .text("← Back", wallets.length > 1 ? "action:trade_back_wallet" : "home")
       .text("🏠 Home", "home");
 
     const text =
       `${breadcrumb(chain)}🛒 *Quick Trade - Step 2/5*\n\nSelect the token you want to *SPEND* (Token In):`;
-    try {
-      await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
+    await renderScreen(ctx, markdownView(text, keyboard));
     return;
   }
 
@@ -95,14 +93,11 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     }
     keyboard.row();
     keyboard.text("🔍 Enter Custom Token Symbol", "action:trade_token_out_custom").row()
+      .text("← Back", "action:trade_back_token_in")
       .text("🏠 Home", "home");
 
     const text = `${breadcrumb(chain)}🛒 *Quick Trade - Step 3/5*\n\nToken In: *${escapeMd(tokenIn)}*\n\nSelect the token you want to *RECEIVE* (Token Out):`;
-    try {
-      await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch {
-      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
+    await renderScreen(ctx, markdownView(text, keyboard));
     return;
   }
 
@@ -113,7 +108,9 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     const tokenOut = ctx.session.tradeTokenOut ?? chain.stableSymbol;
 
     const text = `🛒 *Quick Trade - Step 4/5*\n\nSwap: *${escapeMd(tokenIn)}* → *${escapeMd(tokenOut)}*\n\nEnter the amount of *${escapeMd(tokenIn)}* to spend:\n\nType /cancel to abort.`;
-    const keyboard = new InlineKeyboard().text("❌ Cancel", "action:cancel_session");
+    const keyboard = new InlineKeyboard()
+      .text("← Back", "action:trade_back_token_out")
+      .text("❌ Cancel", "action:cancel_session");
     await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
     return;
   }
@@ -160,6 +157,27 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
         amountIn: amount,
         amountOut: est.amountOut,
       };
+      const pending = await PendingActionService.getInstance().prepareTrade({
+        userId: user.id,
+        payload: {
+          walletId: wallet.id,
+          chainId: walletChain.chainId,
+          tokenIn,
+          tokenOut,
+          amountIn: amount,
+          direction: "BUY",
+        },
+        quote: {
+          provider: providerName,
+          amountOut: est.amountOut,
+          priceImpact: est.priceImpact,
+          feeAmount: est.feeAmount,
+          feeBps: est.feeBps,
+        },
+        source: "telegram",
+        expiresAt: new Date(Date.now() + QUOTE_TTL_MS),
+      });
+      ctx.session.pendingActionId = pending.id;
 
       const text = [
         `🛒 *Confirm Trade - Step 5/5*`,

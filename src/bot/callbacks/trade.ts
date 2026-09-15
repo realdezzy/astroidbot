@@ -1,3 +1,4 @@
+import { InlineKeyboard } from "grammy";
 import { DatabaseService } from "../../services/db.js";
 import { LimitOrderService } from "../../services/limitOrder.js";
 import { walletDescriptor } from "../../services/chains/walletChain.js";
@@ -5,13 +6,14 @@ import { mainMenu } from "../screens/mainMenu.js";
 import { tradeScreen } from "../screens/tradeScreen.js";
 import { tradesScreen } from "../screens/tradesScreen.js";
 import { ordersScreen, limitCreateScreen } from "../screens/ordersScreen.js";
-import { activeChain } from "../chainContext.js";
+import { activeChain, setActiveChain } from "../chainContext.js";
 import { tokenDetailScreen, tokenRefAt } from "../screens/tokenScreen.js";
 import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
 import { currentUser } from "../context.js";
 import type { CallbackRoutes } from "./registry.js";
 import { numericArg } from "./registry.js";
 import { QUOTE_TTL_MS, type BotContext } from "../../types/bot.js";
+import { PendingActionService } from "../../services/actions/pendingActionService.js";
 
 /** Trade wizard, quick-trade flow, and limit orders. */
 
@@ -22,17 +24,31 @@ export const tradeRoutes: CallbackRoutes = {
 
     trade_token_in_custom: async (ctx) => {
       ctx.session.waitingFor = "trade_token_in";
-      await ctx.reply("🔍 Type the Token In symbol (e.g. ALEX):");
+      await ctx.reply("🔍 Type a token symbol or contract address:", {
+        reply_markup: new InlineKeyboard()
+          .text("← Back", "action:trade_back_token_in")
+          .text("❌ Cancel", "action:cancel_session"),
+      });
     },
 
     trade_token_out_custom: async (ctx) => {
       ctx.session.waitingFor = "trade_token_out";
-      await ctx.reply("🔍 Type the Token Out symbol (e.g. WELSH):");
+      await ctx.reply("🔍 Type a token symbol or contract address:", {
+        reply_markup: new InlineKeyboard()
+          .text("← Back", "action:trade_back_token_out")
+          .text("❌ Cancel", "action:cancel_session"),
+      });
     },
 
     trade_restart: async (ctx) => {
       clearTradeSession(ctx);
       return tradeScreen(ctx, "pick_wallet");
+    },
+    trade_back_wallet: (ctx) => tradeScreen(ctx, "pick_wallet"),
+    trade_back_token_in: (ctx) => tradeScreen(ctx, "pick_token_in"),
+    trade_back_token_out: (ctx) => {
+      ctx.session.waitingFor = null;
+      return tradeScreen(ctx, "pick_token_out");
     },
 
     trade_pick_pair: async (ctx) => {
@@ -76,17 +92,17 @@ export const tradeRoutes: CallbackRoutes = {
         return tradeScreen(ctx, "confirm");
       }
 
-      const { QueueManager } = await import("../../services/queue.js");
-      await QueueManager.getInstance().enqueueTrade({
-        walletId: wallet.id,
-        userId: user.id,
-        senderAddress: wallet.address,
-        tokenIn,
-        tokenOut,
-        amountIn: amount,
-        direction: "BUY",
-        reason: `Telegram Swap: ${tokenIn} → ${tokenOut}`,
-      });
+      const pendingActionId = ctx.session.pendingActionId;
+      if (!pendingActionId) return tradeScreen(ctx, "confirm");
+      try {
+        await PendingActionService.getInstance().confirmTrade(pendingActionId, user.id);
+      } catch (error) {
+        await ctx.answerCallbackQuery({
+          text: error instanceof Error ? error.message : "This approval is unavailable.",
+          show_alert: true,
+        }).catch(() => undefined);
+        return tradeScreen(ctx, "confirm");
+      }
 
       clearTradeSession(ctx);
       await ctx.reply(`✅ Swap enqueued: spend ${amount} ${tokenIn} to receive ${tokenOut}!`);
@@ -140,6 +156,26 @@ export const tradeRoutes: CallbackRoutes = {
       delete ctx.session.limitAmount;
       delete ctx.session.limitPrice;
       return limitCreateScreen(ctx, "pick_pair");
+    },
+    limit_back_orders: (ctx) => {
+      ctx.session.waitingFor = null;
+      return ordersScreen(ctx);
+    },
+    limit_back_pair: (ctx) => {
+      ctx.session.waitingFor = null;
+      return limitCreateScreen(ctx, "pick_pair");
+    },
+    limit_back_direction: (ctx) => {
+      ctx.session.waitingFor = null;
+      return limitCreateScreen(ctx, "pick_direction");
+    },
+    limit_back_amount: (ctx) => {
+      ctx.session.waitingFor = null;
+      return limitCreateScreen(ctx, "enter_amount");
+    },
+    limit_back_price: (ctx) => {
+      ctx.session.waitingFor = null;
+      return limitCreateScreen(ctx, "enter_price");
     },
 
     limit_confirm: async (ctx) => {
@@ -232,7 +268,12 @@ export const tradeRoutes: CallbackRoutes = {
     "trade_wallet_select:": async (ctx, args) => {
       const walletId = numericArg(args);
       if (walletId === null) return tradeScreen(ctx, "pick_wallet");
+      const user = await currentUser(ctx);
+      if (!user) return;
+      const wallet = await DatabaseService.getInstance().findWalletById(walletId);
+      if (!wallet || wallet.userId !== user.id) return tradeScreen(ctx, "pick_wallet");
       ctx.session.tradeWalletId = walletId;
+      setActiveChain(ctx, walletDescriptor(wallet).chainId);
       return tradeScreen(ctx, "pick_token_in");
     },
 
@@ -281,6 +322,7 @@ function clearTradeSession(ctx: BotContext): void {
   delete ctx.session.tradeAmount;
   delete ctx.session.tradeWalletId;
   delete ctx.session.tradeQuote;
+  delete ctx.session.pendingActionId;
 }
 
 /**
