@@ -27,6 +27,7 @@ export const ETHEREUM_MAINNET: ChainDescriptor = {
   // exceeds the time target, so it is left exactly as it was.
   indexer: { blockTimeSeconds: 12 },
   evm: {
+    v4PoolManager: "0x000000000004444c5dc75cB358380D2e3dE08A90",
     id: 1,
     // publicnode over llamarpc: the latter was returning Cloudflare 521s when
     // this was written, and a dead default RPC makes the chain look broken

@@ -14,6 +14,7 @@ export const BASE_MAINNET: ChainDescriptor = {
   // Measured 2.05 s/block against the head, matching OP Stack's 2 s target.
   indexer: { blockTimeSeconds: 2 },
   evm: {
+    v4PoolManager: "0x498581ff718922c3f8e6a244956af099b2652b2b",
     id: 8453,
     defaultRpcUrl: "https://mainnet.base.org",
     custody: "erc4337",
@@ -29,6 +30,14 @@ export const BASE_MAINNET: ChainDescriptor = {
       factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
       feeTiers: [500, 3000, 10000],
     },
+    indexerFactories: [
+      { address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD", dexId: "uniswap-v3", protocol: "uniswap-v3" },
+      { address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6", dexId: "uniswap-v2", protocol: "uniswap-v2" },
+      { address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da", dexId: "aerodrome-v2", protocol: "aerodrome-v2" },
+      { address: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A", dexId: "aerodrome-slipstream", protocol: "aerodrome-slipstream" },
+      { address: "0xaDe65c38CD4849aDBA595a4323a8C7DdfE89716a", dexId: "aerodrome-slipstream", protocol: "aerodrome-slipstream" },
+      { address: "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef", dexId: "aerodrome-slipstream", protocol: "aerodrome-slipstream" },
+    ],
     tokens: {
       WETH: { address: "0x4200000000000000000000000000000000000006", decimals: 18, name: "Wrapped Ether" },
       USDC: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, name: "USD Coin" },

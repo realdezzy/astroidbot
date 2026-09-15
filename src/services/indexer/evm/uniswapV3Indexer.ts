@@ -1,3 +1,8 @@
+import { V4_INITIALIZE, V4_SWAP } from "../protocols/uniswapV4Adapter.js";
+import { refreshV4Liquidity } from "./v4Liquidity.js";
+import { assertIngestionLease } from "../ingestionLease.js";
+import { reconcileEvmHistory, evmCheckpoint, prepareEvmRange } from "./reorgGuard.js";
+import { DexAdapterRegistry } from "../protocols/dexAdapterRegistry.js";
 import { parseAbiItem, type Address, type PublicClient } from "viem";
 import { DatabaseService } from "../../db.js";
 import { batchingPublicClientFor } from "../../chains/evm/evmClient.js";
@@ -27,6 +32,13 @@ const POOL_CREATED_EVENT = parseAbiItem(
 const SWAP_EVENT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
 );
+
+const PAIR_CREATED_EVENT = parseAbiItem("event PairCreated(address indexed token0, address indexed token1, address pair, uint256)");
+const V2_SWAP_EVENT = parseAbiItem("event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)");
+
+const AERO_CREATED_EVENT = parseAbiItem("event PoolCreated(address indexed token0, address indexed token1, bool indexed stable, address pool, uint256)");
+const CL_CREATED_EVENT = parseAbiItem("event PoolCreated(address indexed token0, address indexed token1, int24 indexed tickSpacing, address pool)");
+const AERO_SWAP_EVENT = parseAbiItem("event Swap(address indexed sender, address indexed to, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out)");
 
 /** A decoded `Swap` log, as viem hands it back from `getLogs`. */
 type SwapLog = Awaited<ReturnType<PublicClient["getLogs"]>>[number] & {
@@ -168,7 +180,7 @@ export class UniswapV3Indexer implements ChainIndexer {
     this.chainId = descriptor.chainId;
     this.evm = requireEvmConfig(descriptor);
 
-    if (!this.evm.dex?.factory) {
+    if (!this.factories.length) {
       throw new Error(
         `Chain ${descriptor.chainId} has no DEX factory configured — it cannot be indexed`
       );
@@ -177,7 +189,7 @@ export class UniswapV3Indexer implements ChainIndexer {
 
   /** Whether a descriptor can back an indexer at all. */
   static canIndex(descriptor: ChainDescriptor): boolean {
-    return descriptor.family === "evm" && Boolean(descriptor.evm?.dex?.factory);
+    return descriptor.family === "evm" && Boolean(descriptor.evm?.v4PoolManager || descriptor.evm?.dex?.factory || descriptor.evm?.dex?.v2Factory || descriptor.evm?.indexerFactories?.length);
   }
 
   private get rpc(): PublicClient {
@@ -192,87 +204,45 @@ export class UniswapV3Indexer implements ChainIndexer {
     return (this.evm.dex?.name ?? "uniswap-v3").toLowerCase();
   }
 
+  private get factories() {
+    const defaults = [
+      ...(this.evm.dex?.factory ? [{ address: this.evm.dex.factory, dexId: "uniswap-v3", protocol: "uniswap-v3" as const, deploymentBlock: 0n }] : []),
+      ...(this.evm.dex?.v2Factory ? [{ address: this.evm.dex.v2Factory, dexId: "uniswap-v2", protocol: "uniswap-v2" as const, deploymentBlock: 0n }] : []),
+    ];
+    return [...(this.evm.indexerFactories ?? defaults), ...(this.evm.v4PoolManager ? [{ address: this.evm.v4PoolManager, dexId: "uniswap-v4", protocol: "uniswap-v4" as const }] : [])];
+  }
+
   async run(): Promise<IndexRunResult> {
     const db = DatabaseService.getInstance();
+    await reconcileEvmHistory(this.chainId, this.rpc);
+    await this.retryPoolMetadata();
     const head = await this.rpc.getBlockNumber();
-
-    // Never ingest into the reorg window.
-    const safeHead = head > BigInt(this.settings.confirmations)
-      ? head - BigInt(this.settings.confirmations)
-      : 0n;
-
-    const cursor = await db.prisma.indexerCursor.findUnique({
-      where: { chainId: this.chainId },
-    });
-
-    // A fresh chain starts near the head rather than at genesis. Backfilling
-    // years of logs on first boot would stall the cycle indefinitely and is
-    // not what the discovery pages need — they want what is trading *now*.
-    const defaultStart =
-      safeHead > BigInt(this.settings.initialLookbackBlocks)
-        ? safeHead - BigInt(this.settings.initialLookbackBlocks)
-        : 0n;
-
+    const safeHead = head > BigInt(this.settings.confirmations) ? head - BigInt(this.settings.confirmations) : 0n;
+    const cursor = await db.prisma.indexerCursor.findUnique({ where: { chainId: this.chainId } });
+    const defaultStart = safeHead > BigInt(this.settings.initialLookbackBlocks)
+      ? safeHead - BigInt(this.settings.initialLookbackBlocks) : 1n;
     const fromBlock = cursor ? cursor.lastBlock + 1n : defaultStart;
-    const poolFromBlock = cursor?.lastPoolBlock != null ? cursor.lastPoolBlock + 1n : defaultStart;
+    const seed = fromBlock - 1n;
+    if (!cursor) await db.prisma.indexerCursor.create({ data: {
+      chainId: this.chainId, lastBlock: seed, lastPoolBlock: null, backfillBlock: fromBlock,
+    } });
+    const firstFactoryBlock = this.factories.reduce((min, f) => (f.deploymentBlock ?? 0n) < min ? (f.deploymentBlock ?? 0n) : min, safeHead);
+    const poolFrom = cursor?.lastPoolBlock != null ? cursor.lastPoolBlock + 1n : firstFactoryBlock;
+    const budget = BigInt(this.settings.maxBlocksPerRun);
+    const toBlock = fromBlock + budget - 1n < safeHead ? fromBlock + budget - 1n : safeHead;
+    const discoveryTo = poolFrom + budget - 1n < toBlock ? poolFrom + budget - 1n : toBlock;
+    const poolsDiscovered = poolFrom <= discoveryTo ? await this.discoverPools(poolFrom, discoveryTo) : 0;
+    // Never claim swaps from a range whose complete pool set is not known yet.
+    if (discoveryTo < toBlock) return { chainId: this.chainId, poolsDiscovered,
+      swapsIngested: 0, bucketsWritten: 0, fromBlock, toBlock: seed, targetBlock: safeHead, discoveryBlock: discoveryTo };
+    const result = fromBlock <= safeHead ? await this.ingestSwaps(fromBlock, toBlock) : { swapsIngested: 0, bucketsWritten: 0 };
+    const committed = await db.prisma.indexerCursor.findUnique({ where: { chainId: this.chainId } });
+    const actual = committed?.lastBlock ?? seed;
 
-    // Seed the row up front so neither pass can create it with a placeholder
-    // height. Pool discovery used to write the row first with lastBlock left
-    // at its default of 0, which sent swap ingestion back to block 1 to crawl
-    // forward `maxBlocksPerRun` at a time — on a chain 26M blocks deep it
-    // would never have reached the head, and it looked like "no swaps found"
-    // rather than like a bug.
-    if (!cursor) {
-      const seed = defaultStart > 0n ? defaultStart - 1n : 0n;
-      await db.prisma.indexerCursor.create({
-        // backfillBlock is seeded here, not lazily on the first backfill tick.
-        // By then lastBlock has advanced to the head, and a walk starting from
-        // there would descend through blocks the forward pass already
-        // ingested — inflating additively-accumulated volume permanently.
-        data: {
-          chainId: this.chainId,
-          lastBlock: seed,
-          lastPoolBlock: seed,
-          backfillBlock: seed,
-        },
-      });
-    }
-
-    if (fromBlock > safeHead) {
-      return {
-        chainId: this.chainId,
-        poolsDiscovered: 0,
-        swapsIngested: 0,
-        bucketsWritten: 0,
-        fromBlock,
-        toBlock: safeHead,
-      };
-    }
-
-    // One tick processes at most maxBlocksPerRun. A chain that has fallen far
-    // behind catches up over several ticks instead of blocking one for minutes.
-    const toBlock =
-      safeHead - fromBlock > BigInt(this.settings.maxBlocksPerRun)
-        ? fromBlock + BigInt(this.settings.maxBlocksPerRun)
-        : safeHead;
-
-    const poolsDiscovered = await this.discoverPools(poolFromBlock, toBlock);
-    const { swapsIngested, bucketsWritten } = await this.ingestSwaps(fromBlock, toBlock);
-
-    // Backfill only once the forward pass has reached the head. Live data is
-    // what the product is for; history is a correctness nicety, and a chain
-    // catching up must not spend half its block budget walking backwards.
-    const backfilled =
-      toBlock >= safeHead ? await this.backfillStep(safeHead) : { swapsIngested: 0, bucketsWritten: 0 };
-
-    return {
-      chainId: this.chainId,
-      poolsDiscovered,
-      swapsIngested: swapsIngested + backfilled.swapsIngested,
-      bucketsWritten: bucketsWritten + backfilled.bucketsWritten,
-      fromBlock,
-      toBlock,
-    };
+    const backfilled = actual >= safeHead ? await this.backfillStep(safeHead) : { swapsIngested: 0, bucketsWritten: 0 };
+    return { chainId: this.chainId, poolsDiscovered, fromBlock, toBlock: actual, targetBlock: safeHead,
+      swapsIngested: result.swapsIngested + backfilled.swapsIngested,
+      bucketsWritten: result.bucketsWritten + backfilled.bucketsWritten };
   }
 
   // ─── Backfill ──────────────────────────────────────────────────────────────
@@ -403,47 +373,43 @@ export class UniswapV3Indexer implements ChainIndexer {
    */
   private async discoverPools(fromBlock: bigint, toBlock: bigint): Promise<number> {
     const db = DatabaseService.getInstance();
-    const factory = this.evm.dex!.factory as Address;
     const priceable = this.priceableAddresses();
 
     let discovered = 0;
     let poolScanFailed = false;
 
     for (const [start, end] of this.chunks(fromBlock, toBlock)) {
-      const logs = await this.getLogsAdaptive(
-        (from, to) =>
-          this.rpc.getLogs({
-            address: factory,
-            event: POOL_CREATED_EVENT,
-            fromBlock: from,
-            toBlock: to,
-          }),
-        start,
-        end
-      );
-
-      // Discovery is allowed to skip an unreadable chunk. Unlike swaps, a
-      // missed pool is self-healing: the pool is rediscovered the moment
-      // `lastPoolBlock` is retried, and until then its swaps simply aren't
-      // tracked — nothing is miscounted in the meantime.
-      if (logs === null) {
-        poolScanFailed = true;
-        continue;
+      const logs = [];
+      for (const factory of this.factories) {
+        if (end < (factory.deploymentBlock ?? 0n)) continue;
+        const found = await this.getLogsAdaptive(
+          (from, to) => this.rpc.getLogs({ address: factory.address,
+            event: factory.protocol === "uniswap-v4" ? V4_INITIALIZE : factory.protocol === "uniswap-v2" ? PAIR_CREATED_EVENT : factory.protocol === "aerodrome-v2" ? AERO_CREATED_EVENT : factory.protocol === "aerodrome-slipstream" ? CL_CREATED_EVENT : POOL_CREATED_EVENT,
+            fromBlock: from, toBlock: to }), start, end
+        );
+        if (found === null) throw new Error(`Factory discovery incomplete at ${start}`);
+        const adapter = DexAdapterRegistry.getInstance().getAdapter(factory.protocol, this.chainId)!;
+        for (const log of found) {
+          const decoded = adapter.decodePoolCreated(log, this.chainId);
+          if (!decoded) throw new Error(`Invalid pool creation at ${start}`);
+          logs.push({ ...decoded, dexId: factory.dexId });
+        }
       }
 
       // Filter first, then read decimals for the survivors in one batch. Read
       // per pool inside the loop, a chunk that created fifty pools cost a
       // hundred sequential round trips before the first row was written.
       const candidates = logs.flatMap((log) => {
-        const { token0: t0, token1: t1, fee, pool: poolAddress } = log.args;
+        const { token0: t0, token1: t1, feeTier: fee, poolAddress } = log;
         if (!t0 || !t1 || !poolAddress) return [];
 
-        const token0 = t0.toLowerCase();
-        const token1 = t1.toLowerCase();
+        const native = "0x0000000000000000000000000000000000000000";
+        const token0 = (t0.toLowerCase() === native ? this.evm.wrappedNative ?? t0 : t0).toLowerCase();
+        const token1 = (t1.toLowerCase() === native ? this.evm.wrappedNative ?? t1 : t1).toLowerCase();
 
         // Only pools with a priceable side are worth ingesting — the other
         // side is what gives every swap a USD value.
-        if (!priceable.has(token0) && !priceable.has(token1)) return [];
+        // Keep unanchored pairs too; USD pricing can be resolved transitively.
 
         // The quote side is the one we can price; the base is what the pool is
         // actually about. Every downstream metric is attributed to the base.
@@ -457,7 +423,9 @@ export class UniswapV3Indexer implements ChainIndexer {
             quoteToken,
             baseToken: quoteToken === token0 ? token1 : token0,
             feeTier: fee === undefined ? null : Number(fee),
-            createdBlock: log.blockNumber ?? null,
+            createdBlock: log.createdBlock,
+            dexId: log.dexId,
+            protocolState: log.protocolState,
           },
         ];
       });
@@ -472,30 +440,33 @@ export class UniswapV3Indexer implements ChainIndexer {
       const newTokens: { address: string; decimals: number }[] = [];
 
       for (const candidate of candidates) {
-        const { pool, token0, token1, quoteToken, baseToken, feeTier, createdBlock } = candidate;
-        const decimals0 = decimals.get(token0) ?? 18;
-        const decimals1 = decimals.get(token1) ?? 18;
+        const { pool, token0, token1, quoteToken, baseToken, feeTier, createdBlock, dexId, protocolState } = candidate;
+        const decimals0 = decimals.get(token0) ?? 0;
+        const decimals1 = decimals.get(token1) ?? 0;
+        const indexingError = !decimals.has(token0) || !decimals.has(token1) ? "Token decimals unavailable; awaiting metadata" : null;
 
         try {
           await db.prisma.indexedPool.upsert({
             where: { chainId_poolAddress: { chainId: this.chainId, poolAddress: pool } },
             create: {
               chainId: this.chainId,
-              dexId: this.dexId,
+              dexId,
               poolAddress: pool,
               token0,
               token1,
               decimals0,
               decimals1,
+              indexingError,
+              ...(protocolState ? { protocolState } : {}),
               baseToken,
               quoteToken,
               feeTier,
               createdBlock,
-              pairCreatedAt: new Date(),
+              pairCreatedAt: new Date(Number((await this.rpc.getBlock({ blockNumber: createdBlock })).timestamp) * 1000),
             },
             // A rediscovered pool keeps its original creation data; only the
             // token metadata could have been wrong (unreadable decimals).
-            update: { decimals0, decimals1, baseToken, quoteToken },
+            update: { decimals0, decimals1, baseToken, quoteToken, indexingError },
           });
 
           // Catalogue the traded side so discovery can list it.
@@ -505,13 +476,14 @@ export class UniswapV3Indexer implements ChainIndexer {
           // `getSwappableTokens` knows about — and the entire point of an
           // indexer is the long tail that wasn't hardcoded anywhere. The
           // priceable side (WETH, a stable) is skipped: it's already curated.
-          newTokens.push({
+          if (!indexingError) newTokens.push({
             address: baseToken,
             decimals: baseToken === token0 ? decimals0 : decimals1,
           });
 
           discovered++;
         } catch (error) {
+          poolScanFailed = true;
           logger.warn("[indexer] pool upsert failed", {
             chainId: this.chainId,
             pool,
@@ -526,7 +498,8 @@ export class UniswapV3Indexer implements ChainIndexer {
     }
 
     // Only claim the scanned range if all of it was actually readable.
-    if (!poolScanFailed) await this.saveCursor({ lastPoolBlock: toBlock });
+    if (poolScanFailed) throw new Error("Pool writes incomplete; retaining discovery and swap cursors");
+    await this.saveCursor({ lastPoolBlock: toBlock });
     return discovered;
   }
 
@@ -548,6 +521,7 @@ export class UniswapV3Indexer implements ChainIndexer {
   ): Promise<{ swapsIngested: number; bucketsWritten: number }> {
     const db = DatabaseService.getInstance();
     const pools = await this.trackedPools();
+    if (direction === "forward") await prepareEvmRange(this.chainId, fromBlock);
 
     if (pools.length === 0) {
       // Nothing to read. Claim the range anyway: re-walking it next tick would
@@ -558,6 +532,9 @@ export class UniswapV3Indexer implements ChainIndexer {
       );
       return { swapsIngested: 0, bucketsWritten: 0 };
     }
+
+    const rangeHash = (await this.rpc.getBlock({ blockNumber: toBlock })).hash;
+    if (!rangeHash) throw new Error("Missing range boundary hash");
 
     const byAddress = new Map(pools.map((p) => [p.poolAddress.toLowerCase(), p]));
     const usd = await this.usdPrices(pools);
@@ -596,12 +573,7 @@ export class UniswapV3Indexer implements ChainIndexer {
         addressChunks.map((addresses) =>
           this.getLogsAdaptive(
             (from, to) =>
-              this.rpc.getLogs({
-                address: addresses as Address[],
-                event: SWAP_EVENT,
-                fromBlock: from,
-                toBlock: to,
-              }),
+              this.readSwapLogs(addresses, from, to),
             start,
             end
           )
@@ -625,7 +597,7 @@ export class UniswapV3Indexer implements ChainIndexer {
     // Only now, and only for the blocks that actually emitted something. A
     // range with four swaps in three blocks costs three timestamps, not one
     // per block in the range — and a range with no swaps costs none at all.
-    const clock = new BlockTimeOracle(this.rpc);
+    const clock = new BlockTimeOracle(this.rpc, Number.MAX_SAFE_INTEGER, 25, true);
     await clock.primeBlocks(collected.map((log) => log.blockNumber));
 
     // Block order matters: `open` is the first price written to a bucket and
@@ -641,14 +613,15 @@ export class UniswapV3Indexer implements ChainIndexer {
       const pool = byAddress.get(log.address.toLowerCase());
       if (!pool) continue;
 
-      const { amount0, amount1, sqrtPriceX96, recipient, sender } = log.args;
-      if (amount0 === undefined || amount1 === undefined || sqrtPriceX96 === undefined) {
-        continue;
-      }
-
-      const traderAddress = (recipient ?? sender ?? "").toLowerCase();
+      const protocol = this.factories.find((f) => f.dexId === pool.dexId)?.protocol ?? "uniswap-v3";
+      const decoded = DexAdapterRegistry.getInstance().getAdapter(protocol, this.chainId)!.decodeSwap(pool, log);
+      if (!decoded) throw new Error(`Invalid swap log for ${pool.poolAddress}`);
+      const token0In = decoded.tokenIn.toLowerCase() === pool.token0;
+      const amount0 = token0In ? decoded.amountIn : -decoded.amountOut;
+      const amount1 = token0In ? -decoded.amountOut : decoded.amountIn;
+      const traderAddress = decoded.traderAddress;
       const timestamp = log.blockNumber != null ? clock.timeOf(log.blockNumber) : Date.now();
-      const price0In1 = priceFromSqrtX96(sqrtPriceX96, pool.decimals0, pool.decimals1);
+      const price0In1 = decoded.price0In1;
 
       const { volumeUsd, isBuy, priceUsd } = this.valueSwap(pool, amount0, amount1, price0In1, usd);
 
@@ -671,14 +644,16 @@ export class UniswapV3Indexer implements ChainIndexer {
     // storage. The cursor move below no longer has to share a transaction with
     // this for correctness — a replay is a no-op — but it still commits with
     // the pool-state writes, which are last-write-wins.
+    // Capture the checkpoint before writing and verify the range did not change while reading.
+    const committedTo = failedAt != null ? failedAt - 1n : toBlock;
+    const forwardState = direction === "forward" ? await evmCheckpoint(this.chainId, committedTo, this.rpc) : undefined;
+    if ((await this.rpc.getBlock({ blockNumber: toBlock })).hash !== rangeHash) throw new Error("Chain reorganized during log scan");
     const bucketsWritten = await persistSwaps(rawSwaps);
 
     // Commit only as far as we actually read. If a chunk was unreadable the
     // cursor stops at the block before it, so the gap is re-attempted rather
     // than skipped — and because the candle write and the cursor move commit
     // together, the blocks we do claim are exactly the blocks we ingested.
-    const committedTo = failedAt != null ? failedAt - 1n : toBlock;
-
     if (failedAt != null) {
       logger.warn("[indexer] range partially ingested; cursor held back", {
         chainId: this.chainId,
@@ -697,7 +672,7 @@ export class UniswapV3Indexer implements ChainIndexer {
     const cursorMove =
       direction === "forward"
         ? { lastBlock: committedTo }
-        : { backfillBlock: failedAt != null ? failedAt + 1n : fromBlock };
+        : { backfillBlock: failedAt != null ? toBlock + 1n : fromBlock };
 
     // `lastPrice0`/`lastSwapAt` mean *latest*, and a backfill is reading older
     // blocks than anything already recorded — writing them here would move a
@@ -714,12 +689,13 @@ export class UniswapV3Indexer implements ChainIndexer {
           )
         : [];
 
+    await assertIngestionLease();
     await db.prisma.$transaction([
       ...poolStateWrites,
       db.prisma.indexerCursor.upsert({
         where: { chainId: this.chainId },
         create: { chainId: this.chainId, lastBlock: committedTo, lastPoolBlock: committedTo },
-        update: cursorMove,
+        update: { ...cursorMove, ...(forwardState ? { forwardState } : {}) },
       }),
     ]);
 
@@ -729,7 +705,7 @@ export class UniswapV3Indexer implements ChainIndexer {
     // reads return *today's* balances, so attributing them to a pool because
     // of a trade last week is both wrong and paid for in RPC calls.
     if (direction === "forward") {
-      await this.refreshLiquidity([...poolState.keys()], byAddress, usd);
+      await this.refreshLiquidity([...poolState.keys()], byAddress, usd, toBlock);
     }
 
     return { swapsIngested, bucketsWritten };
@@ -752,72 +728,40 @@ export class UniswapV3Indexer implements ChainIndexer {
   private async refreshLiquidity(
     poolIds: number[],
     byAddress: Map<string, TrackedPool>,
-    usd: Map<string, number>
+    usd: Map<string, number>,
+    blockNumber: bigint
   ): Promise<void> {
     if (poolIds.length === 0) return;
 
     const db = DatabaseService.getInstance();
     const byId = new Map([...byAddress.values()].map((p) => [p.id, p]));
-
-    // One entry per pool we can price at all. Pools with no priceable side are
-    // dropped here rather than sent and discarded, so the batch carries only
-    // reads whose answer is usable.
-    const measurable = poolIds.flatMap((id) => {
-      const pool = byId.get(id);
-      if (!pool) return [];
-
-      // Whichever side we can price; if both, prefer token1 for symmetry with
-      // valueSwap.
-      const usd1 = usd.get(pool.token1);
-      const usd0 = usd.get(pool.token0);
-
-      const quote =
-        usd1 && usd1 > 0
-          ? { token: pool.token1, decimals: pool.decimals1, price: usd1 }
-          : usd0 && usd0 > 0
-            ? { token: pool.token0, decimals: pool.decimals0, price: usd0 }
-            : null;
-
-      return quote ? [{ id, poolAddress: pool.poolAddress, quote }] : [];
-    });
-
-    if (measurable.length === 0) return;
-
-    // One eth_call per hundred pools instead of one per pool. This was the
-    // single largest line in the indexer's RPC budget: a chain at its 300-pool
-    // cap spent 300 calls a tick here to refresh a number the discovery table
-    // reads once.
-    const balances = await this.batchRead(
-      measurable.map((entry) => ({
-        address: entry.quote.token,
-        abi: ERC20_ABI,
-        functionName: "balanceOf",
-        args: [entry.poolAddress as Address],
-      }))
-    );
-
-    const updates: { id: number; liquidityUsd: number }[] = [];
-
-    for (const [index, entry] of measurable.entries()) {
-      const balance = balances[index];
-      if (typeof balance !== "bigint") continue;
-
-      const value = toHuman(balance, entry.quote.decimals) * entry.quote.price;
-      if (!Number.isFinite(value) || value < 0) continue;
-
-      updates.push({ id: entry.id, liquidityUsd: value * 2 });
+    const pools = poolIds.map((id) => byId.get(id)).filter((p): p is TrackedPool => Boolean(p));
+    for (const pool of pools.filter((p) => p.dexId === "uniswap-v4")) {
+      try { await refreshV4Liquidity(pool, this.rpc, usd, blockNumber); }
+      catch (error) { logger.warn("[indexer] V4 liquidity unavailable", { pool: pool.poolAddress, error: String(error) }); }
     }
-
-    if (updates.length === 0) return;
-
-    await db.prisma.$transaction(
-      updates.map((u) =>
-        db.prisma.indexedPool.update({
-          where: { id: u.id },
-          data: { liquidityUsd: u.liquidityUsd },
-        })
-      )
-    );
+    const ordinary = pools.filter((p) => p.dexId !== "uniswap-v4");
+    const reads = ordinary.flatMap((p) => [
+      { address: p.token0, abi: ERC20_ABI, functionName: "balanceOf", args: [p.poolAddress as Address] },
+      { address: p.token1, abi: ERC20_ABI, functionName: "balanceOf", args: [p.poolAddress as Address] },
+      { address: p.poolAddress, abi: [parseAbiItem("function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)")], functionName: "slot0" },
+    ]);
+    const values = await this.batchRead(reads);
+    const stored = await db.prisma.indexedPool.findMany({ where: { id: { in: poolIds } }, select: { id: true, lastPrice0: true } });
+    const ratios = new Map(stored.map((p) => [p.id, p.lastPrice0]));
+    for (const [i, pool] of ordinary.entries()) {
+      const balance0 = values[i * 3], balance1 = values[i * 3 + 1];
+      if (typeof balance0 !== "bigint" || typeof balance1 !== "bigint") continue;
+      const slot = values[i * 3 + 2];
+      const ratio = Array.isArray(slot) && typeof slot[0] === "bigint"
+        ? priceFromSqrtX96(slot[0], pool.decimals0, pool.decimals1) : ratios.get(pool.id);
+      const price0 = usd.get(pool.token0) ?? (ratio && usd.has(pool.token1) ? ratio * usd.get(pool.token1)! : undefined);
+      const price1 = usd.get(pool.token1) ?? (ratio && usd.has(pool.token0) ? usd.get(pool.token0)! / ratio : undefined);
+      if (price0 == null || price1 == null) continue;
+      const liquidityUsd = toHuman(balance0, pool.decimals0) * price0 + toHuman(balance1, pool.decimals1) * price1;
+      if (!Number.isFinite(liquidityUsd) || liquidityUsd < 0) continue;
+      await db.prisma.indexedPool.update({ where: { id: pool.id }, data: { liquidityUsd } });
+    }
   }
 
   /**
@@ -840,7 +784,7 @@ export class UniswapV3Indexer implements ChainIndexer {
 
     // Quote on token1 when we can, since token0/token1 ordering is by address
     // and carries no economic meaning.
-    if (usd1 !== undefined && usd1 > 0) {
+    if (usd1 !== undefined && usd1 > 0 && pool.baseToken !== pool.token1) {
       const quoteAmount = Math.abs(toHuman(amount1, pool.decimals1));
       return {
         volumeUsd: quoteAmount * usd1,
@@ -911,7 +855,20 @@ export class UniswapV3Indexer implements ChainIndexer {
     });
 
     if (nativeUsd != null) usd.set(wrappedNative, nativeUsd);
-
+    const edges = await db.prisma.indexedPool.findMany({
+      where: { chainId: this.chainId, lastPrice0: { gt: 0 }, liquidityUsd: { gte: 10 } },
+      orderBy: { liquidityUsd: "desc" },
+      select: { token0: true, token1: true, lastPrice0: true },
+    });
+    // Breadth-first expansion keeps each hop anchored in the previous layer.
+    for (let hop = 0; hop < 3; hop++) {
+      const previous = new Map(usd);
+      for (const edge of edges) {
+        const ratio = edge.lastPrice0!;
+        if (!usd.has(edge.token0) && previous.has(edge.token1)) usd.set(edge.token0, ratio * previous.get(edge.token1)!);
+        if (!usd.has(edge.token1) && previous.has(edge.token0)) usd.set(edge.token1, previous.get(edge.token0)! / ratio);
+      }
+    }
     return usd;
   }
 
@@ -940,16 +897,43 @@ export class UniswapV3Indexer implements ChainIndexer {
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
+  private async retryPoolMetadata(): Promise<void> {
+    const db = DatabaseService.getInstance().prisma;
+    const pending = await db.indexedPool.findMany({
+      where: { chainId: this.chainId, indexingError: { not: null } }, orderBy: { updatedAt: "asc" }, take: 50,
+    });
+    if (!pending.length) return;
+    const decimals = await this.decimalsFor(pending.flatMap((p) => [p.token0, p.token1]));
+    for (const pool of pending) {
+      const d0 = decimals.get(pool.token0), d1 = decimals.get(pool.token1);
+      if (d0 == null || d1 == null) {
+        await db.indexedPool.update({ where: { id: pool.id }, data: { indexingError: pool.indexingError } });
+        continue;
+      }
+      await assertIngestionLease();
+      // Schedule replay before enabling the pool, so a crash cannot omit its missed interval.
+      const cursor = await db.indexerCursor.findUnique({ where: { chainId: this.chainId } });
+      if (cursor) {
+        const floor = await this.computeBackfillFloor(cursor.lastBlock);
+        const replayFrom = floor ?? (cursor.lastBlock > BigInt(this.settings.initialLookbackBlocks)
+          ? cursor.lastBlock - BigInt(this.settings.initialLookbackBlocks) : 0n);
+        await db.indexerCursor.update({ where: { chainId: this.chainId }, data: { lastBlock: replayFrom > 0n ? replayFrom - 1n : 0n } });
+      }
+      await this.catalogueTokens([{ address: pool.token0, decimals: d0 }, { address: pool.token1, decimals: d1 }]);
+      await db.indexedPool.update({ where: { id: pool.id }, data: { decimals0: d0, decimals1: d1, indexingError: null } });
+    }
+  }
+
   private async trackedPools(): Promise<TrackedPool[]> {
     const db = DatabaseService.getInstance();
     const wrappedNative = this.evm.wrappedNative?.toLowerCase();
     const stables = this.stableAddresses();
 
     const rows = await db.prisma.indexedPool.findMany({
-      where: { chainId: this.chainId },
+      where: { chainId: this.chainId, indexingError: null },
       // Most recently active first, so the cap keeps the pools that matter.
       orderBy: [{ lastSwapAt: { sort: "desc", nulls: "last" } }, { createdBlock: "desc" }],
-      take: this.settings.maxPools,
+      // Every known pool participates; address filters bound individual RPC calls.
     });
 
     // Anchor pools are exempt from the cap. They set the chain's USD reference,
@@ -961,6 +945,7 @@ export class UniswapV3Indexer implements ChainIndexer {
       const anchors = await db.prisma.indexedPool.findMany({
         where: {
           chainId: this.chainId,
+          indexingError: null,
           OR: [...stables].flatMap((stable) => [
             { token0: wrappedNative, token1: stable },
             { token0: stable, token1: wrappedNative },
@@ -983,6 +968,7 @@ export class UniswapV3Indexer implements ChainIndexer {
       decimals0: r.decimals0,
       decimals1: r.decimals1,
       feeTier: r.feeTier,
+      baseToken: r.baseToken,
     }));
   }
 
@@ -1028,13 +1014,13 @@ export class UniswapV3Indexer implements ChainIndexer {
     ]);
 
     for (const [index, address] of addresses.entries()) {
-      const symbol = this.cleanString(results[index]);
+      const symbol = this.cleanString(results[index]) ?? address.slice(0, 10);
       const name = this.cleanString(results[addresses.length + index]);
 
       // A token whose symbol can't be read isn't listable — it would render as
       // a blank row — and is overwhelmingly likely to be a broken or hostile
       // contract rather than something a user wants to trade.
-      if (!symbol) continue;
+
 
       try {
         await db.prisma.indexedToken.create({
@@ -1105,8 +1091,10 @@ export class UniswapV3Indexer implements ChainIndexer {
       const raw = results[index];
       // Non-standard ERC-20s exist. 18 is the right guess and a wrong guess
       // misprices one pool rather than failing the whole range.
-      const value = raw == null ? 18 : Number(raw);
-      const decimals = Number.isFinite(value) && value >= 0 && value <= 36 ? value : 18;
+      if (raw == null) continue;
+      const value = Number(raw);
+      if (!Number.isInteger(value) || value < 0 || value > 36) continue;
+      const decimals = value;
 
       this.decimalsCache.set(address, decimals);
       out.set(address, decimals);
@@ -1178,6 +1166,26 @@ export class UniswapV3Indexer implements ChainIndexer {
    * Subdivision is sequential rather than parallel for the same reason — each
    * level would otherwise double the concurrency aimed at the endpoint.
    */
+  private async readSwapLogs(addresses: string[], from: bigint, to: bigint): Promise<SwapLog[]> {
+    try {
+      const ordinary = addresses.filter((a) => !a.includes(":"));
+      const logs: SwapLog[] = ordinary.length ? await this.rpc.getLogs({ address: ordinary as Address[], events: [SWAP_EVENT, V2_SWAP_EVENT, AERO_SWAP_EVENT], fromBlock: from, toBlock: to }) as SwapLog[] : [];
+      const managers = new Set(addresses.filter((a) => a.includes(":")).map((a) => a.split(":")[0]!));
+      for (const manager of managers) {
+        const ids = addresses.filter((a) => a.startsWith(`${manager}:`)).map((a) => a.split(":")[1] as `0x${string}`);
+        const found = await this.rpc.getLogs({ address: manager as Address, event: V4_SWAP, args: { id: ids }, fromBlock: from, toBlock: to });
+        for (const log of found) logs.push({ ...log, address: `${manager}:${log.args.id}`.toLowerCase() } as unknown as SwapLog);
+      }
+      return logs;
+    } catch (error) {
+      if (from !== to || addresses.length <= 1 || !isResultSetTooLarge(String(error))) throw error;
+      const mid = Math.floor(addresses.length / 2);
+      const left = await this.readSwapLogs(addresses.slice(0, mid), from, to);
+      const right = await this.readSwapLogs(addresses.slice(mid), from, to);
+      return [...left, ...right];
+    }
+  }
+
   private async getLogsAdaptive<T>(
     fetch: (from: bigint, to: bigint) => Promise<T[]>,
     from: bigint,
@@ -1210,11 +1218,11 @@ export class UniswapV3Indexer implements ChainIndexer {
           // A half we couldn't read makes the whole range unknown.
           return left === null || right === null ? null : [...left, ...right];
         } else {
-          logger.warn("[indexer] single block exceeds log limit; returning empty array to avoid stall", {
+          logger.warn("[indexer] single block exceeds log limit; retaining cursor", {
             chainId: this.chainId,
             block: from.toString(),
           });
-          return [];
+          return null;
         }
       }
 
@@ -1326,6 +1334,8 @@ export class UniswapV3Indexer implements ChainIndexer {
     backfillDone?: boolean;
   }): Promise<void> {
     const db = DatabaseService.getInstance();
+    const forwardState = data.lastBlock != null ? await evmCheckpoint(this.chainId, data.lastBlock, this.rpc) : undefined;
+    await assertIngestionLease();
     await db.prisma.indexerCursor.upsert({
       where: { chainId: this.chainId },
       create: {
@@ -1333,7 +1343,7 @@ export class UniswapV3Indexer implements ChainIndexer {
         lastBlock: data.lastBlock ?? 0n,
         lastPoolBlock: data.lastPoolBlock ?? null,
       },
-      update: data,
+      update: { ...data, ...(forwardState ? { forwardState } : {}) },
     });
   }
 }

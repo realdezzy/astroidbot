@@ -1,3 +1,5 @@
+import { UniswapV4Adapter } from "./uniswapV4Adapter.js";
+import { AerodromeAdapter } from "./aerodromeAdapter.js";
 import type { ChainId } from "../../../types/chain.js";
 import type { DexAdapter } from "./dexAdapter.js";
 import { UniswapV3Adapter } from "./uniswapV3Adapter.js";
@@ -14,7 +16,10 @@ export class DexAdapterRegistry {
 
   private constructor() {
     this.register(new UniswapV3Adapter());
+    this.register(new UniswapV4Adapter());
     this.register(new UniswapV2Adapter());
+    this.register(new AerodromeAdapter("aerodrome-v2"));
+    this.register(new AerodromeAdapter("aerodrome-slipstream"));
     this.register(new StacksAlexVelarAdapter());
     this.register(new SolanaJupiterAdapter());
     this.register(new BitflowAdapter());

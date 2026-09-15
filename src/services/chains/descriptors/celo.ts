@@ -30,6 +30,7 @@ export const CELO_MAINNET: ChainDescriptor = {
   // Measured 1.0000 s/block over a 5,000-block span.
   indexer: { blockTimeSeconds: 1 },
   evm: {
+    v4PoolManager: "0x288dc841A52FCA2707c6947B3A777c5E56cd87BC",
     id: 42220,
     defaultRpcUrl: "https://forno.celo.org",
     // Pimlico does serve Celo, but EOA custody is the safer default for a

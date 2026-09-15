@@ -75,6 +75,9 @@ export interface EvmChainConfig {
     /** Fee tiers to scan when quoting, in hundredths of a bip (500 = 0.05%). */
     feeTiers?: number[];
   };
+  /** Explicit ingestion deployments, independent of trading routers. */
+  indexerFactories?: { address: `0x${string}`; dexId: string; protocol: "uniswap-v2" | "uniswap-v3" | "aerodrome-v2" | "aerodrome-slipstream" | "uniswap-v4"; deploymentBlock?: bigint }[];
+  v4PoolManager?: `0x${string}`;
   /** Wrapped native token — needed to route native<->ERC20 swaps. */
   wrappedNative?: `0x${string}`;
   /** Curated token list: symbol -> address. */

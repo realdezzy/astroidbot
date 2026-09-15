@@ -21,6 +21,7 @@ export interface SwapEvent {
 }
 
 export interface PoolCreatedEvent {
+  protocolState?: { key: import("../protocols/uniswapV4Adapter.js").V4PoolKey };
   chainId: ChainId;
   dexId: string;
   poolAddress: string;

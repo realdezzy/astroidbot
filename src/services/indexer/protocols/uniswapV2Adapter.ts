@@ -70,7 +70,7 @@ export class UniswapV2Adapter implements DexAdapter {
     const price0In1 =
       amountOut > 0n && amountIn > 0n
         ? Number(amount1In > 0n ? amount1In : amount1Out) /
-          Number(amount0In > 0n ? amount0In : amount0Out)
+          Number(amount0In > 0n ? amount0In : amount0Out) * 10 ** (pool.decimals0 - pool.decimals1)
         : 0;
 
     return {
