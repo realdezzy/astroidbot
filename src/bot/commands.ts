@@ -18,7 +18,8 @@ import { tradeScreen } from "./screens/tradeScreen.js";
 import { tradesScreen } from "./screens/tradesScreen.js";
 import { agentsScreen, runAgent, toggleAgent, setAgentAiMode, deleteAgent } from "./screens/agentsScreen.js";
 import type { BotContext } from "../types/bot.js";
-import { tokenScreen } from "./screens/tokenScreen.js";
+import { tokenDetailScreen, tokenScreen } from "./screens/tokenScreen.js";
+import { clearFlow } from "./session.js";
 
 /** Slash commands and `/reveal_N`-style text shortcuts. */
 export function registerCommands(bot: Bot<BotContext>): void {
@@ -34,6 +35,25 @@ export function registerCommands(bot: Bot<BotContext>): void {
       try { await (await import("../services/wallet.js")).provisionDefaultWallet(user.id); } catch { }
       if (ConfigManager.getInstance().config.DRY_RUN) {
         try { await db.markEmailVerified(user.id); } catch { }
+      }
+    }
+    const parameter = ctx.match?.trim();
+    if (parameter) {
+      const { DeepLinkService } = await import("../services/deepLinks/deepLinkService.js");
+      const target = await new DeepLinkService().consume(parameter, user.id);
+      if (!target) {
+        await ctx.reply("That link has expired or was already used. Here is your dashboard:");
+      } else if (target.kind === "screen") {
+        const { screenMap } = await import("./context.js");
+        return (screenMap[target.screen] ?? mainMenu)(ctx);
+      } else if (target.kind === "token") {
+        ctx.session.tokenMatches = [{ chainId: target.chainId, contractId: target.contractId }];
+        return tokenDetailScreen(ctx, 0);
+      } else if (target.kind === "agent") {
+        const { agentDetailsScreen } = await import("./screens/agentDetailsScreen.js");
+        return agentDetailsScreen(ctx, target.agentId);
+      } else if (target.kind === "pending_action") {
+        await ctx.reply("Your prepared action is ready to review in the Mini App. Chat approval cards will be enabled in the next rollout step.");
       }
     }
     await mainMenu(ctx);
@@ -149,19 +169,7 @@ export function registerCommands(bot: Bot<BotContext>): void {
   });
 
   bot.command("cancel", rateLimiter, async (ctx) => {
-    ctx.session.waitingFor = null;
-    delete ctx.session.emailToLink;
-    delete ctx.session.emailOtp;
-    delete ctx.session.emailOtpExpiry;
-    delete ctx.session.tradePair;
-    delete ctx.session.tradeDir;
-    delete ctx.session.tradeAmount;
-    delete ctx.session.limitPair;
-    delete ctx.session.limitDir;
-    delete ctx.session.limitAmount;
-    delete ctx.session.limitPrice;
-    delete ctx.session.tempPrivateKey;
-    delete ctx.session.tempAddress;
+    clearFlow(ctx.session);
     await ctx.reply("❌ Cancelled. Type /start for main menu.");
   });
 

@@ -33,6 +33,8 @@ import docsRoutes from "./routes/docs.js";
 import contactRoutes from "./routes/contact.js";
 import pushRoutes from "./routes/push.js";
 import aiRoutes from "./routes/ai.js";
+import alertRoutes from "./routes/alerts.js";
+import deepLinkRoutes from "./routes/deepLinks.js";
 import { QueueManager, QUEUES } from "../services/queue.js";
 
 
@@ -209,6 +211,8 @@ export function createServer(): HttpServer {
   app.use("/api/me/perp", perpRoutes);
   app.use("/api/docs", docsRoutes);
   app.use("/api/push", pushRoutes);
+  app.use("/api/me/alerts", alertRoutes);
+  app.use("/api/me/deep-links", deepLinkRoutes);
 
 
   app.use("/api/ai", aiRoutes);
