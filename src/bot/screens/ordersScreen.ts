@@ -6,6 +6,7 @@ import { DEXRegistry } from "../../services/dex/dexRegistry.js";
 import { escapeMd } from "../utils.js";
 import { activeChain } from "../chainContext.js";
 import { walletChainId } from "../../services/chains/walletChain.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function ordersScreen(ctx: BotContext, cancelId?: string): Promise<void> {
   ctx.session.backScreen = "main";
@@ -19,7 +20,8 @@ export async function ordersScreen(ctx: BotContext, cancelId?: string): Promise<
   const service = LimitOrderService.getInstance();
 
   if (cancelId) {
-    await service.cancel(parseInt(cancelId, 10));
+    const orderId = parseInt(cancelId, 10);
+    if (!Number.isNaN(orderId)) await service.cancel(orderId, user.id);
   }
 
   const orders = await service.getActive(user.id);
@@ -52,9 +54,7 @@ export async function ordersScreen(ctx: BotContext, cancelId?: string): Promise<
     .text("← Back", "screen:back")
     .text("🏠 Home", "home");
 
-  try {
-    await ctx.editMessageText(lines.join("\n"), { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch { }
+  await renderScreen(ctx, markdownView(lines.join("\n"), keyboard));
 }
 
 export async function limitCreateScreen(ctx: BotContext, stage?: string): Promise<void> {
@@ -79,8 +79,19 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
   // the callback that places the order picked the default, so a user with more
   // than one wallet could confirm against a name that wasn't charged.
   const chainWallets = wallets.filter((w) => walletChainId(w) === chain.chainId);
-  const orderWallet =
-    chainWallets.find((w) => w.isDefault) ?? chainWallets[0] ?? wallets[0]!;
+  const orderWallet = chainWallets.find((w) => w.isDefault) ?? chainWallets[0];
+  if (!orderWallet) {
+    const keyboard = new InlineKeyboard()
+      .text("➕ Create Wallet", "action:create_wallet")
+      .row()
+      .text("⛓ Change Network", "action:select_chain")
+      .text("🏠 Home", "home");
+    await renderScreen(ctx, markdownView(
+      `📋 *Limit Orders*\n\nYou do not have a wallet on ${escapeMd(chain.displayName)}.`,
+      keyboard
+    ));
+    return;
+  }
 
   const pair =
     (ctx.session.limitPair as string) ?? `${chain.nativeSymbol}/${chain.stableSymbol}`;
@@ -105,11 +116,11 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
       if (top16[i + 1]) keyboard.text(top16[i + 1]?.symbol ?? "", `action:limit_token:${top16[i + 1]?.symbol ?? ""}`);
       keyboard.row();
     }
-    keyboard.row().text("🏠 Home", "home");
+    keyboard.row()
+      .text("← Back", "action:limit_back_orders")
+      .text("🏠 Home", "home");
     const text = "📋 *New Limit Order*\n\nSelect the token you want to buy/sell:";
-    try { await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard }); } catch {
-      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
+    await renderScreen(ctx, markdownView(text, keyboard));
     return;
   }
 
@@ -118,17 +129,19 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
     const keyboard = new InlineKeyboard()
       .text(`🟢 BUY ${escapeMd(tokenOut)}`, "action:limit_dir:BUY")
       .text(`🔴 SELL ${escapeMd(tokenOut)}`, "action:limit_dir:SELL").row()
-      .text("🔄 Change Token", "action:limit_create_pair")
+      .text("← Back", "action:limit_back_pair")
       .text("🏠 Home", "home");
     const text = `📋 *New Limit Order — ${escapeMd(pair)}*\n\nPick direction:`;
-    try { await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard }); } catch { }
+    await renderScreen(ctx, markdownView(text, keyboard));
     return;
   }
 
   // Stage 3: Enter amount
   if (stage === "enter_amount") {
     ctx.session.waitingFor = "limit_amount";
-    const kb = new InlineKeyboard().text("❌ Cancel", "action:cancel_session");
+    const kb = new InlineKeyboard()
+      .text("← Back", "action:limit_back_direction")
+      .text("❌ Cancel", "action:cancel_session");
     await ctx.reply(`📋 *${dir} ${escapeMd(tokenOut)}*\n\nEnter amount in *${escapeMd(payToken)}*:`, {
       parse_mode: "Markdown", reply_markup: kb,
     });
@@ -138,7 +151,9 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
   // Stage 4: Enter target price
   if (stage === "enter_price") {
     ctx.session.waitingFor = "limit_price";
-    const kb = new InlineKeyboard().text("❌ Cancel", "action:cancel_session");
+    const kb = new InlineKeyboard()
+      .text("← Back", "action:limit_back_amount")
+      .text("❌ Cancel", "action:cancel_session");
     await ctx.reply(`📋 *${dir} ${escapeMd(tokenOut)}*\n\nAmount: ${amount} ${escapeMd(payToken)}\n\nEnter target price (USD):`, {
       parse_mode: "Markdown", reply_markup: kb,
     });
@@ -162,10 +177,11 @@ export async function limitCreateScreen(ctx: BotContext, stage?: string): Promis
     const keyboard = new InlineKeyboard()
       .text("✅ Place Order", "action:limit_confirm")
       .row()
-      .text("🔄 Start Over", "action:limit_create_pair")
+      .text("← Edit Price", "action:limit_back_price")
+      .text("🔄 Start Over", "action:limit_create_pair").row()
       .text("🏠 Home", "home");
 
-    try { await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard }); } catch { }
+    await renderScreen(ctx, markdownView(text, keyboard));
     return;
   }
 

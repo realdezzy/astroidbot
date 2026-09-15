@@ -39,7 +39,9 @@ export class LimitOrderService {
     const registry = DEXRegistry.getInstance();
 
     const wallet = await db.findWalletById(data.walletId);
-    if (!wallet) throw new Error(`Wallet ${data.walletId} not found`);
+    if (!wallet || wallet.userId !== data.userId) {
+      throw new Error(`Wallet ${data.walletId} not found`);
+    }
 
     const chainId = walletChainId(wallet);
     const tokens = await registry.getSwappableTokens(false, chainId);
@@ -119,10 +121,12 @@ export class LimitOrderService {
     });
   }
 
-  async cancel(orderId: number) {
+  async cancel(orderId: number, userId: number) {
     const db = DatabaseService.getInstance();
-    return db.prisma.limitOrder.update({
-      where: { id: orderId },
+    // Ownership belongs in the mutation itself. Callers may preflight for a
+    // friendly 404, but callback data and API ids are user-controlled.
+    return db.prisma.limitOrder.updateMany({
+      where: { id: orderId, userId, status: "ACTIVE" },
       data: { status: "CANCELLED" },
     });
   }

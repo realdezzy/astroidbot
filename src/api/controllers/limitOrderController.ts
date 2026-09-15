@@ -127,7 +127,7 @@ export class LimitOrderController {
       }
 
       const service = LimitOrderService.getInstance();
-      await service.cancel(id);
+      await service.cancel(id, req.userId!);
 
       res.json({ ok: true });
     } catch (error) {
