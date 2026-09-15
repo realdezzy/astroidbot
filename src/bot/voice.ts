@@ -4,10 +4,11 @@ import { DatabaseService } from "../services/db.js";
 import axios from "axios";
 import { spawn } from "child_process";
 import OpenAI, { toFile } from "openai";
-import { handleNLCommand } from "./nl.js";
+import { handleText } from "./textFlows.js";
 import type { BotContext } from "../types/bot.js";
+import { escapeMd } from "./utils.js";
 
-/** Voice-note transcription, then the same NL path text commands take. */
+/** Voice-note transcription, then the same flow state machine text uses. */
 export async function handleVoice(ctx: BotContext): Promise<unknown> {
     const tid = BigInt(ctx.from?.id ?? 0);
     if (!tid) return;
@@ -63,9 +64,13 @@ export async function handleVoice(ctx: BotContext): Promise<unknown> {
       }
 
       try { await ctx.api.deleteMessage(ctx.chat!.id, waitMsg.message_id); } catch { }
-      await ctx.reply(`🎤 *You said:* "${transcriptionText}"`, { parse_mode: "Markdown" });
+      const sensitive = ctx.session.waitingFor === "import_wallet" ||
+        ctx.session.waitingFor === "link_email_password";
+      if (!sensitive) {
+        await ctx.reply(`🎤 *You said:* "${escapeMd(transcriptionText)}"`, { parse_mode: "Markdown" });
+      }
 
-      await handleNLCommand(ctx, transcriptionText);
+      await handleText(ctx, transcriptionText);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("Voice transcription failed", { error: msg });

@@ -28,7 +28,7 @@ export { type BotContext } from "../types/bot.js";
 export function registerRouter(bot: Bot<BotContext>): void {
   registerCommands(bot);
 
-  bot.on("message:text", rateLimiter, handleText);
+  bot.on("message:text", rateLimiter, (ctx) => handleText(ctx));
   bot.on(":voice", rateLimiter, handleVoice);
   bot.on("callback_query:data", rateLimiter, handleCallback);
 

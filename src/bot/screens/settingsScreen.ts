@@ -1,6 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import type { BotContext } from "../../types/bot.js";
 import { DatabaseService } from "../../services/db.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<void> {
   ctx.session.backScreen = "main";
@@ -97,9 +98,5 @@ export async function settingsScreen(ctx: BotContext, toggle?: string): Promise<
     .text("← Back", "screen:back")
     .text("🏠 Home", "home");
 
-  try {
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {
-    // silent
-  }
+  await renderScreen(ctx, markdownView(text, keyboard));
 }

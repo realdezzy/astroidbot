@@ -5,6 +5,9 @@ import { TelegramService } from "../../services/telegram.js";
 import { DatabaseService } from "../../services/db.js";
 import { ConfigManager } from "../../config.js";
 import { escapeMd } from "../utils.js";
+import { markdownView, renderScreen } from "../ui/render.js";
+import { activeChain } from "../chainContext.js";
+import { chainLabel } from "../keyboards/builders.js";
 
 export async function mainMenu(ctx: BotContext): Promise<void> {
   ctx.session.backScreen = undefined;
@@ -26,6 +29,7 @@ export async function mainMenu(ctx: BotContext): Promise<void> {
     : 0;
 
   const displayName = ctx.from?.first_name ?? user?.username ?? "trader";
+  const chain = await activeChain(ctx);
 
   const lines = [
     `🤖 *AstroidBot*`,
@@ -33,6 +37,7 @@ export async function mainMenu(ctx: BotContext): Promise<void> {
     user ? `Welcome, *${escapeMd(displayName)}*!` : "Welcome to AstroidBot!",
     "",
     `Status: ${statusEmoji} *${status}*  ·  cycle: ${pollInterval}s`,
+    `Network: ${escapeMd(chainLabel(chain))}`,
     `Portfolio: $${totalBalance.toFixed(2)}${user ? `  ·  ⭐ ${user.points}pts` : ""}`,
     `💼 ${wallets.length} wallet(s)  ·  📋 ${orders} orders  ·  🧠 ${strategiesCount} strategies`,
   ];
@@ -44,6 +49,8 @@ export async function mainMenu(ctx: BotContext): Promise<void> {
   const text = lines.join("\n");
 
   const keyboard = new InlineKeyboard()
+    .text(`⛓ ${chain.displayName}`, "action:select_chain")
+    .row()
     .text("📊 Portfolio", "screen:portfolio")
     .text("💼 Wallets", "screen:wallets")
     .row()
@@ -56,9 +63,11 @@ export async function mainMenu(ctx: BotContext): Promise<void> {
     .text("⚙️ Settings", "screen:settings")
     .text(user?.email ? "📧 Email ✓" : "📧 Link Email", user?.email ? "action:noop" : "action:link_email_start");
 
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard }); } catch {}
-  } else {
-    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
+  if (ConfigManager.getInstance().telegramAdminIds.includes(BigInt(ctx.from?.id ?? 0))) {
+    keyboard.row().text("🛡 Admin Control", "screen:control");
   }
+  const miniAppUrl = ConfigManager.getInstance().config.TELEGRAM_MINI_APP_URL;
+  if (miniAppUrl) keyboard.row().webApp("🚀 Open Astroid App", miniAppUrl);
+
+  await renderScreen(ctx, markdownView(text, keyboard));
 }

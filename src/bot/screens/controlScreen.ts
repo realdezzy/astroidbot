@@ -4,6 +4,7 @@ import { BotStatus } from "../../types.js";
 import { TelegramService } from "../../services/telegram.js";
 import { DatabaseService } from "../../services/db.js";
 import { ConfigManager } from "../../config.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function controlScreen(ctx: BotContext): Promise<void> {
   ctx.session.backScreen = "main";
@@ -45,9 +46,5 @@ export async function controlScreen(ctx: BotContext): Promise<void> {
     .text("← Back", "screen:back")
     .text("🏠 Home", "home");
 
-  try {
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {
-    // message may be too old to edit — silently ignore
-  }
+  await renderScreen(ctx, markdownView(text, keyboard));
 }

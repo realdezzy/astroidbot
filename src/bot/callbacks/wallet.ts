@@ -10,6 +10,7 @@ import { logger } from "../../utils/logger.js";
 import { chainPicker, chainLabel } from "../keyboards/builders.js";
 import { expandChainId } from "./codec.js";
 import type { BotContext } from "../../types/bot.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 /**
  * Chain-aware wallet provisioning for Telegram.
@@ -97,7 +98,7 @@ export async function createWalletOnChain(
         reply_markup: new InlineKeyboard()
           .url("🔎 Explorer", adapter.descriptor.explorerAddressUrl(address))
           .row()
-          .text("👛 Wallets", "wallets_screen"),
+          .text("👛 Wallets", "screen:wallets"),
       }
     );
   } catch (error) {
@@ -232,8 +233,16 @@ export const walletRoutes: CallbackRoutes = {
     import_wallet: (ctx) => promptChainForWallet(ctx, "import"),
 
     delete_wallet: async (ctx) => {
-      ctx.session.waitingFor = "delete_wallet";
-      return ctx.reply("🗑 Enter the wallet ID to delete:\n\n/cancel to abort.");
+      const user = await currentUser(ctx);
+      if (!user) return;
+      const wallets = await DatabaseService.getInstance().findWalletsByUserId(user.id);
+      if (wallets.length === 0) return walletsScreen(ctx);
+      const keyboard = new InlineKeyboard();
+      for (const wallet of wallets) {
+        keyboard.text(`🗑 ${wallet.name}`, `action:delete_wallet_select:${wallet.id}`).row();
+      }
+      keyboard.text("← Back", "screen:wallets");
+      return renderScreen(ctx, markdownView("🗑 *Delete Wallet*\n\nChoose a wallet:", keyboard));
     },
 
     reveal_wallet: async (ctx) => {
@@ -273,6 +282,33 @@ export const walletRoutes: CallbackRoutes = {
   },
 
   prefix: {
+    "delete_wallet_select:": async (ctx, args) => {
+      const walletId = numericArg(args);
+      const user = await currentUser(ctx);
+      if (walletId === null || !user) return walletsScreen(ctx);
+      const wallet = await DatabaseService.getInstance().findWalletById(walletId);
+      if (!wallet || wallet.userId !== user.id) return walletsScreen(ctx);
+      const keyboard = new InlineKeyboard()
+        .text("Delete permanently", `action:delete_wallet_confirm:${wallet.id}`)
+        .row()
+        .text("Keep wallet", "screen:wallets");
+      return renderScreen(ctx, markdownView(
+        `⚠️ *Delete ${escapeMd(wallet.name)}?*\n\nThis removes the wallet from AstroidBot. Ensure its recovery key is backed up.`,
+        keyboard
+      ));
+    },
+
+    "delete_wallet_confirm:": async (ctx, args) => {
+      const walletId = numericArg(args);
+      const user = await currentUser(ctx);
+      if (walletId === null || !user) return walletsScreen(ctx);
+      const deleted = await DatabaseService.getInstance().prisma.wallet.deleteMany({
+        where: { id: walletId, userId: user.id },
+      });
+      await ctx.reply(deleted.count === 0 ? "❌ Wallet not found." : "✅ Wallet deleted.");
+      return walletsScreen(ctx);
+    },
+
     "set_default_wallet:": async (ctx, args) => {
       const walletId = numericArg(args);
       if (walletId === null) return;

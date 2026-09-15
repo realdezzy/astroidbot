@@ -3,17 +3,12 @@ import { DatabaseService } from "../services/db.js";
 import { TelegramService } from "../services/telegram.js";
 import { BotStatus } from "../types.js";
 import { isAdmin } from "./context.js";
-import { mainMenu } from "./screens/mainMenu.js";
-import { settingsScreen } from "./screens/settingsScreen.js";
+import { screenMap } from "./context.js";
 import { ConfigManager } from "../config.js";
-import { portfolioScreen } from "./screens/portfolioScreen.js";
-import { walletsScreen } from "./screens/walletsScreen.js";
-import { ordersScreen } from "./screens/ordersScreen.js";
-import { tradeScreen } from "./screens/tradeScreen.js";
-import { tradesScreen } from "./screens/tradesScreen.js";
-import { agentsScreen } from "./screens/agentsScreen.js";
 import { walletDescriptor } from "../services/chains/walletChain.js";
 import { activeChain } from "./chainContext.js";
+import { setActiveChain } from "./chainContext.js";
+import { tradeScreen } from "./screens/tradeScreen.js";
 import type { BotContext } from "../types/bot.js";
 import { Prisma } from "@prisma/client";
 
@@ -28,6 +23,7 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
   }
   const history = ctx.session.chatHistory.slice(-6);
 
+  await ctx.replyWithChatAction("typing").catch(() => undefined);
   const ai = (await import("../services/ai.js")).AIOrchestrator.getInstance();
   const parsed = await ai.parseCommand(user.id, text, history);
 
@@ -91,16 +87,7 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
       await ctx.reply(replyText, { parse_mode: "Markdown" });
     }
 
-    if (suggestedScreen) {
-      if (suggestedScreen === "main") return mainMenu(ctx);
-      if (suggestedScreen === "portfolio") return portfolioScreen(ctx);
-      if (suggestedScreen === "wallets") return walletsScreen(ctx);
-      if (suggestedScreen === "orders") return ordersScreen(ctx);
-      if (suggestedScreen === "settings") return settingsScreen(ctx);
-      if (suggestedScreen === "trade") return tradeScreen(ctx, "pick_pair");
-      if (suggestedScreen === "trades") return tradesScreen(ctx);
-      if (suggestedScreen === "agents") return agentsScreen(ctx);
-    }
+    if (suggestedScreen && screenMap[suggestedScreen]) return screenMap[suggestedScreen](ctx);
     return;
   }
 
@@ -123,18 +110,26 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
     const aiTokenIn = (t.tokenIn as string) ?? aiChain.nativeSymbol;
     const aiTokenOut = (t.tokenOut as string) ?? aiChain.stableSymbol;
 
-    const qm = (await import("../services/queue.js")).QueueManager.getInstance();
-    await qm.enqueueTrade({
-      walletId: wallet.id, userId: user.id, senderAddress: wallet.address,
-      tokenIn: aiTokenIn, tokenOut: aiTokenOut,
-      amountIn: (t.amountIn as number) ?? 1, direction: ((t.direction as string) ?? "BUY") as "BUY" | "SELL",
-      reason: `NL: ${text}`,
-    });
-    const reply = `✅ Trade enqueued on ${aiChain.displayName}: ${(t.direction as string) ?? "BUY"} ${t.amountIn ?? ""} ${aiTokenIn} → ${aiTokenOut}`;
+    const amount = Number(t.amountIn ?? 1);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      await ctx.reply("❌ I could not determine a valid trade amount. Try again with an amount, such as `swap 10 USDC to ETH`.", { parse_mode: "Markdown" });
+      return;
+    }
+
+    // Natural language may prepare a trade, but moving funds always goes
+    // through the same quote preview and explicit confirmation as button flow.
+    setActiveChain(ctx, aiChain.chainId);
+    ctx.session.tradeWalletId = wallet.id;
+    ctx.session.tradeTokenIn = aiTokenIn;
+    ctx.session.tradeTokenOut = aiTokenOut;
+    ctx.session.tradeAmount = amount;
+    delete ctx.session.tradeQuote;
+
+    const reply = `I prepared this swap on ${aiChain.displayName}. Review the live route and confirm below.`;
     ctx.session.chatHistory.push({ role: "assistant", content: reply });
     ctx.session.chatHistory = ctx.session.chatHistory.slice(-6);
     await ctx.reply(reply);
-    return;
+    return tradeScreen(ctx, "confirm");
   }
 
   if (action === "info") {
@@ -143,12 +138,8 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
     ctx.session.chatHistory.push({ role: "assistant", content: reply });
     ctx.session.chatHistory = ctx.session.chatHistory.slice(-6);
 
-    if (topic === "portfolio") return (await import("./screens/portfolioScreen.js")).portfolioScreen(ctx);
-    if (topic === "wallets") return (await import("./screens/walletsScreen.js")).walletsScreen(ctx);
-    if (topic === "orders") return (await import("./screens/ordersScreen.js")).ordersScreen(ctx);
-    if (topic === "status" || topic === "settings") return (await import("./screens/settingsScreen.js")).settingsScreen(ctx);
-    if (topic === "trades") return (await import("./screens/tradesScreen.js")).tradesScreen(ctx);
-    if (topic === "agents") return (await import("./screens/agentsScreen.js")).agentsScreen(ctx);
+    const screen = screenMap[topic === "status" ? "settings" : topic];
+    if (screen) return screen(ctx);
   }
 
   if (action === "settings") {

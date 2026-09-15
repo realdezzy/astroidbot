@@ -78,11 +78,16 @@ async function resolveTypedToken(
   return { token: chosen.source === "provider" ? chosen.symbol : chosen.contractId };
 }
 
-export async function handleText(ctx: BotContext): Promise<unknown> {
+export async function handleText(ctx: BotContext, suppliedText?: string): Promise<unknown> {
     const tid = BigInt(ctx.from?.id ?? 0);
     if (!tid) return;
     const wf = ctx.session.waitingFor;
-    const text = ctx.message?.text?.trim() ?? "";
+    const text = suppliedText?.trim() ?? ctx.message?.text?.trim() ?? "";
+
+    const deleteSensitiveInput = async () => {
+      if (!ctx.chat || !ctx.message) return;
+      await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id).catch(() => undefined);
+    };
 
     // ── Link email flow ──
     if (wf === "link_email") {
@@ -180,6 +185,7 @@ export async function handleText(ctx: BotContext): Promise<unknown> {
 
     if (wf === "link_email_password") {
       const pw = text;
+      await deleteSensitiveInput();
       if (pw.length < 8 || !/[a-zA-Z]/.test(pw) || !/[0-9]/.test(pw))
         return ctx.reply("Password: 8+ chars, 1 letter + 1 number. Try again:");
       const bcrypt_rounds = ConfigManager.getInstance().config.BCRYPT_ROUNDS;
@@ -196,6 +202,7 @@ export async function handleText(ctx: BotContext): Promise<unknown> {
 
     // ── Wallet import ──
     if (wf === "import_wallet") {
+      await deleteSensitiveInput();
       return importWalletKey(ctx, text);
     }
 

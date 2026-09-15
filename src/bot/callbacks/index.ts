@@ -1,5 +1,5 @@
 import { CallbackRouter } from "./registry.js";
-import { decodeCallback } from "./codec.js";
+import { decodeCallback, expandChainId } from "./codec.js";
 import { agentRoutes } from "./agents.js";
 import { tradeRoutes } from "./trade.js";
 import { walletRoutes, createWalletOnChain, promptKeyForChain } from "./wallet.js";
@@ -7,6 +7,8 @@ import { systemRoutes, bareCallbacks } from "./system.js";
 import { isAdmin, screenMap } from "../context.js";
 import { mainMenu } from "../screens/mainMenu.js";
 import type { BotContext } from "../../types/bot.js";
+import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
+import { setActiveChain } from "../chainContext.js";
 
 /**
  * The single entry point for `callback_query:data`.
@@ -49,9 +51,10 @@ export async function handleCallback(ctx: BotContext): Promise<unknown> {
     return ctx.answerCallbackQuery();
   }
 
-  await ctx.answerCallbackQuery();
-
-  if (data === "home") return mainMenu(ctx);
+  if (data === "home") {
+    await ctx.answerCallbackQuery();
+    return mainMenu(ctx);
+  }
 
   if (data === "screen:control" && !isAdmin(ctx)) {
     await ctx.answerCallbackQuery({ text: "🔒 Admin only", show_alert: true });
@@ -59,6 +62,7 @@ export async function handleCallback(ctx: BotContext): Promise<unknown> {
   }
 
   if (data.startsWith("screen:")) {
+    await ctx.answerCallbackQuery();
     const name = data.slice(7);
 
     if (name === "back") {
@@ -75,19 +79,37 @@ export async function handleCallback(ctx: BotContext): Promise<unknown> {
   // "action:"-prefixed, so they resolve before the action dispatcher.
   const parsed = decodeCallback(data);
   if (parsed?.namespace === "wallet") {
+    await ctx.answerCallbackQuery();
     if (parsed.action === "new") return createWalletOnChain(ctx, parsed.args[0] ?? "");
     if (parsed.action === "imp") return promptKeyForChain(ctx, parsed.args[0] ?? "");
   }
+  if (parsed?.namespace === "chain" && parsed.action === "set") {
+    const chainId = expandChainId(parsed.args[0] ?? "");
+    const registry = ChainAdapterRegistry.getInstance();
+    if (!registry.tradable().some((descriptor) => descriptor.chainId === chainId)) {
+      return ctx.answerCallbackQuery({ text: "That network is unavailable.", show_alert: true });
+    }
+    setActiveChain(ctx, chainId);
+    await ctx.answerCallbackQuery({ text: `Network changed to ${registry.get(chainId).descriptor.displayName}` });
+    return mainMenu(ctx);
+  }
 
   const bare = bareCallbacks[data];
-  if (bare) return bare(ctx);
+  if (bare) {
+    const result = await bare(ctx);
+    await ctx.answerCallbackQuery().catch(() => undefined);
+    return result;
+  }
 
-  if (!data.startsWith("action:")) return mainMenu(ctx);
+  if (!data.startsWith("action:")) {
+    return ctx.answerCallbackQuery({ text: "This button has expired. Open the menu again.", show_alert: true });
+  }
 
   const { handled, result } = await routes().dispatch(ctx, data.slice(7));
-  if (handled) return result;
+  if (handled) {
+    await ctx.answerCallbackQuery().catch(() => undefined);
+    return result;
+  }
 
-  // Unrecognised action. Falling back to the menu matches the previous
-  // behaviour and keeps a stale button from stranding the user.
-  return mainMenu(ctx);
+  return ctx.answerCallbackQuery({ text: "This button has expired. Open the menu again.", show_alert: true });
 }

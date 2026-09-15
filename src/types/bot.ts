@@ -1,4 +1,5 @@
 import type { Context, SessionFlavor } from "grammy";
+import type { WaitingFor } from "../bot/session.js";
 
 /**
  * How long a quoted price stays offerable in the Telegram flow.
@@ -32,7 +33,7 @@ export interface QuotedTrade {
 }
 
 export interface SessionData {
-  waitingFor: string | null;
+  waitingFor: WaitingFor | null;
   backScreen: string | undefined;
   emailToLink: string | undefined;
   emailOtp: string | undefined;
@@ -45,6 +46,7 @@ export interface SessionData {
   tradeTokenOut: string | undefined;
   /** Set when the preview is rendered, checked when Confirm is tapped. */
   tradeQuote: QuotedTrade | undefined;
+  pendingActionId: string | undefined;
   /**
    * Candidates from the last token lookup, referenced by index from callback
    * data.

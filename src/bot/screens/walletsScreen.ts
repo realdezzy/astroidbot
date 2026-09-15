@@ -4,6 +4,7 @@ import { DatabaseService } from "../../services/db.js";
 import { walletDescriptor, groupByChainId } from "../../services/chains/walletChain.js";
 import { chainLabel } from "../keyboards/builders.js";
 import { escapeMd, shortenAddress } from "../utils.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function walletsScreen(ctx: BotContext): Promise<void> {
   ctx.session.backScreen = "main";
@@ -60,7 +61,5 @@ export async function walletsScreen(ctx: BotContext): Promise<void> {
     .text("← Back", "screen:back").row()
     .text("🏠 Home", "home");
 
-  try {
-    await ctx.editMessageText(lines.join("\n"), { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch {}
+  await renderScreen(ctx, markdownView(lines.join("\n"), keyboard));
 }

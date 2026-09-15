@@ -7,6 +7,9 @@ import { controlScreen } from "../screens/controlScreen.js";
 import { settingsScreen } from "../screens/settingsScreen.js";
 import { requireAdmin } from "../context.js";
 import type { CallbackRoutes } from "./registry.js";
+import { clearFlow } from "../session.js";
+import { chainPicker } from "../keyboards/builders.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 /** Navigation, settings, session control, and admin actions. */
 
@@ -14,6 +17,12 @@ export const systemRoutes: CallbackRoutes = {
   exact: {
     refresh_portfolio: (ctx) => portfolioScreen(ctx),
     refresh_control: (ctx) => controlScreen(ctx),
+    select_chain: (ctx) => renderScreen(ctx, markdownView(
+      "⛓ *Select Network*\n\nToken discovery and trading screens will use this network.",
+      chainPicker("chain", "set", { tradableOnly: true })
+        .row()
+        .text("← Back", "home")
+    )),
 
     link_email_start: async (ctx) => {
       ctx.session.waitingFor = "link_email";
@@ -28,20 +37,7 @@ export const systemRoutes: CallbackRoutes = {
      * values the user thought they had abandoned.
      */
     cancel_session: async (ctx) => {
-      ctx.session.waitingFor = null;
-      delete ctx.session.emailToLink;
-      delete ctx.session.emailOtp;
-      delete ctx.session.emailOtpExpiry;
-      delete ctx.session.tradePair;
-      delete ctx.session.tradeDir;
-      delete ctx.session.tradeAmount;
-      delete ctx.session.limitPair;
-      delete ctx.session.limitDir;
-      delete ctx.session.limitAmount;
-      delete ctx.session.limitPrice;
-      delete ctx.session.tempPrivateKey;
-      delete ctx.session.tempAddress;
-      delete ctx.session.importChainId;
+      clearFlow(ctx.session);
       return mainMenu(ctx);
     },
 

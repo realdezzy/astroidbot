@@ -6,6 +6,22 @@ import { DatabaseService } from "./db.js";
 import { BotStatus } from "../types.js";
 import { registerRouter } from "../bot/router.js";
 import type { BotContext } from "../types/bot.js";
+import { initialSession } from "../bot/session.js";
+import { telegramSessionStorage } from "../bot/sessionStorage.js";
+import { TelegramTopicService, type TelegramTopicPurpose } from "./telegramTopics.js";
+
+const USER_COMMANDS = [
+  { command: "start", description: "Open the main dashboard" },
+  { command: "trade", description: "Create a token swap" },
+  { command: "token", description: "Look up a token" },
+  { command: "portfolio", description: "View your holdings" },
+  { command: "wallets", description: "Manage your wallets" },
+  { command: "orders", description: "Manage limit orders" },
+  { command: "agents", description: "Manage AI trading agents" },
+  { command: "settings", description: "Configure risk and execution" },
+  { command: "help", description: "Show help" },
+  { command: "cancel", description: "Cancel the current action" },
+] as const;
 
 export class TelegramService {
   private static instance: TelegramService;
@@ -27,27 +43,8 @@ export class TelegramService {
 
     this.bot.use(
       session({
-        initial: () => ({
-          waitingFor: null as string | null,
-          backScreen: undefined as string | undefined,
-          emailToLink: undefined as string | undefined,
-          tradePair: undefined as string | undefined,
-          tradeDir: undefined as string | undefined,
-          tradeAmount: undefined as number | string | undefined,
-          tradeWalletId: undefined as number | undefined,
-          tradeTokenIn: undefined as string | undefined,
-          tradeTokenOut: undefined as string | undefined,
-          limitPair: undefined as string | undefined,
-          limitDir: undefined as string | undefined,
-          limitAmount: undefined as number | string | undefined,
-          limitPrice: undefined as number | string | undefined,
-          tempPrivateKey: undefined as string | undefined,
-          tempAddress: undefined as string | undefined,
-          tempAgentName: undefined as string | undefined,
-          tempAgentContext: undefined as string | undefined,
-          importChainId: undefined as string | undefined,
-          activeChainId: undefined as string | undefined,
-        }),
+        initial: initialSession,
+        storage: telegramSessionStorage(),
       })
     );
 
@@ -81,10 +78,17 @@ export class TelegramService {
       return;
     }
 
+    await this.bot.init();
+    await this.bot.api.setMyCommands(USER_COMMANDS);
+    const miniAppUrl = ConfigManager.getInstance().config.TELEGRAM_MINI_APP_URL;
+    await this.bot.api.setChatMenuButton({
+      menu_button: miniAppUrl
+        ? { type: "web_app", text: "Open Astroid", web_app: { url: miniAppUrl } }
+        : { type: "commands" },
+    });
+
     if (this.useWebhook) {
       const webhookUrl = ConfigManager.getInstance().config.TELEGRAM_WEBHOOK_URL!;
-
-      await this.bot.init();
 
       await this.bot.api.setWebhook(webhookUrl, {
         allowed_updates: ["message", "callback_query"],
@@ -135,17 +139,27 @@ export class TelegramService {
     return this.bot !== null;
   }
 
-  async sendAlert(userId: number, message: string): Promise<void> {
-    if (!this.bot) return;
+  async sendAlert(userId: number, message: string, purpose: TelegramTopicPurpose = "RISK"): Promise<boolean> {
+    if (!this.bot) return false;
     try {
       const db = DatabaseService.getInstance();
       const user = await db.findUserById(userId);
       if (user) {
-        await this.bot.api.sendMessage(Number(user.telegramId), message);
+        const chatId = Number(user.telegramId);
+        const threadId = await TelegramTopicService.resolve(this.bot.api, userId, chatId, purpose);
+        try {
+          await this.bot.api.sendMessage(chatId, message, threadId ? { message_thread_id: threadId } : {});
+        } catch (error) {
+          if (!threadId) throw error;
+          await TelegramTopicService.forget(userId, purpose);
+          await this.bot.api.sendMessage(chatId, message);
+        }
+        return true;
       }
     } catch (error) {
       logger.error("Failed to send Telegram alert", { error, userId });
     }
+    return false;
   }
 
   setStatus(status: BotStatus, reason?: string): void {

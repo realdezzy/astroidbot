@@ -7,6 +7,7 @@ import { walletChainId, walletDescriptor, groupByChainId } from "../../services/
 import { chainIcon } from "../keyboards/builders.js";
 import { RiskManager } from "../../services/riskManager.js";
 import { escapeMd, shortenAddress } from "../utils.js";
+import { markdownView, renderScreen } from "../ui/render.js";
 
 export async function portfolioScreen(ctx: BotContext): Promise<void> {
   ctx.session.backScreen = "main";
@@ -19,12 +20,10 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
 
   const wallets = await db.findWalletsByUserId(user.id);
   if (wallets.length === 0) {
-    try {
-      await ctx.editMessageText(
-        "📊 *Portfolio*\n\nNo wallets found\\.",
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🏠 Home", "home") }
-      );
-    } catch { }
+    await renderScreen(ctx, markdownView(
+      "📊 *Portfolio*\n\nNo wallets found\\.",
+      new InlineKeyboard().text("➕ Create Wallet", "action:create_wallet").row().text("🏠 Home", "home")
+    ));
     return;
   }
 
@@ -82,7 +81,5 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
     .text("← Back", "screen:back").row()
     .text("🏠 Home", "home");
 
-  try {
-    await ctx.editMessageText(allLines.join("\n"), { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch { }
+  await renderScreen(ctx, markdownView(allLines.join("\n"), keyboard));
 }
