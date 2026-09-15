@@ -14,6 +14,7 @@ import {
   NotFoundError,
 } from "../errors.js";
 import { JWT_ALGORITHM, JWT_ISSUER } from "../jwtOptions.js";
+import { TelegramMiniAppAuthService } from "../../services/telegramMiniAppAuth.js";
 
 function generateTokens(userId: number, telegramId?: string): { accessToken: string; refreshToken: string } {
   const config = ConfigManager.getInstance().config;
@@ -83,6 +84,33 @@ function formatUser(user: {
 }
 
 export class AuthController {
+  static async loginTelegramMiniApp(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const launch = await TelegramMiniAppAuthService.verify(String(req.body.initData ?? ""));
+      const db = DatabaseService.getInstance();
+      let user = await db.findUserByTelegramId(BigInt(launch.user.id));
+      if (!user) {
+        user = await db.createUser({
+          telegramId: BigInt(launch.user.id),
+          username: launch.user.username,
+        });
+        provisionDefaultWallet(user.id).catch((error) =>
+          logger.error("Mini App default-wallet provisioning failed", { userId: user!.id, error })
+        );
+      }
+      if (!user.isActive) return next(new UnauthorizedError("Account is disabled"));
+
+      const tokens = generateTokens(user.id, String(launch.user.id));
+      await storeRefreshToken(user.id, tokens.refreshToken);
+      return res.json({ ...tokens, user: formatUser(user), startParam: launch.startParam ?? null });
+    } catch (error) {
+      logger.warn("Telegram Mini App authentication rejected", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return next(new UnauthorizedError(error instanceof Error ? error.message : "Invalid Telegram launch"));
+    }
+  }
+
   static async registerEmail(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const { email, password, username } = req.body as {

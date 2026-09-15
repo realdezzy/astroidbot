@@ -8,6 +8,10 @@ export const telegramLoginSchema = z.object({
   hash: z.string(),
 });
 
+export const telegramMiniAppSchema = z.object({
+  initData: z.string().min(1).max(16_384),
+});
+
 export const emailRegisterSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).regex(/[a-zA-Z]/, "Password must contain a letter").regex(/[0-9]/, "Password must contain a number"),

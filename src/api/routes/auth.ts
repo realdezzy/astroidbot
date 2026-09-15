@@ -12,6 +12,7 @@ import {
   linkTelegramSchema,
   linkEmailSchema,
   refreshTokenSchema,
+  telegramMiniAppSchema,
 } from "../../validation/api/schemas.js";
 
 const router = Router();
@@ -33,6 +34,7 @@ router.post("/email/reset-password/:token", validateBody(passwordResetExecuteSch
 
 // Telegram Login / Link
 router.post("/telegram", optionalAuth, validateBody(telegramLoginSchema), AuthController.loginOrLinkTelegram);
+router.post("/telegram-mini-app", validateBody(telegramMiniAppSchema), AuthController.loginTelegramMiniApp);
 
 // Link Telegram (authenticated)
 router.post("/telegram/link", authenticate, validateBody(linkTelegramSchema), AuthController.linkTelegram);
