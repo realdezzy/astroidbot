@@ -10,6 +10,8 @@ import { ConfigManager } from "../../../src/config.js";
  */
 
 const indexedPool = {
+  aggregate: vi.fn().mockResolvedValue({ _min: { lastIndexedBlock: 300000n } }),
+  count: vi.fn().mockResolvedValue(0),
   findMany: vi.fn().mockResolvedValue([]),
   findUnique: vi.fn(),
   update: vi.fn(),
@@ -128,7 +130,7 @@ function serve(onSignatures: (params: Record<string, unknown>) => unknown[]) {
       // deltas is balanceDeltas.test.ts's job, not this file's.
       if (Array.isArray(body)) {
         for (const call of body) calls.push({ method: call.method, params: call.params });
-        return { ok: true, json: async () => body.map((c) => ({ id: c.id, result: null })) };
+        return { ok: true, json: async () => body.map((c) => ({ id: c.id, result: { meta: { err: null, preTokenBalances: [], postTokenBalances: [] } } })) };
       }
 
       calls.push({ method: body.method, params: body.params });
@@ -229,36 +231,33 @@ describe("solana ingestion cursors", () => {
   });
 
   describe("forward pass", () => {
-    it("spends its budget on the oldest unread signatures, not the newest", async () => {
-      // The RPC returns the newest `limit` signatures and silently omits the
-      // rest, so a pool busier than one tick's budget used to lose everything
-      // between the cursor and the newest page — a hole no cursor could
-      // describe, and therefore one nothing would ever retry.
+    it("retains the previous cursor while a durable backward page is incomplete", async () => {
       const pool = poolAt("sig-caught-up");
-      serve(() => signatures("sig", 120));
-
+      serve(() => signatures("sig", 50));
       const { progress } = await indexer().ingestPool(pool, new Map(), []);
-
-      // 120 unread, budget of 50: the walk stops 50 above where it resumed,
-      // contiguous with the last tick rather than adjacent to the head.
-      expect(progress?.signature).toBe("sig-49");
+      expect(progress).toMatchObject({ signature: "sig-caught-up", forwardBefore: "sig-0", forwardHead: "sig-49" });
     });
 
-    it("pages the signature list rather than trusting one call to reach the cursor", async () => {
-      const pool = poolAt("sig-caught-up");
-
-      let page = 0;
+    it("resumes a saved page and advances to its original head only when complete", async () => {
       serve((params) => {
+        expect(params.before).toBe("page-boundary");
         expect(params.until).toBe("sig-caught-up");
-        // A full page means there may be more between it and `until`.
-        return page++ === 0 ? signatures("first", 1_000) : signatures("second", 10);
+        return signatures("older", 10);
       });
+      const pool = { ...poolAt("sig-caught-up"), forwardBefore: "page-boundary", forwardHead: "original-head" };
+      const { progress } = await indexer().ingestPool(pool, new Map(), []);
+      expect(progress).toMatchObject({ signature: "original-head", forwardBefore: null, forwardHead: null });
+    });
 
-      await indexer().ingestPool(pool, new Map(), []);
-
-      const listings = calls.filter((c) => c.method === "getSignaturesForAddress");
-      expect(listings).toHaveLength(2);
-      expect((listings[1]!.params[1] as Record<string, unknown>).before).toBe("first-0");
+    it("refuses to advance when a transaction body is unavailable", async () => {
+      serve(() => signatures("sig", 5));
+      const real = globalThis.fetch;
+      vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (Array.isArray(body)) return { ok: true, json: async () => body.map((c) => ({ id: c.id, result: null })) };
+        return real(url, init);
+      }));
+      await expect(indexer().ingestPool(poolAt("old"), new Map(), [])).rejects.toThrow("Transaction unavailable");
     });
 
     it("advances past signatures that held no decodable swap", async () => {
@@ -295,7 +294,7 @@ describe("solana ingestion cursors", () => {
       await indexer().ingest([pool], 300_000n);
 
       const writes = transaction.mock.calls[0]?.[0] as unknown[];
-      const data = (indexedPool.update.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
+      const data = (indexedPool.update.mock.calls.find(([arg]) => "lastSignature" in arg.data)?.[0] as { data: Record<string, unknown> }).data;
       expect(writes.length).toBeGreaterThan(0);
       expect(data.lastSignature).toBe("sig-4");
       expect(data).not.toHaveProperty("lastPrice0");

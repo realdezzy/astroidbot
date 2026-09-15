@@ -1,10 +1,14 @@
+import bs58 from "bs58";
+import { decodePumpTrades, PUMP_PROGRAM } from "./pumpCurve.js";
+import { assertIngestionLease } from "../ingestionLease.js";
+import { discoverSolanaPrograms } from "./discoverPrograms.js";
+import { decodeInstructionSwaps, type ParsedSwapTransaction } from "./instructionSwaps.js";
 import { DatabaseService } from "../../db.js";
 import { logger } from "../../../utils/logger.js";
 import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { bucketStartOf } from "../types.js";
 import {
   decodeSolanaSwap,
-  probeDecodable,
   type SolanaTransactionMeta,
 } from "./balanceDeltas.js";
 import type { BackfillRun, ChainIndexer, IndexRunResult } from "../types.js";
@@ -65,13 +69,22 @@ interface SolanaPool {
    * per tick, for a column already in hand.
    */
   lastSignature: string | null;
+  forwardBefore?: string | null;
+  forwardHead?: string | null;
+  forwardTargetBlock?: bigint | null;
+  lastSwapAt?: Date | null;
+  lastPrice0?: number | null;
+  programId?: string | null;
+  vault0?: string | null;
+  vault1?: string | null;
+  baseToken?: string | null;
 }
 
 /**
  * Signatures per `getSignaturesForAddress` call. The RPC caps this at 1000, and
  * listing is cheap — it is fetching each transaction's body that costs.
  */
-const SIGNATURE_PAGE_SIZE = 1_000;
+
 
 /**
  * Pages the forward pass will walk to reach its `until` mark.
@@ -80,7 +93,7 @@ const SIGNATURE_PAGE_SIZE = 1_000;
  * is not one this indexer can catch up on within a tick anyway, and the bound
  * stops a misconfigured cursor from paging an account's entire history.
  */
-const MAX_SIGNATURE_PAGES = 20;
+
 
 /**
  * Wrapped SOL.
@@ -96,6 +109,9 @@ const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
 interface PoolProgress {
   /** Newest signature *read* this pass, decodable or not. */
   signature: string;
+  forwardBefore?: string | null;
+  forwardHead?: string | null;
+  targetBlock?: bigint;
   /** Newest price decoded, or null if nothing in the batch priced. */
   price: number | null;
   at: Date | null;
@@ -235,7 +251,7 @@ export class SolanaIndexer implements ChainIndexer {
       await db.prisma.indexerCursor.create({
         data: {
           chainId: this.chainId,
-          lastBlock: BigInt(slot),
+          lastBlock: 0n,
           lastPoolBlock: BigInt(slot),
           backfillBlock: BigInt(slot),
         },
@@ -257,13 +273,14 @@ export class SolanaIndexer implements ChainIndexer {
     // its request budget walking backwards.
     const backfilled = await this.backfillStep();
 
-    return this.result(
+    const committed = await db.prisma.indexerCursor.findUnique({ where: { chainId: this.chainId } });
+    return { ...this.result(
       poolsDiscovered,
       swapsIngested + backfilled.swapsIngested,
       bucketsWritten + backfilled.bucketsWritten,
       cursor?.lastBlock ?? BigInt(slot),
-      BigInt(slot)
-    );
+      committed?.lastBlock ?? 0n
+    ), targetBlock: BigInt(slot), sourcesProcessed: pools.length };
   }
 
   private result(
@@ -285,174 +302,10 @@ export class SolanaIndexer implements ChainIndexer {
    * we want to start following them.
    */
   private async discoverPools(): Promise<number> {
-    const db = DatabaseService.getInstance();
-
-    const tokens = await db.prisma.indexedToken.findMany({
-      where: { chainId: this.chainId },
-      orderBy: { volume24h: { sort: "desc", nulls: "last" } },
-      take: 25,
-    });
-
-    // Seeded from the descriptor's own pair on first run, before any token has
-    // been catalogued. Without this the indexer would never start: it would
-    // have no tokens because it had ingested nothing, and ingest nothing
-    // because it had no pools.
-    const quoteMint = await this.mintFor(this.descriptor.stableSymbol);
-    const baseMint = await this.mintFor(this.descriptor.nativeSymbol);
-    if (!quoteMint || !baseMint) return 0;
-
-    const candidates = tokens.length > 0 ? tokens.map((t) => t.contractId) : [baseMint];
-
-    let discovered = 0;
-
-    for (const mint of candidates.slice(0, this.settings.maxPools)) {
-      if (mint === quoteMint) continue;
-
-      try {
-        discovered += await this.discoverForPair(mint, quoteMint);
-      } catch (error) {
-        logger.debug("[indexer] solana pool discovery failed for pair", {
-          chainId: this.chainId,
-          mint,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return discovered;
-  }
-
-  private async discoverForPair(inputMint: string, outputMint: string): Promise<number> {
-    const db = DatabaseService.getInstance();
-    const api = this.svm.jupiterApiUrl!.replace(/\/$/, "");
-
-    // A deliberately small probe. The route a large trade takes is the route
-    // through the deepest pool, but asking for a large trade on a thin pair
-    // returns nothing at all — and a pair with only thin liquidity is still a
-    // pair we want to price.
-    const params = new URLSearchParams({
-      inputMint,
-      outputMint,
-      amount: "1000000",
-      slippageBps: "500",
-      onlyDirectRoutes: "true",
-    });
-
-    const response = await fetch(`${api}/quote?${params}`);
-    if (!response.ok) return 0;
-
-    const quote = (await response.json()) as {
-      routePlan?: {
-        swapInfo?: { ammKey?: string; label?: string; inputMint?: string; outputMint?: string };
-      }[];
-    };
-
-    let discovered = 0;
-
-    for (const hop of quote.routePlan ?? []) {
-      const info = hop.swapInfo;
-      if (!info?.ammKey || !info.inputMint || !info.outputMint) continue;
-
-      const existing = await db.prisma.indexedPool.findFirst({
-        where: { chainId: this.chainId, poolAddress: info.ammKey },
-        select: { id: true },
-      });
-      if (existing) continue;
-
-      const [decimals0, decimals1] = await Promise.all([
-        this.mintDecimals(info.inputMint),
-        this.mintDecimals(info.outputMint),
-      ]);
-      if (decimals0 === null || decimals1 === null) continue;
-
-      // A venue whose vaults sit under a shared program authority rather than
-      // under the pool decodes to nothing here, and would otherwise be polled
-      // every tick forever while contributing no swaps — the silent gap this
-      // codebase keeps getting bitten by. One probe against recent history
-      // turns it into a pool that was never tracked, which is visible.
-      if (!(await this.canDecodePool(info.ammKey, info.inputMint, info.outputMint))) {
-        logger.info("[indexer] solana pool not decodable from balance deltas, skipping", {
-          chainId: this.chainId,
-          pool: info.ammKey,
-          dex: info.label,
-        });
-        continue;
-      }
-
-      try {
-        await db.prisma.indexedPool.create({
-          data: {
-            chainId: this.chainId,
-            dexId: (info.label ?? "jupiter").toLowerCase(),
-            poolAddress: info.ammKey,
-            token0: info.inputMint,
-            token1: info.outputMint,
-            decimals0,
-            decimals1,
-            baseToken: info.inputMint === outputMint ? info.outputMint : info.inputMint,
-            quoteToken: outputMint,
-          },
-        });
-        discovered++;
-      } catch {
-        // Concurrent discovery won the race; the unique key arbitrates.
-      }
-    }
-
-    return discovered;
-  }
-
-  /**
-   * Whether this pool's swaps can be read from balance deltas at all.
-   *
-   * Checked once, at discovery. The cost is a handful of transaction fetches
-   * against a pool we are deciding whether to follow for good.
-   */
-  private async canDecodePool(
-    poolAddress: string,
-    token0: string,
-    token1: string
-  ): Promise<boolean> {
-    try {
-      const signatures = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
-        poolAddress,
-        { limit: 10 },
-      ]);
-
-      const metas: SolanaTransactionMeta[] = [];
-      for (const info of signatures.filter((s) => !s.err).slice(0, 5)) {
-        const tx = await this.rpc<{ meta?: SolanaTransactionMeta } | null>("getTransaction", [
-          info.signature,
-          { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" },
-        ]);
-        if (tx?.meta) metas.push(tx.meta);
-      }
-
-      // No recent activity is not the same as undecodable. A brand-new pool
-      // with no trades yet is worth following; refusing it here would mean
-      // never picking up a pair at the moment it starts moving.
-      if (metas.length === 0) return true;
-
-      return probeDecodable(metas, poolAddress, token0, token1);
-    } catch {
-      // An RPC failure is not evidence about the pool. Track it and let
-      // ingestion decide.
-      return true;
-    }
-  }
-
-  /** Mint decimals, straight from the SPL mint account. */
-  private async mintDecimals(mint: string): Promise<number | null> {
-    try {
-      const account = await this.rpc<{
-        value?: { data?: { parsed?: { info?: { decimals?: number } } } };
-      }>("getAccountInfo", [mint, { encoding: "jsonParsed" }]);
-
-      const decimals = account?.value?.data?.parsed?.info?.decimals;
-      return typeof decimals === "number" ? decimals : null;
-    } catch {
-      return null;
-    }
+    const quoteMints = new Set([WRAPPED_SOL_MINT]);
+    const stable = await this.mintFor(this.descriptor.stableSymbol);
+    if (stable) quoteMints.add(stable);
+    return discoverSolanaPrograms(this.chainId, (method, params) => this.rpc(method, params), quoteMints);
   }
 
   /**
@@ -498,8 +351,8 @@ export class SolanaIndexer implements ChainIndexer {
 
   private async trackedPools(): Promise<SolanaPool[]> {
     const rows = await DatabaseService.getInstance().prisma.indexedPool.findMany({
-      where: { chainId: this.chainId },
-      orderBy: [{ lastSwapAt: { sort: "desc", nulls: "last" } }, { id: "desc" }],
+      where: { chainId: this.chainId, programId: { not: null }, vault0: { not: null }, vault1: { not: null } },
+      orderBy: [{ lastPolledAt: { sort: "asc", nulls: "first" } }, { id: "asc" }],
       take: this.settings.maxPools,
     });
 
@@ -511,6 +364,12 @@ export class SolanaIndexer implements ChainIndexer {
       decimals0: r.decimals0,
       decimals1: r.decimals1,
       lastSignature: r.lastSignature,
+      forwardBefore: r.forwardBefore,
+      forwardHead: r.forwardHead,
+      forwardTargetBlock: r.forwardTargetBlock,
+      lastSwapAt: r.lastSwapAt,
+      lastPrice0: r.lastPrice0,
+      programId: r.programId, vault0: r.vault0, vault1: r.vault1, baseToken: r.baseToken,
     }));
   }
 
@@ -531,16 +390,18 @@ export class SolanaIndexer implements ChainIndexer {
     const rawSwaps: RawSwap[] = [];
     const poolState = new Map<number, PoolProgress>();
     let swapsIngested = 0;
+    const errors: unknown[] = [];
 
     for (const pool of pools) {
       try {
-        const result = await this.ingestPool(pool, usd, rawSwaps);
+        const result = await this.ingestPool(pool, usd, rawSwaps, slot);
         swapsIngested += result.swaps;
         if (result.progress) {
           poolState.set(pool.id, result.progress);
         }
       } catch (error) {
-        logger.debug("[indexer] solana pool ingest failed", {
+        errors.push(error);
+        logger.warn("[indexer] solana pool ingest failed", {
           chainId: this.chainId,
           pool: pool.poolAddress,
           error: error instanceof Error ? error.message : String(error),
@@ -549,13 +410,19 @@ export class SolanaIndexer implements ChainIndexer {
     }
 
     const bucketsWritten = await persistSwaps(rawSwaps);
+    await this.refreshLiquidity(pools, usd, poolState);
 
+    await assertIngestionLease();
     await db.prisma.$transaction([
       ...[...poolState.entries()].map(([poolId, state]) =>
         db.prisma.indexedPool.update({
           where: { id: poolId },
           data: {
             lastSignature: state.signature,
+            forwardBefore: state.forwardBefore ?? null,
+            forwardHead: state.forwardHead ?? null,
+            forwardTargetBlock: state.forwardBefore ? state.targetBlock : null,
+            ...(!state.forwardBefore && state.targetBlock != null ? { lastIndexedBlock: state.targetBlock } : {}),
             // Only when something actually decoded. A tick that processed
             // signatures without finding a priceable swap still advances the
             // cursor — it has genuinely read them — but it has learned nothing
@@ -569,99 +436,77 @@ export class SolanaIndexer implements ChainIndexer {
           },
         })
       ),
-      db.prisma.indexerCursor.upsert({
-        where: { chainId: this.chainId },
-        create: { chainId: this.chainId, lastBlock: slot, lastPoolBlock: slot },
-        update: { lastBlock: slot },
-      }),
     ]);
 
+    const where = { chainId: this.chainId, programId: { not: null } };
+    const [oldest, unknown] = await Promise.all([
+      db.prisma.indexedPool.aggregate({ where, _min: { lastIndexedBlock: true } }),
+      db.prisma.indexedPool.count({ where: { ...where, lastIndexedBlock: null } }),
+    ]);
+    if (unknown === 0) await this.saveCursor(oldest._min.lastIndexedBlock ?? slot);
+    if (errors.length) throw new AggregateError(errors, "Solana pools incomplete; checkpoints retained");
     return { swapsIngested, bucketsWritten };
+  }
+
+  private async refreshLiquidity(pools: SolanaPool[], usd: Map<string, number>, states: Map<number, PoolProgress>): Promise<void> {
+    for (const pool of pools) {
+      if (pool.programId === PUMP_PROGRAM) {
+        const account = await this.rpc<{ value?: { data: [string, string] } }>("getAccountInfo", [pool.poolAddress, { encoding: "base64", commitment: "finalized" }]);
+        if (!account.value) throw new Error("Pump curve state unavailable");
+        const data = Buffer.from(account.value.data[0], "base64");
+        if (data.length < 49) throw new Error("Invalid Pump curve state");
+        const price0 = states.get(pool.id)?.price ?? pool.lastPrice0;
+        const price1 = usd.get(pool.token1);
+        if (price0 && price1) {
+          const liquidityUsd = Number(data.readBigUInt64LE(24)) / 10 ** pool.decimals0 * price0 + Number(data.readBigUInt64LE(32)) / 10 ** pool.decimals1 * price1;
+          await DatabaseService.getInstance().prisma.indexedPool.update({ where: { id: pool.id }, data: { liquidityUsd } });
+        }
+        continue;
+      }
+      if (!pool.vault0 || !pool.vault1) continue;
+      const accounts = await this.rpc<{ value: ({ data?: { parsed?: { info?: { tokenAmount?: { amount: string } } } } } | null)[] }>("getMultipleAccounts", [[pool.vault0, pool.vault1], { encoding: "jsonParsed", commitment: "finalized" }]);
+      const amounts = accounts.value?.map((a) => a?.data?.parsed?.info?.tokenAmount?.amount);
+      if (amounts?.length !== 2 || amounts.some((a) => a == null)) throw new Error("Pool vault balances unavailable");
+      const p0 = usd.get(pool.token0) ?? states.get(pool.id)?.price ?? pool.lastPrice0;
+      const p1 = usd.get(pool.token1);
+      if (!p0 || !p1) continue;
+      const liquidityUsd = Number(amounts[0]) / 10 ** pool.decimals0 * p0 + Number(amounts[1]) / 10 ** pool.decimals1 * p1;
+      if (!Number.isFinite(liquidityUsd) || liquidityUsd < 0) throw new Error("Invalid vault value");
+      await DatabaseService.getInstance().prisma.indexedPool.update({ where: { id: pool.id }, data: { liquidityUsd } });
+    }
   }
 
   private async ingestPool(
     pool: SolanaPool,
     usd: Map<string, number>,
-    rawSwaps: RawSwap[]
+    rawSwaps: RawSwap[],
+    observedSlot?: bigint
   ): Promise<{ swaps: number; progress: PoolProgress | null }> {
-    const signatures = await this.newSignatures(pool.poolAddress, pool.lastSignature);
-    if (signatures.length === 0) return { swaps: 0, progress: null };
-
-    // Newest first from the RPC; applied oldest-first so a bucket's `open` is
-    // the first trade in it rather than the last.
-    //
-    // The budget is applied to the *oldest* end, so progress is contiguous with
-    // where the last tick stopped. Taking the newest instead — which is what a
-    // bare `limit` on the RPC call does — leaves the middle unread and no
-    // cursor able to describe the hole, so a pool busier than one tick's budget
-    // silently loses every swap in between.
-    const ordered = [...signatures].reverse().filter((info) => !info.err);
-    const batch = ordered.slice(0, this.settings.maxTxPerRun);
-
-    const newestRead = batch.at(-1);
-    if (!newestRead) return { swaps: 0, progress: null };
-
-    const decoded = await this.decodeBatch(pool, batch, usd, rawSwaps);
-
-    return {
-      swaps: decoded.swaps,
-      progress: {
-        // Every signature in the batch has been read, whether or not it held a
-        // decodable swap, so the cursor advances past all of them. Advancing
-        // only on a decoded swap would leave a pool of undecodable traffic
-        // re-reading the same page every tick, forever.
-        signature: newestRead.signature,
-        price: decoded.price,
-        at: decoded.at,
-        // Only meaningful on the first pass; `undefined` on every later one so
-        // the write is skipped rather than resetting the walk.
-        backfillSeed: pool.lastSignature ? undefined : signatures.at(-1)?.signature,
-      },
-    };
-  }
-
-  /**
-   * Every signature newer than `until`, newest first.
-   *
-   * Paged, because `getSignaturesForAddress` returns at most `limit` of the
-   * *newest* signatures and silently omits the rest. Listing is one request per
-   * thousand signatures; the expense is fetching transaction bodies, which the
-   * caller bounds separately.
-   *
-   * With no `until` there is nothing to page towards — that is a pool's first
-   * pass, and the newest page is the intended starting window rather than an
-   * invitation to walk its entire history.
-   */
-  private async newSignatures(poolAddress: string, until: string | null): Promise<SignatureInfo[]> {
-    if (!until) {
-      return this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
-        poolAddress,
-        { limit: this.settings.maxTxPerRun },
-      ]);
+    const limit = Math.min(1000, this.settings.maxTxPerRun);
+    const signatures = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [pool.poolAddress, {
+      limit, commitment: "finalized",
+      ...(pool.lastSignature ? { until: pool.lastSignature } : {}),
+      ...(pool.forwardBefore ? { before: pool.forwardBefore } : {}),
+    }]);
+    if (!Array.isArray(signatures)) throw new Error("Missing signature page");
+    await DatabaseService.getInstance().prisma.indexedPool.update({ where: { id: pool.id }, data: { lastPolledAt: new Date() } });
+    const head = pool.forwardHead ?? signatures[0]?.signature;
+    if (!head) {
+      if (observedSlot != null) await DatabaseService.getInstance().prisma.indexedPool.update({ where: { id: pool.id }, data: { lastIndexedBlock: observedSlot } });
+      return { swaps: 0, progress: null };
     }
-
-    const all: SignatureInfo[] = [];
-    let before: string | undefined;
-
-    for (let page = 0; page < MAX_SIGNATURE_PAGES; page++) {
-      const params: Record<string, unknown> = { limit: SIGNATURE_PAGE_SIZE, until };
-      if (before) params.before = before;
-
-      const batch = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
-        poolAddress,
-        params,
-      ]);
-
-      const oldest = batch.at(-1);
-      if (!oldest) break;
-
-      all.push(...batch);
-      if (batch.length < SIGNATURE_PAGE_SIZE) break;
-
-      before = oldest.signature;
-    }
-
-    return all;
+    const complete = !pool.lastSignature || signatures.length < limit;
+    const decoded = await this.decodeBatch(pool, [...signatures].reverse().filter((s) => !s.err), usd, rawSwaps);
+    // A backward page must never overwrite a newer observed price.
+    const fresh = decoded.at != null && (!pool.lastSwapAt || decoded.at >= pool.lastSwapAt);
+    return { swaps: decoded.swaps, progress: {
+      signature: complete ? head : pool.lastSignature!,
+      targetBlock: pool.forwardTargetBlock ?? observedSlot ?? BigInt(signatures[0]?.slot ?? 0),
+      forwardBefore: complete ? null : signatures.at(-1)!.signature,
+      forwardHead: complete ? null : head,
+      price: fresh ? decoded.price : null, at: fresh ? decoded.at : null,
+      backfillSeed: pool.lastSignature ? undefined : signatures.at(-1)?.signature,
+    } };
   }
 
   /**
@@ -677,10 +522,10 @@ export class SolanaIndexer implements ChainIndexer {
     usd: Map<string, number>,
     rawSwaps: RawSwap[]
   ): Promise<{ swaps: number; price: number | null; at: Date | null }> {
-    const transactions = await this.rpcBatch<{ meta?: SolanaTransactionMeta; blockTime?: number }>(
+    const transactions = await this.rpcBatch<ParsedSwapTransaction & { meta?: SolanaTransactionMeta & { logMessages?: string[] }; blockTime?: number }>(
       batch.map((info) => ({
         method: "getTransaction",
-        params: [info.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }],
+        params: [info.signature, { maxSupportedTransactionVersion: 0, encoding: "jsonParsed", commitment: "finalized" }],
       }))
     );
 
@@ -690,40 +535,46 @@ export class SolanaIndexer implements ChainIndexer {
 
     for (const [index, info] of batch.entries()) {
       const tx = transactions[index];
-      if (!tx?.meta) continue;
+      if (!tx?.meta) throw new Error(`Transaction unavailable: ${info.signature}; retaining cursor`);
 
-      const swap = decodeSolanaSwap(tx.meta, pool.poolAddress, pool.token0, pool.token1);
-      if (!swap) continue;
-
-      const amount0 = Number(swap.amount0) / 10 ** pool.decimals0;
-      const amount1 = Number(swap.amount1) / 10 ** pool.decimals1;
-      if (amount0 <= 0 || amount1 <= 0) continue;
-
-      const price0 = usd.get(pool.token0);
-      const price1 = usd.get(pool.token1);
-      const priceUsd = price0 ?? (price1 ? (amount1 / amount0) * price1 : 0);
-      const volumeUsd = price0 ? amount0 * price0 : price1 ? amount1 * price1 : 0;
-
-      const timestampMs = (info.blockTime ?? tx.blockTime ?? 0) * 1000;
-      if (timestampMs <= 0) continue;
-
-      rawSwaps.push({
-        poolId: pool.id,
-        // The signature is the swap's identity, so a replayed window inserts
-        // nothing rather than double-counting it.
-        txKey: info.signature,
-        blockNumber: BigInt(info.slot),
-        logIndex: 0,
-        bucketStart: bucketStartOf(timestampMs),
-        priceUsd,
-        volumeUsd,
-        isBuy: !swap.zeroForOne,
-      });
-      swaps++;
-
-      if (priceUsd > 0) {
-        price = priceUsd;
-        at = new Date(timestampMs);
+      const pumpCpi = tx.meta.innerInstructions?.flatMap((group) => group.instructions).flatMap((ix) => {
+        if (ix.programId !== PUMP_PROGRAM || !ix.data) return [];
+        const bytes = Buffer.from(bs58.decode(ix.data));
+        if (bytes.subarray(0, 8).toString("hex") !== "e445a52e51cb9a1d") return [];
+        return [`Program ${PUMP_PROGRAM} invoke [1]`, `Program data: ${bytes.subarray(8).toString("base64")}`, `Program ${PUMP_PROGRAM} success`];
+      }) ?? [];
+      const decoded = pool.programId === PUMP_PROGRAM
+        ? decodePumpTrades(pumpCpi.length ? pumpCpi : tx.meta.logMessages ?? [], pool.token0, pool.token1)
+        : pool.programId && pool.vault0 && pool.vault1
+        ? decodeInstructionSwaps(tx, { poolAddress: pool.poolAddress, programId: pool.programId, vault0: pool.vault0, vault1: pool.vault1 })
+        : [];
+      if (!pool.programId && decodeSolanaSwap(tx.meta, pool.poolAddress, pool.token0, pool.token1)) {
+        throw new Error("Pool needs verified program and vault mapping before ingestion");
+      }
+      if (decoded.length === 0) continue;
+      const block = await this.rpc<{ signatures?: string[] }>("getBlock", [info.slot, {
+        commitment: "finalized", transactionDetails: "signatures", rewards: false,
+      }]);
+      const txIndex = block.signatures?.indexOf(info.signature) ?? -1;
+      if (txIndex < 0) throw new Error("Missing transaction position in finalized block");
+      for (const swap of decoded) {
+        const amount0 = Number(swap.amount0) / 10 ** pool.decimals0;
+        const amount1 = Number(swap.amount1) / 10 ** pool.decimals1;
+        if (amount0 <= 0 || amount1 <= 0) throw new Error("Invalid swap amounts");
+        const price0 = usd.get(pool.token0);
+        const price1 = usd.get(pool.token1);
+        const token0Usd = price1 ? amount1 / amount0 * price1 : price0 ?? 0;
+        const token1Usd = price0 ? amount0 / amount1 * price0 : price1 ?? 0;
+        const priceUsd = pool.baseToken === pool.token1 ? token1Usd : token0Usd;
+        const volumeUsd = price1 ? amount1 * price1 : price0 ? amount0 * price0 : 0;
+        const timestampMs = (info.blockTime ?? tx.blockTime ?? 0) * 1000;
+        if (timestampMs <= 0) throw new Error("Missing swap timestamp");
+        rawSwaps.push({ poolId: pool.id, txKey: `${info.signature}:${swap.instructionIndex}`,
+          blockNumber: BigInt(info.slot), logIndex: txIndex * 100000 + swap.instructionIndex,
+          bucketStart: bucketStartOf(timestampMs), priceUsd, volumeUsd,
+          isBuy: pool.baseToken === pool.token1 ? swap.zeroForOne : !swap.zeroForOne });
+        swaps++;
+        if (token0Usd > 0) { price = token0Usd; at = new Date(timestampMs); }
       }
     }
 
@@ -751,7 +602,7 @@ export class SolanaIndexer implements ChainIndexer {
 
     const db = DatabaseService.getInstance();
     const rows = await db.prisma.indexedPool.findMany({
-      where: { chainId: this.chainId, backfillDone: false },
+      where: { chainId: this.chainId, backfillDone: false, OR: [{ backfillSignature: { not: null } }, { lastSignature: { not: null } }] },
       orderBy: [{ liquidityUsd: { sort: "desc", nulls: "last" } }, { id: "asc" }],
       take: this.settings.maxBackfillSourcesPerRun,
     });
@@ -780,6 +631,7 @@ export class SolanaIndexer implements ChainIndexer {
             decimals0: row.decimals0,
             decimals1: row.decimals1,
             lastSignature: row.lastSignature,
+            programId: row.programId, vault0: row.vault0, vault1: row.vault1, baseToken: row.baseToken,
           },
           from,
           cutoffMs,
@@ -843,7 +695,7 @@ export class SolanaIndexer implements ChainIndexer {
   ): Promise<{ swaps: number; signature: string | null; done: boolean }> {
     const signatures = await this.rpc<SignatureInfo[]>("getSignaturesForAddress", [
       pool.poolAddress,
-      { before, limit: this.settings.maxTxPerRun },
+      { before, limit: Math.min(1000, this.settings.maxTxPerRun), commitment: "finalized" },
     ]);
 
     // Newest first from the RPC, so the last entry is the oldest — and it is
@@ -856,7 +708,7 @@ export class SolanaIndexer implements ChainIndexer {
     const inWindow = (info: SignatureInfo): boolean =>
       cutoffMs === null || (info.blockTime ?? 0) * 1000 >= cutoffMs;
 
-    const done = !inWindow(oldest) || signatures.length < this.settings.maxTxPerRun;
+    const done = !inWindow(oldest) || signatures.length < Math.min(1000, this.settings.maxTxPerRun);
 
     const batch = signatures
       .filter((info) => !info.err && inWindow(info))
