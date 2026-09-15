@@ -30,6 +30,31 @@ model User {
   perpPositions     PerpPosition[]
   socialAccounts    SocialAccount[]
   pushSubscriptions PushSubscription[]
+  pendingActions    PendingAction[]
+  alertPreferences  AlertPreference[]
+  priceAlerts       PriceAlert[]
+  telegramTopics    TelegramTopic[]
+  agentDecisions    AgentDecision[]
+}
+
+model PendingAction {
+  id             String    @id @default(uuid())
+  userId         Int
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind           String
+  payload        Json
+  status         String    @default("DRAFT")
+  quoteSnapshot  Json?
+  source         String
+  idempotencyKey String    @unique
+  expiresAt      DateTime
+  confirmedAt    DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId, status, createdAt])
+  @@index([status, expiresAt])
 }
 
 model Wallet {
@@ -246,6 +271,7 @@ model TradingStrategy {
   failureCount Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  decisions    AgentDecision[]
 
   @@index([userId])
   @@index([agentId])
@@ -264,8 +290,31 @@ model TradeAgent {
   failureCount Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  decisions    AgentDecision[]
 
   @@index([userId])
+}
+
+model AgentDecision {
+  id            String           @id @default(uuid())
+  userId        Int
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategyId    Int
+  strategy      TradingStrategy  @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  agentId       Int?
+  agent         TradeAgent?      @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  outcome       String
+  observed      Json
+  triggeredRule String?
+  expectedRisk  Json
+  confidence    Float?
+  action        Json?
+  explanation   String
+  createdAt     DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([strategyId, createdAt])
+  @@index([agentId, createdAt])
 }
 
 model PerpPosition {
@@ -316,10 +365,84 @@ model Notification {
   title     String
   message   String
   type      String // "INFO" | "WARNING" | "ERROR" | "SUCCESS"
+  eventType String   @default("GENERAL")
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+  deliveries NotificationDelivery[]
 
   @@index([userId, read])
+}
+
+model NotificationDelivery {
+  id                String       @id @default(uuid())
+  notificationId    Int
+  notification      Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  channel           String
+  destination       String
+  topic             String?
+  status            String       @default("PENDING")
+  attemptCount      Int          @default(0)
+  providerMessageId String?
+  idempotencyKey    String       @unique
+  lastError         String?
+  deliveredAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([status, createdAt])
+  @@index([notificationId])
+}
+
+model AlertPreference {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel         String
+  eventType       String
+  enabled         Boolean  @default(true)
+  cadence         String   @default("INSTANT")
+  minimumSeverity String   @default("INFO")
+  quietStart      String?
+  quietEnd        String?
+  timezone        String   @default("UTC")
+  settings        Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, channel, eventType])
+  @@index([userId, channel])
+}
+
+model PriceAlert {
+  id          String    @id @default(uuid())
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chainId     String
+  contractId  String
+  symbol      String
+  condition   String
+  threshold   Float
+  cooldownSec Int       @default(3600)
+  status      String    @default("ACTIVE")
+  lastFiredAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, status])
+  @@index([chainId, contractId, status])
+}
+
+model TelegramTopic {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   String
+  threadId  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, purpose])
+  @@unique([userId, threadId])
 }
 
 model PushSubscription {
@@ -515,6 +638,16 @@ model IndexedPool {
   // is not", which is the normal state when pools are discovered at different
   // times.
   lastSignature String?
+  lastPolledAt DateTime?
+  forwardBefore String?
+  forwardHead String?
+  forwardTargetBlock BigInt?
+  lastIndexedBlock BigInt?
+  programId String?
+  vault0 String?
+  vault1 String?
+  indexingError String?
+  protocolState Json?
 
   // The other end of the same walk: where this pool's *downward* history pass
   // has reached. Separate from lastSignature because the two move in opposite
@@ -534,6 +667,7 @@ model IndexedPool {
   // first, capped. Unindexed that is a scan-and-sort of the whole chain's
   // pools to return the top few hundred.
   @@index([chainId, lastSwapAt])
+  @@index([chainId, lastPolledAt])
   // The Solana downward walk: pools still owing history, deepest first.
   @@index([chainId, backfillDone, liquidityUsd])
   // Rollups walk pools by the token they price.
@@ -663,6 +797,8 @@ model IndexerCursor {
   // Json rather than columns because the shape is the chain's business and
   // nothing joins or filters on it. See StacksBackfillState in stacksIndexer.
   backfillState Json?
+  // Durable forward pagination and canonical block checkpoints.
+  forwardState Json?
 
   updatedAt DateTime @updatedAt
 }
