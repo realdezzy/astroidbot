@@ -31,6 +31,8 @@ export const CELO_MAINNET: ChainDescriptor = {
   indexer: { blockTimeSeconds: 1 },
   evm: {
     v4PoolManager: "0x288dc841A52FCA2707c6947B3A777c5E56cd87BC",
+    v4Quoter: "0x28566da1093609182dff2cb2a91cfd72e61d66cd",
+    v4UniversalRouter: "0xcb695bc5d3aa22cad1e6df07801b061a05a0233a",
     id: 42220,
     defaultRpcUrl: "https://forno.celo.org",
     // Pimlico does serve Celo, but EOA custody is the safer default for a

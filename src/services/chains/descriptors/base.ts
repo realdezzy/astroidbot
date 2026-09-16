@@ -15,6 +15,8 @@ export const BASE_MAINNET: ChainDescriptor = {
   indexer: { blockTimeSeconds: 2 },
   evm: {
     v4PoolManager: "0x498581ff718922c3f8e6a244956af099b2652b2b",
+    v4Quoter: "0x0d5e0f971ed27fbff6c2837bf31316121532048d",
+    v4UniversalRouter: "0x6ff5693b99212da76ad316178a184ab56d299b43",
     id: 8453,
     defaultRpcUrl: "https://mainnet.base.org",
     custody: "erc4337",

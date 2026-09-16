@@ -77,7 +77,19 @@ export interface EvmChainConfig {
   };
   /** Explicit ingestion deployments, independent of trading routers. */
   indexerFactories?: { address: `0x${string}`; dexId: string; protocol: "uniswap-v2" | "uniswap-v3" | "aerodrome-v2" | "aerodrome-slipstream" | "uniswap-v4"; deploymentBlock?: bigint }[];
+  /** Uniswap V4 core. */
   v4PoolManager?: `0x${string}`;
+  /**
+   * Uniswap V4 periphery, from Uniswap's official deployments page.
+   *
+   * V4 swaps cannot be sent by a wallet directly — they execute through the
+   * Universal Router, which unlocks the PoolManager. The Quoter is the read
+   * side (one call per pool key), and both are per chain (V4 is *not* deployed
+   * at identical addresses across chains). Absent means the chain has no V4
+   * periphery configured and no V4 execution is offered.
+   */
+  v4Quoter?: `0x${string}`;
+  v4UniversalRouter?: `0x${string}`;
   /**
    * Aerodrome Slipstream — Aerodrome's concentrated-liquidity deployment, and
    * where Base's tokenized-stock liquidity lives.

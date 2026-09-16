@@ -25,6 +25,8 @@ export const ROBINHOOD_MAINNET = defineEvmChain({
   displayName: "Robinhood",
   id: 4663,
   v4PoolManager: "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+  v4Quoter: "0x8dc178efb8111bb0973dd9d722ebeff267c98f94",
+  v4UniversalRouter: "0x8876789976decbfcbbbe364623c63652db8c0904",
   rpcUrl: "https://rpc.mainnet.chain.robinhood.com",
   nativeSymbol: "ETH",
   stableSymbol: "USDG",

@@ -85,6 +85,9 @@ export class EvmChainAdapter extends BaseChainAdapter {
       ["dex.swapRouter", this.evm.dex?.swapRouter],
       ["dex.v2Router", this.evm.dex?.v2Router],
       ["dex.universalRouter", this.evm.dex?.universalRouter],
+      ["v4PoolManager", this.evm.v4PoolManager],
+      ["v4Quoter", this.evm.v4Quoter],
+      ["v4UniversalRouter", this.evm.v4UniversalRouter],
       ...Object.entries(this.evm.tokens ?? {}).map(
         ([symbol, t]) => [`tokens.${symbol}`, t.address] as [string, string]
       ),

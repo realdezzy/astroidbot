@@ -28,6 +28,8 @@ export const ETHEREUM_MAINNET: ChainDescriptor = {
   indexer: { blockTimeSeconds: 12 },
   evm: {
     v4PoolManager: "0x000000000004444c5dc75cB358380D2e3dE08A90",
+    v4Quoter: "0x52f0e24d1c21c8a0cb1e5a5dd6198556bd9e1203",
+    v4UniversalRouter: "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
     id: 1,
     // publicnode over llamarpc: the latter was returning Cloudflare 521s when
     // this was written, and a dead default RPC makes the chain look broken

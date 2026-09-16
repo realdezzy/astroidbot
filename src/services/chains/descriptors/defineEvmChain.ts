@@ -16,6 +16,8 @@ export interface EvmChainSpec {
   wrappedNative?: `0x${string}`;
   dex?: EvmChainConfig["dex"];
   v4PoolManager?: EvmChainConfig["v4PoolManager"];
+  v4Quoter?: EvmChainConfig["v4Quoter"];
+  v4UniversalRouter?: EvmChainConfig["v4UniversalRouter"];
   indexerFactories?: EvmChainConfig["indexerFactories"];
   aerodrome?: EvmChainConfig["aerodrome"];
   tokens?: EvmChainConfig["tokens"];
@@ -67,6 +69,8 @@ export function defineEvmChain(spec: EvmChainSpec): ChainDescriptor {
     evm: {
       id: spec.id,
       ...(spec.v4PoolManager ? { v4PoolManager: spec.v4PoolManager } : {}),
+      ...(spec.v4Quoter ? { v4Quoter: spec.v4Quoter } : {}),
+      ...(spec.v4UniversalRouter ? { v4UniversalRouter: spec.v4UniversalRouter } : {}),
       ...(spec.indexerFactories ? { indexerFactories: spec.indexerFactories } : {}),
       ...(spec.aerodrome ? { aerodrome: spec.aerodrome } : {}),
       defaultRpcUrl: spec.rpcUrl,
