@@ -22,6 +22,7 @@ import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseDEXProvider } from "./baseDexProvider.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
+import { stocksForChain } from "../../stocks/stockRegistry.js";
 
 /**
  * Uniswap V3 and its forks, on any EVM chain.
@@ -64,14 +65,28 @@ export class UniswapV3Provider extends BaseDEXProvider {
     // the same class of bug as the family-keyed adapter registry.
     this.name = `${this.evm.dex.name}-${descriptor.chainId}`;
 
-    this.tokenList = Object.entries(this.evm.tokens ?? {}).map(([symbol, t]) => ({
-      contractId: t.address,
-      symbol,
-      name: t.name,
-      decimals: t.decimals,
-      chainFamily: descriptor.family,
-      chainId: descriptor.chainId,
-    }));
+    this.tokenList = [
+      ...Object.entries(this.evm.tokens ?? {}).map(([symbol, t]) => ({
+        contractId: t.address,
+        symbol,
+        name: t.name,
+        decimals: t.decimals,
+        chainFamily: descriptor.family,
+        chainId: descriptor.chainId,
+      })),
+      // Curated tokenized stocks, so they resolve by symbol (and appear in
+      // pickers) on chains where the equities trade on a Uniswap V3 fork —
+      // Robinhood Chain and Ethereum today, and Base's V3 pools alongside
+      // Aerodrome's.
+      ...stocksForChain(descriptor.chainId).map((s) => ({
+        contractId: s.contractId,
+        symbol: s.symbol,
+        name: s.name,
+        decimals: s.decimals,
+        chainFamily: descriptor.family,
+        chainId: descriptor.chainId,
+      })),
+    ];
   }
 
   private get dex() {

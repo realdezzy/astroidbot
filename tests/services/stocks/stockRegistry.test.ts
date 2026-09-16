@@ -20,6 +20,25 @@ describe("stock registry", () => {
     expect(stocksForChain("base:mainnet")).toHaveLength(10);
     expect(stocksForChain("solana:mainnet").length).toBeGreaterThanOrEqual(10);
     expect(stocksForChain("celo:mainnet")).toHaveLength(0);
+    expect(stocksForChain("stacks:mainnet")).toHaveLength(0);
+  });
+
+  it("carries the Robinhood Chain list with its Chainlink feeds", () => {
+    const robinhood = stocksForChain("robinhood:mainnet");
+    expect(robinhood).toHaveLength(33);
+    const aapl = robinhood.find((s) => s.symbol === "AAPL");
+    expect(aapl?.issuer).toBe("Robinhood");
+    expect(aapl?.decimals).toBe(18);
+    expect(aapl?.oracleFeed).toMatch(/^0x/);
+    expect(aapl?.oracleDecimals).toBe(8);
+  });
+
+  it("carries the Ethereum Ondo list; only some have feeds yet", () => {
+    const eth = stocksForChain("ethereum:mainnet");
+    expect(eth).toHaveLength(13);
+    expect(eth.find((s) => s.symbol === "TSLAon")?.oracleFeed).toMatch(/^0x/);
+    // No Chainlink feed published for this one (yet) — must stay undefined, not guessed.
+    expect(eth.find((s) => s.symbol === "NVDAon")?.oracleFeed).toBeUndefined();
   });
 
   it("matches EVM addresses case-insensitively and Solana mints exactly", () => {

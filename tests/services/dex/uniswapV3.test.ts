@@ -71,6 +71,11 @@ describe("UniswapV3Provider", () => {
     expect(tokens.map((t) => t.symbol)).toEqual(expect.arrayContaining(["WETH", "USDC", "DAI"]));
   });
 
+  it("lists the chain's curated stocks so they resolve by symbol", async () => {
+    const symbols = (await provider.getSwappableTokens()).map((t) => t.symbol);
+    expect(symbols).toContain("NVDAc");
+  });
+
   it("getQuote succeeds on the first fee tier that has a pool", async () => {
     mockPublicClient.simulateContract.mockResolvedValueOnce({
       result: [2000000000000000000n, 0n, 0, 0n], // 2 WETH -> ... just needs amountOut > 0
