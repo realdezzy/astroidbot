@@ -76,6 +76,25 @@ describe("AerodromeProvider", () => {
     await expect(provider.hasRoute(NVDAc, USDC)).resolves.toBe(false);
   });
 
+  it("reaches the deep factory despite many expected no-pool reverts", async () => {
+    // The bug this pins: probing the two empty factories reverts on every tick
+    // spacing, and counting those as circuit-breaker failures opened the
+    // breaker before the deep factory (tried last) was ever reached — so the
+    // stock route read as "no route" in production. Reverts are data.
+    let calls = 0;
+    mockPublicClient.simulateContract.mockImplementation(async () => {
+      calls++;
+      // 5 legacy + 5 gauge-caps + 1 (newest, ts=1) all miss; ts=10 answers.
+      if (calls <= 11) throw new Error('The contract function "quoteExactInputSingle" reverted.');
+      return { result: [213349703n, 0n, 1, 0n] };
+    });
+
+    await expect(provider.hasRoute(NVDAc, USDC)).resolves.toBe(true);
+
+    const breaker = CircuitBreakerRegistry.find(provider.name);
+    expect(breaker?.getState()).not.toBe("OPEN");
+  });
+
   it("buildSwapPayload approves the router the quote answered from, then swaps", async () => {
     mockPublicClient.simulateContract.mockResolvedValue({ result: [213349703n, 0n, 1, 0n] });
     mockPublicClient.readContract.mockResolvedValue(0n); // no allowance

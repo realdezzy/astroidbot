@@ -40,6 +40,21 @@ interface SlipstreamQuote {
 }
 
 /**
+ * Whether a failed quote means "no pool here" rather than "the provider is
+ * broken".
+ *
+ * A quoter reverts for a tick spacing that has no pool, and most (factory, tick
+ * spacing) combinations have no pool — probing is expected to revert far more
+ * often than it succeeds. Counting those as circuit-breaker failures opened the
+ * breaker during a single quote and short-circuited every later probe, so the
+ * deep factory (tried last) was never reached and the stock route looked dead.
+ */
+function isNoPoolRevert(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /revert/i.test(message);
+}
+
+/**
  * Aerodrome Slipstream — Base's concentrated-liquidity AMM.
  *
  * Separate from `UniswapV3Provider` despite the shared lineage: Slipstream
@@ -220,20 +235,25 @@ export class AerodromeProvider extends BaseDEXProvider {
     amountInRaw: bigint
   ): Promise<SlipstreamQuote | null> {
     const client = this.publicClient();
-    let best: SlipstreamQuote | null = null;
 
-    for (const deployment of this.deployments) {
-      const cacheKey = `${deployment.factory}:${tokenIn.contractId.toLowerCase()}:${tokenOut.contractId.toLowerCase()}`;
-      const known = this.tickCache.get(cacheKey);
-      const tiers =
-        known !== undefined
-          ? [known, ...deployment.tickSpacings.filter((t) => t !== known)]
-          : [...deployment.tickSpacings];
+    // One breaker execution for the whole probe, not one per tier: a quote
+    // legitimately reverts across every empty (factory, tick spacing) pair, and
+    // those misses are data. A transport failure still throws out of the loop
+    // and is counted — once — by the breaker.
+    return this.breaker.execute(async () => {
+      let best: SlipstreamQuote | null = null;
 
-      for (const tickSpacing of tiers) {
-        try {
-          const { result } = await this.breaker.execute(() =>
-            client.simulateContract({
+      for (const deployment of this.deployments) {
+        const cacheKey = `${deployment.factory}:${tokenIn.contractId.toLowerCase()}:${tokenOut.contractId.toLowerCase()}`;
+        const known = this.tickCache.get(cacheKey);
+        const tiers =
+          known !== undefined
+            ? [known, ...deployment.tickSpacings.filter((t) => t !== known)]
+            : [...deployment.tickSpacings];
+
+        for (const tickSpacing of tiers) {
+          try {
+            const { result } = await client.simulateContract({
               address: deployment.quoter,
               abi: AERODROME_SLIPSTREAM_QUOTER_ABI,
               functionName: "quoteExactInputSingle",
@@ -246,23 +266,26 @@ export class AerodromeProvider extends BaseDEXProvider {
                   sqrtPriceLimitX96: 0n,
                 },
               ],
-            })
-          );
-          const amountOut = (result as readonly [bigint, bigint, number, bigint])[0];
-          if (amountOut > 0n) {
-            this.tickCache.set(cacheKey, tickSpacing);
-            if (!best || amountOut > best.amountOut) {
-              best = { amountOut, tickSpacing, router: deployment.router };
+            });
+            const amountOut = (result as readonly [bigint, bigint, number, bigint])[0];
+            if (amountOut > 0n) {
+              this.tickCache.set(cacheKey, tickSpacing);
+              if (!best || amountOut > best.amountOut) {
+                best = { amountOut, tickSpacing, router: deployment.router };
+              }
+              break; // First hit on this factory is its best tier for the pair.
             }
-            break; // First hit on this factory is its best tier for the pair.
+          } catch (error) {
+            // No pool at this tick spacing — try the next. Only a non-revert
+            // failure (RPC down, rate-limited) is allowed to trip the breaker.
+            if (isNoPoolRevert(error)) continue;
+            throw error;
           }
-        } catch {
-          // No pool at this tick spacing on this factory — try the next.
         }
       }
-    }
 
-    return best;
+      return best;
+    });
   }
 
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {
