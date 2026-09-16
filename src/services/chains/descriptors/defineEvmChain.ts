@@ -17,6 +17,7 @@ export interface EvmChainSpec {
   dex?: EvmChainConfig["dex"];
   v4PoolManager?: EvmChainConfig["v4PoolManager"];
   indexerFactories?: EvmChainConfig["indexerFactories"];
+  aerodrome?: EvmChainConfig["aerodrome"];
   tokens?: EvmChainConfig["tokens"];
   /**
    * Per-chain ingestion tuning — most usefully `blockTimeSeconds`.
@@ -67,6 +68,7 @@ export function defineEvmChain(spec: EvmChainSpec): ChainDescriptor {
       id: spec.id,
       ...(spec.v4PoolManager ? { v4PoolManager: spec.v4PoolManager } : {}),
       ...(spec.indexerFactories ? { indexerFactories: spec.indexerFactories } : {}),
+      ...(spec.aerodrome ? { aerodrome: spec.aerodrome } : {}),
       defaultRpcUrl: spec.rpcUrl,
       // EOA is the default: it works on every EVM chain, whereas ERC-4337
       // requires a bundler that has actually deployed support for the network.

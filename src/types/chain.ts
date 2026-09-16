@@ -78,6 +78,24 @@ export interface EvmChainConfig {
   /** Explicit ingestion deployments, independent of trading routers. */
   indexerFactories?: { address: `0x${string}`; dexId: string; protocol: "uniswap-v2" | "uniswap-v3" | "aerodrome-v2" | "aerodrome-slipstream" | "uniswap-v4"; deploymentBlock?: bigint }[];
   v4PoolManager?: `0x${string}`;
+  /**
+   * Aerodrome Slipstream — Aerodrome's concentrated-liquidity deployment, and
+   * where Base's tokenized-stock liquidity lives.
+   *
+   * A router is bound to the factory it was constructed with, and Aerodrome has
+   * run three CL factories, so a pool is only reachable through the router that
+   * points at that pool's factory. Each entry therefore carries its own router
+   * and quoter alongside the tick spacings to scan (Slipstream's equivalent of
+   * fee tiers). Omit on chains without a Slipstream deployment.
+   */
+  aerodrome?: {
+    slipstream?: {
+      factory: `0x${string}`;
+      router: `0x${string}`;
+      quoter: `0x${string}`;
+      tickSpacings: number[];
+    }[];
+  };
   /** Wrapped native token — needed to route native<->ERC20 swaps. */
   wrappedNative?: `0x${string}`;
   /** Curated token list: symbol -> address. */

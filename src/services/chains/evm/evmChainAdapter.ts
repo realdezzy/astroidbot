@@ -83,9 +83,18 @@ export class EvmChainAdapter extends BaseChainAdapter {
       ["wrappedNative", this.evm.wrappedNative],
       ["dex.quoter", this.evm.dex?.quoter],
       ["dex.swapRouter", this.evm.dex?.swapRouter],
+      ["dex.v2Router", this.evm.dex?.v2Router],
+      ["dex.universalRouter", this.evm.dex?.universalRouter],
       ...Object.entries(this.evm.tokens ?? {}).map(
         ([symbol, t]) => [`tokens.${symbol}`, t.address] as [string, string]
       ),
+      // Slipstream carries three addresses per factory, and a bad one fails the
+      // same silent way as the QuoterV2 constant this guard was written for.
+      ...(this.evm.aerodrome?.slipstream ?? []).flatMap((d, i) => [
+        [`aerodrome.slipstream[${i}].factory`, d.factory] as [string, string],
+        [`aerodrome.slipstream[${i}].router`, d.router] as [string, string],
+        [`aerodrome.slipstream[${i}].quoter`, d.quoter] as [string, string],
+      ]),
     ];
 
     const bad = candidates

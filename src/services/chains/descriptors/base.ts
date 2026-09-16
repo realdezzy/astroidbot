@@ -38,6 +38,32 @@ export const BASE_MAINNET: ChainDescriptor = {
       { address: "0xaDe65c38CD4849aDBA595a4323a8C7DdfE89716a", dexId: "aerodrome-slipstream", protocol: "aerodrome-slipstream" },
       { address: "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef", dexId: "aerodrome-slipstream", protocol: "aerodrome-slipstream" },
     ],
+    // Read back off chain 8453, one router/quoter per factory (a Slipstream
+    // router is bound to the factory it was built with). The tokenized stocks
+    // are deep on the newest factory at tick spacing 10 — far deeper than the
+    // Uniswap V3 pools of the same pair — so that is the route worth having.
+    aerodrome: {
+      slipstream: [
+        {
+          factory: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A",
+          router: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+          quoter: "0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0",
+          tickSpacings: [1, 50, 100, 200, 2000],
+        },
+        {
+          factory: "0xaDe65c38CD4849aDBA595a4323a8C7DdfE89716a",
+          router: "0xcbBb8035cAc7D4B3Ca7aBb74cF7BdF900215Ce0D",
+          quoter: "0x3d4C22254F86f64B7eC90ab8F7aeC1FBFD271c6C",
+          tickSpacings: [1, 50, 100, 200, 2000],
+        },
+        {
+          factory: "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef",
+          router: "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+          quoter: "0x514c8B5f54112481E28028F1166Bd78501089259",
+          tickSpacings: [1, 10, 50, 100, 200, 500, 2000],
+        },
+      ],
+    },
     tokens: {
       WETH: { address: "0x4200000000000000000000000000000000000006", decimals: 18, name: "Wrapped Ether" },
       USDC: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, name: "USD Coin" },

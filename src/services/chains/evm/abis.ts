@@ -173,6 +173,66 @@ export const UNISWAP_UNIVERSAL_ROUTER_ABI = [
   },
 ] as const;
 
+// Aerodrome Slipstream (concentrated liquidity) QuoterV2 — quoteExactInputSingle.
+//
+// A near-copy of Uniswap V3's QuoterV2 with one trap: the struct orders
+// `amountIn` *before* `tickSpacing`, where the V3 struct puts the fee before
+// amountIn. Encoding it in the V3 order produces a selector that matches no
+// function and a bare revert with no data — indistinguishable from "no pool".
+export const AERODROME_SLIPSTREAM_QUOTER_ABI = [
+  {
+    type: "function",
+    name: "quoteExactInputSingle",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
+  },
+] as const;
+
+// Aerodrome Slipstream SwapRouter — exactInputSingle. `tickSpacing` replaces
+// Uniswap V3's `fee`, and unlike the quoter it sits third.
+export const AERODROME_SLIPSTREAM_ROUTER_ABI = [
+  {
+    type: "function",
+    name: "exactInputSingle",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "recipient", type: "address" },
+          { name: "deadline", type: "uint256" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountOutMinimum", type: "uint256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
+  },
+] as const;
+
 // Wrapped-native (WETH9 and every clone). `deposit` wraps the value sent with
 // the call; `withdraw` unwraps back to the native asset. Both are needed
 // because Uniswap V3 pools only hold ERC-20s, so a user trading their native

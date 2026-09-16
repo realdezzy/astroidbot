@@ -9,6 +9,7 @@ import { hasRpcOverride, rpcUrlOverride } from "./evm/evmClient.js";
 import { UniswapV3Provider } from "../dex/providers/uniswapV3.js";
 import { UniswapV2Provider } from "../dex/providers/uniswapV2.js";
 import { UniswapUniversalProvider } from "../dex/providers/uniswapUniversal.js";
+import { AerodromeProvider } from "../dex/providers/aerodrome.js";
 import { JupiterProvider } from "../dex/providers/jupiter.js";
 import { BUILT_IN_DESCRIPTORS, parseCustomEvmChains } from "./descriptors/index.js";
 import type { ChainAdapter } from "../../types/chainAdapter.js";
@@ -33,16 +34,21 @@ function registerProviderFor(descriptor: ChainDescriptor): void {
     return;
   }
 
-  if (descriptor.family === "evm" && descriptor.evm?.dex) {
+  if (descriptor.family === "evm" && descriptor.evm) {
     const dex = descriptor.evm.dex;
-    if (dex.universalRouter) {
+    if (dex?.universalRouter) {
       DEXRegistry.getInstance().registerProvider(new UniswapUniversalProvider(descriptor));
     }
-    if (dex.quoter && dex.swapRouter) {
+    if (dex?.quoter && dex.swapRouter) {
       DEXRegistry.getInstance().registerProvider(new UniswapV3Provider(descriptor));
     }
-    if (dex.v2Router) {
+    if (dex?.v2Router) {
       DEXRegistry.getInstance().registerProvider(new UniswapV2Provider(descriptor));
+    }
+    // Aerodrome is independent of the Uniswap `dex` block: Slipstream is its
+    // own set of factories and routers, and where Base's stock liquidity is.
+    if (descriptor.evm.aerodrome) {
+      DEXRegistry.getInstance().registerProvider(new AerodromeProvider(descriptor));
     }
   }
 
