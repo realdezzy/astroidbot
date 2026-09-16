@@ -3,6 +3,7 @@ import { DEXRegistry } from "./dex/dexRegistry.js";
 import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
 import { resolveMarketDataProvider } from "./marketData/index.js";
 import { stocksForChain } from "./stocks/stockRegistry.js";
+import { EquityPriceOracle } from "./stocks/chainlink.js";
 import { logger } from "../utils/logger.js";
 import type { MarketDataProvider } from "./marketData/types.js";
 import type { ChainId } from "../types/chain.js";
@@ -164,6 +165,28 @@ export class TokenDiscoveryService {
   }
 
   /**
+   * Chainlink reference prices for a chain's curated equities, keyed by
+   * lowercased contract id.
+   *
+   * Read in parallel because they are independent, and cached inside the oracle
+   * so a sync that runs every cycle does not hammer the RPC. Only curated
+   * instruments with a feed are read — the long tail has no oracle.
+   */
+  private async equityOraclePrices(chainId: ChainId): Promise<Map<string, number>> {
+    const withFeeds = stocksForChain(chainId).filter((s) => s.oracleFeed);
+    const prices = new Map<string, number>();
+
+    await Promise.all(
+      withFeeds.map(async (stock) => {
+        const price = await EquityPriceOracle.getInstance().price(chainId, stock.oracleFeed!);
+        if (price && price.priceUsd > 0) prices.set(stock.contractId.toLowerCase(), price.priceUsd);
+      })
+    );
+
+    return prices;
+  }
+
+  /**
    * Copies tokens the indexer has seen trade into the catalogue.
    *
    * A read from the indexer's table and a write to ours — the boundary this
@@ -254,6 +277,12 @@ export class TokenDiscoveryService {
 
     if (tokens.length === 0) return 0;
 
+    // Curated equities prefer the issuer's Chainlink reference feed: it is the
+    // total-return primary-market price, where the AMM price on a thin book can
+    // be anything. Read once per sync so a stock shows a real price before the
+    // indexer has seen any of its pools. Absent leaves the other sources in charge.
+    const oraclePrices = await this.equityOraclePrices(chainId);
+
     // One batched call for the whole chain rather than one per token.
     const metrics = await provider
       .getMarketData(
@@ -279,7 +308,9 @@ export class TokenDiscoveryService {
         // why it can't populate the change/volume columns. Only for routable
         // tokens: quoting one that is in no provider list is a guaranteed
         // round trip to "no route", several hundred times per pass.
+        const oraclePrice = oraclePrices.get(token.contractId.toLowerCase());
         const priceUsd =
+          oraclePrice ??
           market?.priceUsd ??
           (token.routable
             ? await registry.getTokenPrice(token.symbol, chainId).catch(() => 0)

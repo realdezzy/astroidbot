@@ -29,6 +29,13 @@ const mockDexRegistry = {
   getTokenPrice: vi.fn(),
 };
 
+// Hoisted so the mock factory can close over it without tripping the TDZ.
+const equity = vi.hoisted(() => ({ price: vi.fn() }));
+
+vi.mock("../../src/services/stocks/chainlink.js", () => ({
+  EquityPriceOracle: { getInstance: () => ({ price: equity.price }) },
+}));
+
 vi.mock("../../src/services/dex/dexRegistry.js", () => ({
   DEXRegistry: { getInstance: () => mockDexRegistry },
 }));
@@ -86,6 +93,7 @@ describe("TokenDiscoveryService", () => {
     mockIndexedToken.findMany.mockResolvedValue([]);
     mockMarketData.getMarketData.mockResolvedValue(new Map());
     mockMarketData.search.mockResolvedValue([]);
+    equity.price.mockResolvedValue(null);
     service.setMarketDataProvider(mockMarketData);
   });
 
@@ -156,6 +164,31 @@ describe("TokenDiscoveryService", () => {
       expect(synced).toContain("0xlongtail");
       // …once. The listed token must not be synced twice for being in both.
       expect(synced.filter((id: string) => id === "0xusdc")).toHaveLength(1);
+    });
+
+    it("prefers the Chainlink reference price for a curated equity", async () => {
+      // The issuer's total-return feed is the stock's primary-market price; the
+      // AMM price on a thin book is not. It also gives a stock a price before
+      // the indexer has seen any of its pools.
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+      mockToken.findMany.mockResolvedValue([
+        {
+          contractId: "0xb20000000000000000000078ee7ce2fe4908108c",
+          symbol: "NVDAc",
+          name: "NVIDIA Corporation",
+          decimals: 8,
+        },
+      ]);
+      equity.price.mockResolvedValue({ priceUsd: 999.5, asOf: new Date(), stale: false });
+
+      await service.syncChain("base:mainnet");
+
+      const call = mockToken.upsert.mock.calls.find(
+        (c) =>
+          c[0].where.chainId_contractId.contractId ===
+          "0xb20000000000000000000078ee7ce2fe4908108c"
+      );
+      expect(call?.[0].update.priceUsd).toBe(999.5);
     });
 
     it("does not ask the DEX to quote a token it cannot route", async () => {
