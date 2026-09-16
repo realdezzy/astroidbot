@@ -105,7 +105,8 @@ export const UNISWAP_V2_FACTORY_ABI = [
   },
 ] as const;
 
-// Uniswap V3 QuoterV2 — quoteExactInputSingle (view-simulated via staticCall).
+// Uniswap V3 QuoterV2 — quoteExactInputSingle (single pool) and quoteExactInput
+// (multi-hop; the path is packed token|fee|token|…).
 export const UNISWAP_V3_QUOTER_V2_ABI = [
   {
     type: "function",
@@ -131,6 +132,21 @@ export const UNISWAP_V3_QUOTER_V2_ABI = [
       { name: "gasEstimate", type: "uint256" },
     ],
   },
+  {
+    type: "function",
+    name: "quoteExactInput",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "path", type: "bytes" },
+      { name: "amountIn", type: "uint256" },
+    ],
+    outputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "sqrtPriceX96AfterList", type: "uint160[]" },
+      { name: "initializedTicksCrossedList", type: "uint32[]" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
+  },
 ] as const;
 
 // Uniswap V3 SwapRouter02 — exactInputSingle.
@@ -151,6 +167,25 @@ export const UNISWAP_V3_ROUTER_ABI = [
           { name: "amountIn", type: "uint256" },
           { name: "amountOutMinimum", type: "uint256" },
           { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "exactInput",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          // SwapRouter02 dropped the deadline field the v1 router had.
+          { name: "path", type: "bytes" },
+          { name: "recipient", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountOutMinimum", type: "uint256" },
         ],
       },
     ],

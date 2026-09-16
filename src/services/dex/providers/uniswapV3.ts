@@ -3,6 +3,7 @@ import {
   defineChain,
   http,
   encodeFunctionData,
+  encodePacked,
   parseUnits,
   formatUnits,
   type Address,
@@ -23,6 +24,36 @@ import { BaseDEXProvider } from "./baseDexProvider.js";
 import { requireEvmConfig, type ChainDescriptor } from "../../../types/chain.js";
 import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 import { stocksForChain } from "../../stocks/stockRegistry.js";
+
+/** A resolved route: one pool (2 tokens) or a 2-hop path (3 tokens). */
+interface Route {
+  amountOut: bigint;
+  tokens: SwappableToken[];
+  fees: number[];
+}
+
+/**
+ * Whether a failed quote means "no pool here", not "the provider is broken".
+ *
+ * Probing fee tiers and hop combinations reverts far more often than it
+ * succeeds, and counting those as breaker failures opened the breaker mid-quote
+ * and short-circuited the routes that would have worked.
+ */
+function isNoPoolRevert(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /revert|no pool/i.test(message);
+}
+
+/** Packs a V3 path: token | fee | token | fee | token … */
+function encodePath(tokens: Address[], fees: number[]): `0x${string}` {
+  const types: ("address" | "uint24")[] = ["address"];
+  const values: (number | `0x${string}`)[] = [tokens[0]!];
+  for (let i = 0; i < fees.length; i++) {
+    types.push("uint24", "address");
+    values.push(fees[i]!, tokens[i + 1]!);
+  }
+  return encodePacked(types, values);
+}
 
 /**
  * Uniswap V3 and its forks, on any EVM chain.
@@ -224,7 +255,8 @@ export class UniswapV3Provider extends BaseDEXProvider {
     return this.evm.dex?.feeTiers || [500, 3000, 10000];
   }
 
-  private async quoteRaw(
+  /** One pool, best fee tier. Reverts are "no pool", not a provider failure. */
+  private async quoteSingle(
     tokenIn: SwappableToken,
     tokenOut: SwappableToken,
     amountInRaw: bigint
@@ -239,32 +271,121 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
     for (const fee of tiers) {
       try {
-        const { result } = await this.breaker.execute(() =>
-          client.simulateContract({
-            address: this.quoter,
-            abi: UNISWAP_V3_QUOTER_V2_ABI,
-            functionName: "quoteExactInputSingle",
-            args: [
-              {
-                tokenIn: tokenIn.contractId as Address,
-                tokenOut: tokenOut.contractId as Address,
-                amountIn: amountInRaw,
-                fee,
-                sqrtPriceLimitX96: 0n,
-              },
-            ],
-          })
-        );
+        const { result } = await client.simulateContract({
+          address: this.quoter,
+          abi: UNISWAP_V3_QUOTER_V2_ABI,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: tokenIn.contractId as Address,
+              tokenOut: tokenOut.contractId as Address,
+              amountIn: amountInRaw,
+              fee,
+              sqrtPriceLimitX96: 0n,
+            },
+          ],
+        });
         const [amountOut] = result as readonly [bigint, bigint, number, bigint];
         if (amountOut > 0n) {
           this.feeTierCache.set(pairKey, fee);
           return { amountOut, fee };
         }
-      } catch {
-        // No pool at this fee tier (or insufficient liquidity) — try the next.
+      } catch (error) {
+        if (isNoPoolRevert(error)) continue;
+        throw error;
       }
     }
     return null;
+  }
+
+  /** A whole multi-hop path in one quoter call. */
+  private async quotePath(
+    tokens: SwappableToken[],
+    fees: number[],
+    amountInRaw: bigint
+  ): Promise<bigint | null> {
+    try {
+      const { result } = await this.publicClient().simulateContract({
+        address: this.quoter,
+        abi: UNISWAP_V3_QUOTER_V2_ABI,
+        functionName: "quoteExactInput",
+        args: [encodePath(tokens.map((t) => t.contractId as Address), fees), amountInRaw],
+      });
+      const [amountOut] = result as readonly [bigint, ...unknown[]];
+      return amountOut > 0n ? amountOut : null;
+    } catch (error) {
+      if (isNoPoolRevert(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Tokens worth routing through. Wrapped native first (where almost all depth
+   * is), then the chain's stables — the pairs a stock is actually quoted
+   * against. Capped so a quote is a bounded number of calls.
+   */
+  private hopCandidates(): SwappableToken[] {
+    const stableSymbols = new Set(["USDC", "USDT", "DAI", "USDG", "USDm", "USDC.e"]);
+    const out: SwappableToken[] = [];
+    if (this.evm.wrappedNative) {
+      const wrapped = this.tokenList.find(
+        (t) => t.contractId.toLowerCase() === this.evm.wrappedNative!.toLowerCase()
+      );
+      if (wrapped) out.push(wrapped);
+    }
+    for (const t of this.tokenList) {
+      if (stableSymbols.has(t.symbol) && !out.some((o) => o.contractId === t.contractId)) out.push(t);
+    }
+    return out.slice(0, 3);
+  }
+
+  /**
+   * Direct pool if one exists, else a 2-hop path through a wrapped native or a
+   * stable. The 2-hop case is what makes a chain where stocks quote against
+   * WETH — not the chain's dollar — actually route (Robinhood's `AAPL/USDG`).
+   *
+   * The whole search is one breaker execution; individual no-pool reverts are
+   * data and never counted.
+   */
+  private async bestRoute(
+    tokenIn: SwappableToken,
+    tokenOut: SwappableToken,
+    amountInRaw: bigint
+  ): Promise<Route | null> {
+    return this.breaker.execute(async () => {
+      let best: Route | null = null;
+
+      const direct = await this.quoteSingle(tokenIn, tokenOut, amountInRaw);
+      if (direct) {
+        // A direct pool exists. Don't pay for a 2-hop search on every quote to
+        // maybe beat it — the fallback exists to create a route, not to
+        // optimise one that already works.
+        return { amountOut: direct.amountOut, tokens: [tokenIn, tokenOut], fees: [direct.fee] };
+      }
+
+      const inId = tokenIn.contractId.toLowerCase();
+      const outId = tokenOut.contractId.toLowerCase();
+      const mids = this.hopCandidates().filter(
+        (m) => m.contractId.toLowerCase() !== inId && m.contractId.toLowerCase() !== outId
+      );
+
+      // Bounded: at most a handful of hop × fee combinations per quote.
+      const MAX_ATTEMPTS = 24;
+      let attempts = 0;
+      outer: for (const mid of mids) {
+        for (const f1 of this.feeTiers) {
+          for (const f2 of this.feeTiers) {
+            if (attempts++ >= MAX_ATTEMPTS) break outer;
+            const amountOut = await this.quotePath([tokenIn, mid, tokenOut], [f1, f2], amountInRaw);
+            if (amountOut && (!best || amountOut > best.amountOut)) {
+              best = { amountOut, tokens: [tokenIn, mid, tokenOut], fees: [f1, f2] };
+            }
+          }
+        }
+      }
+
+      return best;
+    });
   }
 
   async hasRoute(tokenIn: string, tokenOut: string): Promise<boolean> {
@@ -274,7 +395,7 @@ export class UniswapV3Provider extends BaseDEXProvider {
     ]);
     if (!tIn || !tOut) return false;
     const probe = parseUnits("1", tIn.decimals);
-    return (await this.quoteRaw(tIn, tOut, probe)) !== null;
+    return (await this.bestRoute(tIn, tOut, probe)) !== null;
   }
 
   async getTokenPrice(tokenSymbol: string): Promise<number | null> {
@@ -289,9 +410,9 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
     try {
       const probe = parseUnits("1", token.decimals);
-      const result = await this.quoteRaw(token, stable, probe);
-      if (!result) return null;
-      return this.cachePrice(cacheKey, Number(formatUnits(result.amountOut, stable.decimals)));
+      const route = await this.bestRoute(token, stable, probe);
+      if (!route) return null;
+      return this.cachePrice(cacheKey, Number(formatUnits(route.amountOut, stable.decimals)));
     } catch {
       return null;
     }
@@ -308,13 +429,15 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
     try {
       const amountInRaw = parseUnits(toDecimalString(amountIn), tIn.decimals);
-      const result = await this.quoteRaw(tIn, tOut, amountInRaw);
-      if (!result) return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
+      const route = await this.bestRoute(tIn, tOut, amountInRaw);
+      if (!route) return { amountOut: 0, priceImpact: 0, feeBps: 0, feeAmount: 0 };
 
-      const amountOut = Number(formatUnits(result.amountOut, tOut.decimals));
+      const amountOut = Number(formatUnits(route.amountOut, tOut.decimals));
       // Uniswap fee is in hundredths of a bip (1e-6 of amountIn); bps is 1e-4.
-      const feeBps = result.fee / 100;
-      const feeAmount = amountIn * (result.fee / 1_000_000);
+      // Multi-hop pays a fee per pool, so the reported fee is the sum.
+      const totalFee = route.fees.reduce((sum, f) => sum + f, 0);
+      const feeBps = totalFee / 100;
+      const feeAmount = amountIn * (totalFee / 1_000_000);
 
       const [priceIn, priceOut] = await Promise.all([
         this.getTokenPrice(tokenIn),
@@ -361,27 +484,44 @@ export class UniswapV3Provider extends BaseDEXProvider {
 
     try {
       const amountInRaw = parseUnits(toDecimalString(amountIn), tIn.decimals);
-      const result = await this.quoteRaw(tIn, tOut, amountInRaw);
-      if (!result) return null;
+      const route = await this.bestRoute(tIn, tOut, amountInRaw);
+      if (!route) return null;
 
       const amountOutMinimumRaw = parseUnits(toDecimalString(minAmountOut), tOut.decimals);
       const router = this.router;
 
-      const swapData = encodeFunctionData({
-        abi: UNISWAP_V3_ROUTER_ABI,
-        functionName: "exactInputSingle",
-        args: [
-          {
-            tokenIn: tIn.contractId as Address,
-            tokenOut: tOut.contractId as Address,
-            fee: result.fee,
-            recipient: senderAddress as Address,
-            amountIn: amountInRaw,
-            amountOutMinimum: amountOutMinimumRaw,
-            sqrtPriceLimitX96: 0n,
-          },
-        ],
-      });
+      const swapData =
+        route.tokens.length === 2
+          ? encodeFunctionData({
+              abi: UNISWAP_V3_ROUTER_ABI,
+              functionName: "exactInputSingle",
+              args: [
+                {
+                  tokenIn: tIn.contractId as Address,
+                  tokenOut: tOut.contractId as Address,
+                  fee: route.fees[0]!,
+                  recipient: senderAddress as Address,
+                  amountIn: amountInRaw,
+                  amountOutMinimum: amountOutMinimumRaw,
+                  sqrtPriceLimitX96: 0n,
+                },
+              ],
+            })
+          : encodeFunctionData({
+              abi: UNISWAP_V3_ROUTER_ABI,
+              functionName: "exactInput",
+              args: [
+                {
+                  path: encodePath(
+                    route.tokens.map((t) => t.contractId as Address),
+                    route.fees
+                  ),
+                  recipient: senderAddress as Address,
+                  amountIn: amountInRaw,
+                  amountOutMinimum: amountOutMinimumRaw,
+                },
+              ],
+            });
 
       const calls: { to: string; data: string; value?: string }[] = [];
 

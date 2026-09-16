@@ -35,10 +35,13 @@ describe("native asset wrapping", () => {
     provider = new UniswapV3Provider(BASE_MAINNET);
 
     // Stub the chain reads: this is about payload construction, not RPC.
+    // A two-token route keeps this on the single-pool path.
     vi.spyOn(
-      provider as unknown as { quoteRaw: () => Promise<{ amountOut: bigint; fee: number }> },
-      "quoteRaw"
-    ).mockResolvedValue({ amountOut: 2_000_000n, fee: 500 });
+      provider as unknown as {
+        bestRoute: () => Promise<{ amountOut: bigint; tokens: unknown[]; fees: number[] }>;
+      },
+      "bestRoute"
+    ).mockResolvedValue({ amountOut: 2_000_000n, tokens: [{}, {}], fees: [500] });
 
     vi.spyOn(
       provider as unknown as { publicClient: () => unknown },

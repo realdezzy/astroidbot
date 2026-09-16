@@ -94,7 +94,11 @@ describe("UniswapV3Provider", () => {
     mockPublicClient.simulateContract.mockRejectedValue(new Error("execution reverted"));
     const has = await provider.hasRoute(WETH, USDC);
     expect(has).toBe(false);
-    expect(mockPublicClient.simulateContract).toHaveBeenCalledTimes(3); // tried all 3 fee tiers
+    // Tried every direct fee tier before falling back to multi-hop.
+    const singlePoolCalls = mockPublicClient.simulateContract.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { functionName: string }).functionName === "quoteExactInputSingle"
+    );
+    expect(singlePoolCalls).toHaveLength(3);
   });
 
   it("hasRoute returns true as soon as one fee tier has liquidity", async () => {
@@ -183,5 +187,60 @@ describe("UniswapV3Provider", () => {
     mockPublicClient.simulateContract.mockRejectedValue(new Error("execution reverted"));
     const payload = await provider.buildSwapPayload(WETH, USDC, 1, 0.9, SENDER);
     expect(payload).toBeNull();
+  });
+
+  // ─── Multi-hop ─────────────────────────────────────────────────────────────
+  // A stock often has no direct pool against the chain's dollar but does route
+  // through the wrapped native (Robinhood's AAPL is only paired with WETH). The
+  // direct-only provider reported "no route" for those.
+
+  describe("multi-hop routing", () => {
+    const NVDAc = "0xb20000000000000000000078ee7ce2fe4908108c";
+    const DAI = "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb";
+
+    it("falls back to a 2-hop path when no direct pool exists", async () => {
+      mockPublicClient.simulateContract.mockImplementation(
+        async ({ functionName }: { functionName: string }) => {
+          if (functionName === "quoteExactInputSingle") throw new Error("execution reverted");
+          return { result: [2000000000n, [], [], 0n] }; // quoteExactInput
+        }
+      );
+
+      await expect(provider.hasRoute(NVDAc, DAI)).resolves.toBe(true);
+
+      const pathCalls = mockPublicClient.simulateContract.mock.calls.filter(
+        (c: unknown[]) => (c[0] as { functionName: string }).functionName === "quoteExactInput"
+      );
+      expect(pathCalls.length).toBeGreaterThan(0);
+    });
+
+    it("encodes exactInput with a packed path for a 2-hop route", async () => {
+      mockPublicClient.simulateContract.mockImplementation(
+        async ({ functionName }: { functionName: string }) => {
+          if (functionName === "quoteExactInputSingle") throw new Error("execution reverted");
+          return { result: [2000000000n, [], [], 0n] };
+        }
+      );
+      mockPublicClient.readContract.mockResolvedValue(0n); // needs approval
+
+      const payload = await provider.buildSwapPayload(NVDAc, DAI, 1, 1, SENDER);
+      expect(payload).not.toBeNull();
+
+      const { decodeFunctionData } = await import("viem");
+      const { UNISWAP_V3_ROUTER_ABI } = await import(
+        "../../../src/services/chains/evm/abis.js"
+      );
+      const swap = payload!.calls![payload!.calls!.length - 1]!;
+      const decoded = decodeFunctionData({
+        abi: UNISWAP_V3_ROUTER_ABI,
+        data: swap.data as `0x${string}`,
+      });
+
+      expect(decoded.functionName).toBe("exactInput");
+      // Two hops: token(20) + fee(3) + token(20) + fee(3) + token(20) = 66 bytes.
+      const path = (decoded.args as { path: string }[])[0]!.path;
+      expect(path.startsWith("0x")).toBe(true);
+      expect((path.length - 2) / 2).toBe(66);
+    });
   });
 });
