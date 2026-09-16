@@ -48,6 +48,7 @@ export interface CuratedStock {
 
 const BASE_SOURCE =
   "https://docs.base.org/base-chain/specs/reference/b20/tokenized-stocks-on-base";
+const ONDO_SOURCE = "https://ondo.finance/ondo-stocks";
 
 export const CURATED_STOCKS: readonly CuratedStock[] = [
   {
@@ -170,6 +171,154 @@ export const CURATED_STOCKS: readonly CuratedStock[] = [
     oracleDecimals: 8,
     sourceUrl: BASE_SOURCE,
   },
+
+  // Solana — Ondo Stocks (Ondo Global Markets), SPL tokens minted under
+  // Token-2022. Mints are base58 and therefore case-sensitive; never lowercase
+  // them. Verified on Solana mainnet via Jupiter's token API (tagged
+  // `ondo`+`verified`) and a live Jupiter route for the majors.
+  //
+  // The Token-2022 extensions are benign in practice: `transferHook.programId`
+  // is null (no eligibility hook is installed), `defaultAccountState` is
+  // `initialized` (new token accounts are not frozen), and `pausableConfig` is
+  // unpaused. KYC gates mint/redeem at the issuer, not secondary DEX trading.
+  //
+  // These are total-return trackers: `scaledUiAmountConfig.multiplier` grows
+  // with dividends, so a raw balance is not the equity value. The DEX/Jupiter
+  // price is the market price actually paid, which is what a trade needs; a
+  // portfolio *balance* has to apply the multiplier.
+  //
+  // No `oracleFeed`: that field is the EVM Chainlink aggregator. Solana pricing
+  // comes from the DEX route (Jupiter) and the internal swap index.
+  {
+    chainId: "solana:mainnet",
+    contractId: "gEGtLTPNQ7jcg25zTetkbmF7teoDLcrfTnQfmn2ondo",
+    symbol: "NVDAon",
+    name: "NVIDIA (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "NVDA",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "123mYEnRLM2LLYsJW3K6oyYh8uP1fngj732iG638ondo",
+    symbol: "AAPLon",
+    name: "Apple (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "AAPL",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "KeGv7bsfR4MheC1CkmnAVceoApjrkvBhHYjWb67ondo",
+    symbol: "TSLAon",
+    name: "Tesla (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "TSLA",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "bbahNA5vT9WJeYft8tALrH1LXWffjwqVoUbqYa1ondo",
+    symbol: "GOOGLon",
+    name: "Alphabet Class A (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "GOOGL",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "FRmH6iRkMr33DLG6zVLR7EM4LojBFAuq6NtFzG6ondo",
+    symbol: "MSFTon",
+    name: "Microsoft (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "MSFT",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "14Tqdo8V1FhzKsE3W2pFsZCzYPQxxupXRcqw9jv6ondo",
+    symbol: "AMZNon",
+    name: "Amazon (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "AMZN",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "fDxs5y12E7x7jBwCKBXGqt71uJmCWsAQ3Srkte6ondo",
+    symbol: "METAon",
+    name: "Meta Platforms (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "META",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "k18WJUULWheRkSpSquYGdNNmtuE2Vbw1hpuUi92ondo",
+    symbol: "SPYon",
+    name: "SPDR S&P 500 ETF (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "SPY",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "HrYNm6jTQ71LoFphjVKBTdAE4uja7WsmLG8VxB8ondo",
+    symbol: "QQQon",
+    name: "Invesco QQQ (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "QQQ",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "6xHEyem9hmkGtVq6XGCiQUGpPsHBaoYuYdFNZa5ondo",
+    symbol: "CRCLon",
+    name: "Circle Internet Group (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "CRCL",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "BVdXGvmgi6A9oAiwWvBvP76fyTqcCNRJMM7zMN6ondo",
+    symbol: "HOODon",
+    name: "Robinhood Markets (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "HOOD",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "HfsnTS5qtdStwec9DfBrunRqnAMYMMz1kjv9Hu9ondo",
+    symbol: "PLTRon",
+    name: "Palantir Technologies (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "PLTR",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
+  {
+    chainId: "solana:mainnet",
+    contractId: "5u6KDiNJXxX4rGMfYT4BApZQC5CuDNrG6MHkwp1ondo",
+    symbol: "COINon",
+    name: "Coinbase (Ondo Tokenized)",
+    decimals: 9,
+    underlyingSymbol: "COIN",
+    issuer: "Ondo",
+    sourceUrl: ONDO_SOURCE,
+  },
 ] as const;
 
 /** The curated stocks worth listing on one chain. */
@@ -179,8 +328,11 @@ export function stocksForChain(chainId: ChainId): CuratedStock[] {
 
 /** The curated instrument for one token, or undefined if it is not one. */
 export function stockByContract(chainId: ChainId, contractId: string): CuratedStock | undefined {
-  const needle = contractId.toLowerCase();
+  // EVM addresses are case-insensitive; Solana mints are base58 and are not.
+  const evm = contractId.startsWith("0x");
   return CURATED_STOCKS.find(
-    (s) => s.chainId === chainId && s.contractId.toLowerCase() === needle
+    (s) =>
+      s.chainId === chainId &&
+      (evm ? s.contractId.toLowerCase() === contractId.toLowerCase() : s.contractId === contractId)
   );
 }

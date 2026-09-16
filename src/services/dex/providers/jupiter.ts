@@ -5,6 +5,7 @@ import { CircuitBreakerRegistry } from "../../../utils/circuitBreaker.js";
 import { ConfigManager } from "../../../config.js";
 import { rpcUrlOverride } from "../../chains/evm/evmClient.js";
 import { requireSvmConfig, type ChainDescriptor } from "../../../types/chain.js";
+import { stocksForChain } from "../../stocks/stockRegistry.js";
 import type { SwappableToken, TransactionPayload } from "../../../types.js";
 import type { DEXQuote } from "../../../types/dexProvider.js";
 
@@ -75,14 +76,27 @@ export class JupiterProvider extends BaseDEXProvider {
   }
 
   private tokenList(): SwappableToken[] {
-    return Object.entries(CURATED_TOKENS).map(([symbol, t]) => ({
-      contractId: t.mint,
-      symbol,
-      name: t.name,
-      decimals: t.decimals,
-      chainFamily: this.descriptor.family,
-      chainId: this.descriptor.chainId,
-    }));
+    return [
+      ...Object.entries(CURATED_TOKENS).map(([symbol, t]) => ({
+        contractId: t.mint,
+        symbol,
+        name: t.name,
+        decimals: t.decimals,
+        chainFamily: this.descriptor.family,
+        chainId: this.descriptor.chainId,
+      })),
+      // Curated tokenized stocks (Ondo's `NVDAon` etc.). Listing them here is
+      // what makes the catalogue treat them as routable, so discovery gets a
+      // live Jupiter price instead of only identity.
+      ...stocksForChain(this.descriptor.chainId).map((s) => ({
+        contractId: s.contractId,
+        symbol: s.symbol,
+        name: s.name,
+        decimals: s.decimals,
+        chainFamily: this.descriptor.family,
+        chainId: this.descriptor.chainId,
+      })),
+    ];
   }
 
   async getSwappableTokens(_refresh = false): Promise<SwappableToken[]> {
@@ -102,6 +116,22 @@ export class JupiterProvider extends BaseDEXProvider {
         symbol: needle,
         name: curated.name,
         decimals: curated.decimals,
+        chainFamily: this.descriptor.family,
+        chainId: this.descriptor.chainId,
+      };
+    }
+
+    // A curated tokenized stock, by symbol (`NVDAon`) or by its exact mint.
+    // Exact, not lowercased — base58 is case-sensitive.
+    const stock = stocksForChain(this.descriptor.chainId).find(
+      (s) => s.symbol.toUpperCase() === needle || s.contractId === symbolOrMint
+    );
+    if (stock) {
+      return {
+        contractId: stock.contractId,
+        symbol: stock.symbol,
+        name: stock.name,
+        decimals: stock.decimals,
         chainFamily: this.descriptor.family,
         chainId: this.descriptor.chainId,
       };

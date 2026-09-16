@@ -130,9 +130,12 @@ export class TokenDiscoveryService {
 
     for (const stock of stocks) {
       // EVM addresses are case-insensitive and every other EVM row is stored
-      // lowercased (pools come out of logs that way). Storing the checksummed
-      // form here would create a second row for the same token.
-      const contractId = stock.contractId.toLowerCase();
+      // lowercased (pools come out of logs that way). Solana mints are base58
+      // and case-sensitive — lowercasing one corrupts it into a non-existent
+      // mint, so only 0x addresses are normalised.
+      const contractId = stock.contractId.startsWith("0x")
+        ? stock.contractId.toLowerCase()
+        : stock.contractId;
       try {
         await db.prisma.token.upsert({
           where: { chainId_contractId: { chainId, contractId } },

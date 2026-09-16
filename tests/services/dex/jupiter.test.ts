@@ -179,4 +179,39 @@ describe("JupiterProvider", () => {
     expect(quote.priceImpact).toBe(0.1);
     expect(quote.amountOut).toBeCloseTo(74, 6);
   });
+
+  describe("curated tokenized stocks (Ondo)", () => {
+    const NVDAON_MINT = "gEGtLTPNQ7jcg25zTetkbmF7teoDLcrfTnQfmn2ondo";
+
+    it("lists them so discovery treats them as routable", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      const tokens = await provider.getSwappableTokens();
+      const nvda = tokens.find((t) => t.symbol === "NVDAon");
+      expect(nvda).toBeDefined();
+      expect(nvda!.contractId).toBe(NVDAON_MINT);
+      expect(nvda!.decimals).toBe(9);
+    });
+
+    it("resolves a stock by symbol without an RPC round trip", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      fetchMock.mockResolvedValue(quoteResponse("199580000")); // 199.58 USDC (6dp)
+
+      const quote = await provider.getQuote("NVDAon", "USDC", 1);
+
+      // 1 NVDAon at 9 decimals = 1_000_000_000 base units.
+      const quoteUrl = fetchMock.mock.calls.map(String).find((u) => u.includes("jup.ag"))!;
+      expect(quoteUrl).toMatch(/[?&]amount=1000000000(&|$)/);
+      expect(quote.amountOut).toBeCloseTo(199.58, 6);
+      expect(fetchMock.mock.calls.every((c) => String(c[0]).includes("jup.ag"))).toBe(true);
+    });
+
+    it("resolves a stock by its exact, case-sensitive mint", async () => {
+      const provider = new JupiterProvider(SOLANA_MAINNET);
+      fetchMock.mockResolvedValue(quoteResponse("199580000"));
+
+      expect(await provider.hasRoute(NVDAON_MINT, "USDC")).toBe(true);
+      // Curated, so decimals are known: no RPC lookup.
+      expect(fetchMock.mock.calls.every((c) => String(c[0]).includes("jup.ag"))).toBe(true);
+    });
+  });
 });
