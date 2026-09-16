@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { Flame, TrendingUp, Sparkles, ArrowUpDown } from "lucide-react";
+import { Flame, TrendingUp, Sparkles, ArrowUpDown, Landmark } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { classNames } from "../lib/utils";
@@ -14,6 +14,7 @@ interface DiscoveredToken {
   name: string;
   chainId: string;
   chainName: string;
+  assetClass: string;
   dexId: string;
   priceUsd: number | null;
   priceChange: {
@@ -41,6 +42,9 @@ const CATEGORIES = [
   { id: "trending", label: "Trending", icon: Flame },
   { id: "gainers", label: "Gainers", icon: TrendingUp },
   { id: "new", label: "New", icon: Sparkles },
+  // Not a ranking like the others: this tab swaps the asset class, showing the
+  // curated tokenized-stock list instead of crypto tokens.
+  { id: "stocks", label: "Stocks", icon: Landmark },
   { id: "all", label: "All", icon: ArrowUpDown },
 ] as const;
 
@@ -76,6 +80,14 @@ function age(createdAt: number | null): string {
   return `${Math.floor(days / 365)}y`;
 }
 
+function StockBadge() {
+  return (
+    <span className="rounded bg-brand-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-brand-400">
+      Stock
+    </span>
+  );
+}
+
 function Change({ value }: { value: number | null }) {
   if (value === null || !Number.isFinite(value)) {
     return <span className="text-muted-text/50">—</span>;
@@ -108,10 +120,21 @@ export function TokenDiscovery() {
   const chainId = searchParams.get("chainId");
   const searchQuery = searchParams.get("q");
 
+  // "Stocks" is an asset class, not a ranking. It reuses the trending ordering
+  // so the list is still useful, but asks for EQUITY rows only. Trending /
+  // Gainers / New are crypto rankings, so they exclude stocks; "All" sends no
+  // asset class at all and stays the one view that spans both.
+  const isStocks = category === "stocks";
+  const assetClass = isStocks ? "EQUITY" : category === "all" ? null : "CRYPTO";
+
   const { data, isLoading } = useQuery<DiscoverResponse>({
     queryKey: ["discover", category, chainId, searchQuery],
     queryFn: () => {
-      const params = new URLSearchParams({ category, pageSize: "50" });
+      const params = new URLSearchParams({
+        category: isStocks ? "trending" : category,
+        pageSize: "50",
+      });
+      if (assetClass) params.set("assetClass", assetClass);
       if (chainId) params.set("chainId", chainId);
       if (searchQuery) params.set("q", searchQuery);
       return apiFetch(`/tokens/discover?${params}`);
@@ -192,6 +215,7 @@ export function TokenDiscovery() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-title-text">{token.symbol}</span>
+                    {token.assetClass === "EQUITY" && <StockBadge />}
                     <span className="truncate text-xs text-muted-text">{token.name}</span>
                   </div>
                   <div className="mt-1 flex items-center gap-1.5">
@@ -264,6 +288,7 @@ export function TokenDiscovery() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-title-text">{token.symbol}</span>
+                        {token.assetClass === "EQUITY" && <StockBadge />}
                         <span className="truncate text-xs text-muted-text">{token.name}</span>
                       </div>
                       <div className="mt-0.5 flex items-center gap-1.5">

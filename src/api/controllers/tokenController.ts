@@ -59,6 +59,7 @@ export function serialiseToken(row: {
   symbol: string;
   name: string;
   decimals: number;
+  assetClass?: string | null;
   logoUrl?: string | null;
   dexId?: string | null;
   priceUsd?: number | null;
@@ -81,6 +82,7 @@ export function serialiseToken(row: {
     decimals: row.decimals,
     chainId: row.chainId,
     chainName: getChainDisplayName(row.chainId),
+    assetClass: row.assetClass || "CRYPTO",
     dexId: row.dexId || "DEX",
     icon: row.logoUrl || undefined,
     priceUsd: row.priceUsd ?? null,

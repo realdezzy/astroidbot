@@ -23,6 +23,7 @@ router.use(discoveryLimiter);
 const VALID_CATEGORIES = new Set(["trending", "gainers", "new", "all"]);
 const VALID_SORTS = new Set(["volume", "change", "liquidity", "symbol"]);
 const VALID_TIMEFRAMES = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
+const VALID_ASSET_CLASSES = new Set(["CRYPTO", "EQUITY"]);
 
 /**
  * How far back the per-token activity panels look.
@@ -75,11 +76,15 @@ async function cached<T>(key: string, compute: () => Promise<T>): Promise<T> {
 router.get("/tokens/discover", async (req: Request, res: Response) => {
   try {
     const sortParam = String(req.query.sort ?? "volume");
+    const assetClassParam = String(req.query.assetClass ?? "").toUpperCase();
     const result = await TokenDiscoveryService.getInstance().discover({
       chainId: req.query.chainId ? String(req.query.chainId) : undefined,
       query: req.query.q ? String(req.query.q) : undefined,
       category: VALID_CATEGORIES.has(String(req.query.category ?? ""))
         ? (String(req.query.category) as "trending")
+        : undefined,
+      assetClass: VALID_ASSET_CLASSES.has(assetClassParam)
+        ? (assetClassParam as "CRYPTO" | "EQUITY")
         : undefined,
       sort: VALID_SORTS.has(sortParam) ? (sortParam as "volume") : "volume",
       page: req.query.page ? parseInt(String(req.query.page), 10) : 1,

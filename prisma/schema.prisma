@@ -509,6 +509,9 @@ model Token {
   symbol         String
   name           String
   decimals       Int
+  // "CRYPTO" | "EQUITY". Set by the curated stock registry, never guessed from
+  // a symbol: a token called AAPL is not evidence of anything.
+  assetClass     String    @default("CRYPTO")
   logoUrl        String?
   dexId          String?
   priceUsd       Float?
@@ -529,6 +532,7 @@ model Token {
 
   @@unique([chainId, contractId])
   @@index([chainId, volume24h])
+  @@index([assetClass, volume24h])
   @@index([symbol])
 }
 

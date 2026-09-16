@@ -2,6 +2,7 @@ import { DatabaseService } from "./db.js";
 import { DEXRegistry } from "./dex/dexRegistry.js";
 import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
 import { resolveMarketDataProvider } from "./marketData/index.js";
+import { stocksForChain } from "./stocks/stockRegistry.js";
 import { logger } from "../utils/logger.js";
 import type { MarketDataProvider } from "./marketData/types.js";
 import type { ChainId } from "../types/chain.js";
@@ -38,6 +39,11 @@ export interface DiscoveryFilters {
   pageSize?: number;
   /** Include tokens under the liquidity floor. Off by default. */
   includeIlliquid?: boolean;
+  /**
+   * Restrict to one asset class. Absent means no restriction, which is the
+   * historical behaviour — a caller that predates asset classes is unaffected.
+   */
+  assetClass?: "CRYPTO" | "EQUITY";
   /**
    * Include chains flagged `isTestnet`. Off by default — testnet tokens have
    * meaningless prices and would otherwise sort straight into the top of a
@@ -80,13 +86,18 @@ export class TokenDiscoveryService {
     this.provider = provider;
   }
 
-  async syncAll(): Promise<{ chains: number; tokens: number; promoted: number }> {
+  async syncAll(): Promise<{ chains: number; tokens: number; promoted: number; stocks: number }> {
     const chains = ChainAdapterRegistry.getInstance().tradable();
     let tokens = 0;
     let promoted = 0;
+    let stocks = 0;
 
     for (const descriptor of chains) {
       try {
+        // Seed the allowlist first so the rows exist when the sync below
+        // refreshes metrics. Seeding after would leave a curated stock without
+        // numbers until some later pass happened to find it.
+        stocks += await this.syncCuratedStocks(descriptor.chainId);
         tokens += await this.syncChain(descriptor.chainId);
         promoted += await this.promoteIndexedTokens(descriptor.chainId);
       } catch (error) {
@@ -97,8 +108,59 @@ export class TokenDiscoveryService {
       }
     }
 
-    logger.info("Token discovery sync complete", { chains: chains.length, tokens, promoted });
-    return { chains: chains.length, tokens, promoted };
+    logger.info("Token discovery sync complete", { chains: chains.length, tokens, promoted, stocks });
+    return { chains: chains.length, tokens, promoted, stocks };
+  }
+
+  /**
+   * Writes the curated stock allowlist into the catalogue.
+   *
+   * Identity and asset class only — never metrics. Metrics belong to the sync
+   * pass, and inventing them here would put a number on a row that no provider
+   * stands behind. The upsert leaves every market column untouched, so a stock
+   * whose pool the indexer already prices keeps its numbers across restarts.
+   */
+  private async syncCuratedStocks(chainId: ChainId): Promise<number> {
+    const stocks = stocksForChain(chainId);
+    if (stocks.length === 0) return 0;
+
+    const db = DatabaseService.getInstance();
+    let written = 0;
+
+    for (const stock of stocks) {
+      // EVM addresses are case-insensitive and every other EVM row is stored
+      // lowercased (pools come out of logs that way). Storing the checksummed
+      // form here would create a second row for the same token.
+      const contractId = stock.contractId.toLowerCase();
+      try {
+        await db.prisma.token.upsert({
+          where: { chainId_contractId: { chainId, contractId } },
+          create: {
+            chainId,
+            contractId,
+            symbol: stock.symbol,
+            name: stock.name,
+            decimals: stock.decimals,
+            assetClass: "EQUITY",
+          },
+          update: {
+            symbol: stock.symbol,
+            name: stock.name,
+            decimals: stock.decimals,
+            assetClass: "EQUITY",
+          },
+        });
+        written++;
+      } catch (error) {
+        logger.warn("Failed to seed curated stock", {
+          chainId,
+          contractId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return written;
   }
 
   /**
@@ -295,7 +357,15 @@ export class TokenDiscoveryService {
       if (mainnets.length > 0) where.chainId = { in: mainnets };
     }
 
-    if (!filters.includeIlliquid) {
+    if (filters.assetClass) {
+      where.assetClass = filters.assetClass;
+    }
+
+    // Curated equities bypass the liquidity floor. They are verified listings,
+    // not the long tail the floor exists to keep out, and a stock's AMM depth
+    // can be thin without the asset being untrustworthy. Applying it would
+    // empty the Stocks tab of exactly the names it is meant to show.
+    if (!filters.includeIlliquid && filters.assetClass !== "EQUITY") {
       where.OR = [
         { liquidityUsd: null },
         { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },

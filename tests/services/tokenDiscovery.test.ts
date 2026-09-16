@@ -235,6 +235,19 @@ describe("TokenDiscoveryService", () => {
       expect(result.tokens).toBe(2);
     });
 
+    it("seeds the curated stock allowlist before refreshing metrics", async () => {
+      tradableChains.push({ chainId: "base:mainnet" });
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+
+      const result = await service.syncAll();
+
+      expect(result.stocks).toBeGreaterThan(0);
+      const equityWrites = mockToken.upsert.mock.calls.filter(
+        (c) => c[0]?.update?.assetClass === "EQUITY"
+      );
+      expect(equityWrites).toHaveLength(result.stocks);
+    });
+
     it("continues when one chain's RPC is down", async () => {
       // One dead chain must not stop the others from syncing.
       tradableChains.push({ chainId: "base:mainnet" }, { chainId: "celo:mainnet" });
@@ -278,6 +291,18 @@ describe("TokenDiscoveryService", () => {
     it("scopes to one chain when asked", async () => {
       await service.discover({ chainId: "celo:mainnet" });
       expect(mockToken.findMany.mock.calls[0]![0].where.chainId).toBe("celo:mainnet");
+    });
+
+    it("filters by asset class when asked", async () => {
+      await service.discover({ assetClass: "EQUITY" });
+      expect(mockToken.findMany.mock.calls[0]![0].where.assetClass).toBe("EQUITY");
+    });
+
+    it("does not apply the liquidity floor to curated equities", async () => {
+      // A verified stock with thin AMM depth must still list on the Stocks tab.
+      // The floor exists to keep the unpromoted long tail out, not allowed assets.
+      await service.discover({ assetClass: "EQUITY" });
+      expect(mockToken.findMany.mock.calls[0]![0].where.OR).toBeUndefined();
     });
 
     it("sorts volume descending with nulls last", async () => {
