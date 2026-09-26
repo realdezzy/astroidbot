@@ -137,17 +137,37 @@ describe("SolanaAdapter", () => {
       expect(result).toEqual({ error: "Wallet 1 is busy executing another transaction" });
     });
 
-    it("refuses SPL transfers explicitly instead of silently sending SOL", async () => {
+    it("refuses a token symbol where a mint address belongs", async () => {
+      // SPL transfers work now, but this adapter resolves no symbols: `token`
+      // is a mint. "USDC" used to be refused because SPL was unimplemented, and
+      // it still has to be refused — silently treating it as native SOL is the
+      // outcome worth preventing, and it is the one an unparseable address
+      // would produce if this fell through.
+      //
+      // Refused before the wallet lock and before DRY_RUN, so a dry run cannot
+      // report success on it.
+      const result = await adapter.transfer({
+        walletId: 1,
+        senderAddress: "sender",
+        toAddress: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+        amount: 1,
+        token: "USDC",
+      });
+      expect(result).toEqual({
+        error: '"USDC" is not a valid SPL mint address — pass a mint, not a token symbol',
+      });
+      expect(mockRedis.acquireLock).not.toHaveBeenCalled();
+    });
+
+    it("refuses an unparseable recipient address", async () => {
       const result = await adapter.transfer({
         walletId: 1,
         senderAddress: "sender",
         toAddress: "dest",
         amount: 1,
-        token: "USDC",
+        token: "SOL",
       });
-      expect(result).toEqual({
-        error: "SPL token transfers are not implemented yet — only native SOL transfers",
-      });
+      expect(result).toEqual({ error: '"dest" is not a valid Solana address' });
     });
   });
 

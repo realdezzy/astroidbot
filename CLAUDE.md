@@ -10,16 +10,28 @@ AstroidBot is an AI-driven trading bot originally built for the Stacks blockchai
 
 Scripts are in `package.json` (backend) and `web/package.json` (frontend). The backend serves `web/dist` statically when it exists.
 
-Docker (full stack: Postgres + Redis + bot + indexer): `docker compose up --build -d`. **Two application containers, one image**: `bot` (`docker-entrypoint.sh` → `src/index.ts` — API, Telegram, trading cycle, queue workers) and `indexer` (`docker-entrypoint-indexer.sh` → `src/indexer.ts` — market-data ingestion only). They share Postgres and Redis and nothing else. The `bot` entrypoint runs `npx prisma migrate deploy` on boot, so `prisma/migrations/` is checked in and **is** the deploy path — a schema change needs a migration committed alongside it (`npm run db:migrate` locally), not just an edited `schema.prisma`. This replaced an earlier `prisma db push` entrypoint, which refused any change it deemed risky (it blocked the `Wallet` composite-unique change and crash-looped the container under `set -e`). A database provisioned by that old push path already has the schema and must be baselined once before the first `migrate deploy`, or it will fail trying to re-create existing objects:
+Docker (full stack: Postgres + Redis + bot + indexer): `docker compose up --build -d`. **Two application containers, one image**: `bot` (`docker-entrypoint.sh` → `src/index.ts` — API, Telegram, trading cycle, queue workers) and `indexer` (`docker-entrypoint-indexer.sh` → `src/indexer.ts` — market-data ingestion only). They share Postgres and Redis and nothing else. The `bot` entrypoint runs `npx prisma migrate deploy` on boot, so `prisma/migrations/` is checked in and **is** the deploy path — a schema change needs a migration committed alongside it (`npm run db:migrate` locally), not just an edited `schema.prisma`. This replaced an earlier `prisma db push` entrypoint, which refused any change it deemed risky (it blocked the `Wallet` composite-unique change and crash-looped the container under `set -e`). A database provisioned by that old push path already has the schema and must be baselined once before the first `migrate deploy`, or it will fail trying to re-create existing objects.
+
+**Do not baseline from a hardcoded list.** This section used to enumerate six migration names; there are now twenty-four, so following it marked a quarter of the history as applied and left `migrate deploy` to walk into objects that already existed. Derive the list instead, and check for drift before trusting it:
 
 ```bash
-npx prisma migrate resolve --applied 20250620000000_init
-npx prisma migrate resolve --applied 20260726120000_multichain_wallets_and_catchup
-npx prisma migrate resolve --applied 20260726220000_wallet_chain_index
-npx prisma migrate resolve --applied 20260727000000_token_catalogue_and_candle_chain
-npx prisma migrate resolve --applied 20260727010000_social_trading
-npx prisma migrate resolve --applied 20260802000000_market_data_indexer
+# 1. What does Prisma think the state is?
+npx prisma migrate status
+
+# 2. Does the live schema already match schema.prisma? Empty output means yes,
+#    and only then is blanket baselining correct.
+npx prisma migrate diff \
+  --from-url "$ASTROIDBOT_DATABASE_URL" \
+  --to-schema-datamodel prisma/schema.prisma \
+  --script
+
+# 3. If step 2 was empty, mark every migration on disk as applied.
+for m in prisma/migrations/*/; do
+  npx prisma migrate resolve --applied "$(basename "$m")"
+done
 ```
+
+If step 2 prints SQL, the database is behind `schema.prisma` and blanket baselining would skip real work: resolve only the migrations whose objects already exist, then let `migrate deploy` apply the rest.
 
 The `indexer` container deliberately does **not** run `migrate deploy` — two containers racing it on boot is a coin flip Prisma's advisory lock usually wins, and "usually" is not a property to want guarding a schema holding wallet keys. Compose starts it only once `bot` is healthy, which is after migrations have applied. Keep that single-owner rule if you add a third container.
 

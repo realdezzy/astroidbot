@@ -9,6 +9,7 @@ import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { AutoRefreshToggle } from "../components/AutoRefreshToggle";
 import { ChainBadge } from "../components/ChainBadge";
 import { useChains, chainLabel, nativeSymbolOf } from "../hooks/useChains";
+import { aggregateAssets } from "../lib/portfolioAssets";
 
 interface WalletType {
   id: number;
@@ -78,44 +79,11 @@ export function Portfolio() {
 
   // Combine balances of the same token across the selected wallets.
   //
-  // Keyed by `chainId:symbol`, never by the bare symbol. USDC on Base and USDC
-  // on Solana are different assets that cannot be moved between each other, and
-  // summing them produced a holding the user does not have — one row, one
-  // balance, no way to act on it. Same rule the backend catalogue follows.
-  const assetBalances: Record<
-    string,
-    { symbol: string; balance: number; usdValue: number; token: string; chain?: string | null }
-  > = {};
-
-  filteredWallets.forEach((w) => {
-    const wBalances = w.balances || [
-      {
-        token: nativeSymbolOf(w.chain, chains),
-        symbol: nativeSymbolOf(w.chain, chains),
-        balance: w.balance,
-        usdValue: w.balanceUsd,
-      },
-    ];
-    wBalances.forEach((b) => {
-      const key = `${w.chain ?? "unknown"}:${b.symbol.toUpperCase()}`;
-      if (assetBalances[key]) {
-        assetBalances[key].balance += b.balance;
-        assetBalances[key].usdValue += b.usdValue ?? 0;
-      } else {
-        assetBalances[key] = {
-          token: b.token,
-          symbol: b.symbol,
-          balance: b.balance,
-          usdValue: b.usdValue ?? 0,
-          chain: w.chain,
-        };
-      }
-    });
-  });
-
-  const assetsList = Object.values(assetBalances)
-    .filter((a) => a.balance > 0)
-    .sort((a, b) => b.usdValue - a.usdValue);
+  // Keyed by `chainId:symbol` inside `aggregateAssets`, never by the bare
+  // symbol. That rule lived in a loop here, where no test could reach it, which
+  // is how the page reintroduced a bug the backend had already fixed. It is a
+  // pure reduction, so it lives in lib/ with tests on it now.
+  const assetsList = aggregateAssets(filteredWallets, chains);
 
   const totalAssetValue = assetsList.reduce((sum, a) => sum + a.usdValue, 0);
 

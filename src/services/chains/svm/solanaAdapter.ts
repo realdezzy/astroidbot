@@ -6,14 +6,40 @@ import {
   TransactionMessage,
   VersionedTransaction,
   ComputeBudgetProgram,
-  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  getMint,
+  getAssociatedTokenAddressSync,
+  createTransferCheckedInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
+} from "@solana/spl-token";
 import bs58 from "bs58";
 import { logger } from "../../../utils/logger.js";
 import { toDecimalString } from "../../../utils/decimal.js";
 import { BaseChainAdapter } from "../baseChainAdapter.js";
 import { requireSvmConfig, type ChainDescriptor, type SvmChainConfig } from "../../../types/chain.js";
 import { rpcUrlOverride } from "../evm/evmClient.js";
+
+/**
+ * A decimal amount as integer base units, without ever multiplying a float.
+ *
+ * `Math.round(amount * 10 ** decimals)` is the obvious way and is wrong at the
+ * precision Solana uses: 1.005 at 9 decimals is 1004999999.9999999 as a
+ * double, so rounding lands a unit short, and above 2^53 the multiply
+ * quantizes outright. Scaling the decimal string moves no bits.
+ */
+function toBaseUnits(amount: number, decimals: number): bigint {
+  const text = toDecimalString(amount);
+  const negative = text.startsWith("-");
+  const [whole = "0", fraction = ""] = (negative ? text.slice(1) : text).split(".");
+  // Truncated, not rounded: a caller asking to send more precision than the
+  // token has is asking for something the token cannot represent.
+  const scaled = (fraction + "0".repeat(decimals)).slice(0, decimals);
+  const value = BigInt(whole + scaled);
+  return negative ? -value : value;
+}
 
 /**
  * Solana releases its lock after the signature is submitted, but confirmation
@@ -155,13 +181,30 @@ export class SolanaAdapter extends BaseChainAdapter {
     token: string;
     decimals?: number;
   }): Promise<{ txId: string } | { error: string }> {
-    if (params.token.toUpperCase() !== this.descriptor.nativeSymbol.toUpperCase()) {
-      // SPL transfers need an associated-token-account setup path that the
-      // trading flow doesn't currently exercise. Refusing explicitly beats
-      // silently sending the wrong thing.
-      return {
-        error: "SPL token transfers are not implemented yet — only native SOL transfers",
-      };
+    const isNative = params.token.toUpperCase() === this.descriptor.nativeSymbol.toUpperCase();
+
+    // Parsed before the lock and before the DRY_RUN short-circuit, because
+    // these two checks need no network and a dry run that reports success on an
+    // unparseable address is worse than useless — it is the run you did
+    // *instead* of finding out. Note `token` here is a mint address, not a
+    // symbol: this adapter has no symbol resolution, so "USDC" is a caller bug.
+    let recipient: PublicKey;
+    try {
+      recipient = new PublicKey(params.toAddress);
+    } catch {
+      return { error: `"${params.toAddress}" is not a valid Solana address` };
+    }
+
+    let mint: PublicKey | undefined;
+    if (!isNative) {
+      try {
+        mint = new PublicKey(params.token);
+      } catch {
+        return {
+          error: `"${params.token}" is not a valid SPL mint address — ` +
+            `pass a mint, not a token symbol`,
+        };
+      }
     }
 
     return this.withWalletLock(params.walletId, async (privateKey) => {
@@ -171,22 +214,88 @@ export class SolanaAdapter extends BaseChainAdapter {
       const keypair = this.keypairFrom(privateKey);
       const connection = this.connection();
 
-      // Via decimal string, not amount * LAMPORTS_PER_SOL: the float multiply
-      // introduces rounding at 9 decimals.
-      const lamports = BigInt(
-        Math.round(Number(toDecimalString(params.amount)) * LAMPORTS_PER_SOL)
-      );
-
       const instructions = [
         ComputeBudgetProgram.setComputeUnitPrice({
           microLamports: this.svm.priorityFeeMicroLamports ?? 20_000,
         }),
-        SystemProgram.transfer({
-          fromPubkey: keypair.publicKey,
-          toPubkey: new PublicKey(params.toAddress),
-          lamports,
-        }),
       ];
+
+      if (isNative) {
+        instructions.push(
+          SystemProgram.transfer({
+            fromPubkey: keypair.publicKey,
+            toPubkey: recipient,
+            lamports: toBaseUnits(params.amount, this.descriptor.nativeDecimals),
+          })
+        );
+      } else {
+        // An SPL transfer, which Solana wallets previously could not do at all:
+        // this returned "not implemented", so a user could acquire a position
+        // through Jupiter and then have no way to move it out.
+        //
+        // Non-null: `mint` is set above for every non-native token.
+        const splMint = mint!;
+
+        // Which token program owns the mint decides both the transfer
+        // instruction's program and how the associated token addresses derive,
+        // so it is read rather than assumed — Token-2022 mints built against
+        // the classic program derive an address that belongs to nobody.
+        const mintAccount = await connection.getAccountInfo(splMint);
+        if (!mintAccount) {
+          return { error: `Mint ${params.token} was not found on ${this.descriptor.chainId}` };
+        }
+
+        const tokenProgram = mintAccount.owner;
+        if (
+          !tokenProgram.equals(TOKEN_PROGRAM_ID) &&
+          !tokenProgram.equals(TOKEN_2022_PROGRAM_ID)
+        ) {
+          return { error: `${params.token} is not an SPL token mint` };
+        }
+
+        // Read on-chain when the caller doesn't state them. Never defaulted:
+        // decimals scale the amount being sent, so assuming 9 for a 6-decimal
+        // token sends a thousand times what was asked.
+        let decimals = params.decimals;
+        if (decimals === undefined) {
+          try {
+            decimals = (await getMint(connection, splMint, undefined, tokenProgram)).decimals;
+          } catch (error) {
+            return {
+              error: `Could not read decimals for ${params.token}: ` +
+                `${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+        }
+
+        const source = getAssociatedTokenAddressSync(splMint, keypair.publicKey, true, tokenProgram);
+        const destination = getAssociatedTokenAddressSync(splMint, recipient, true, tokenProgram);
+
+        // Idempotent: a recipient who has never held this mint has no account
+        // to credit, and the plain create instruction fails if two concurrent
+        // sends both try to make it.
+        instructions.push(
+          createAssociatedTokenAccountIdempotentInstruction(
+            keypair.publicKey, destination, recipient, splMint, tokenProgram
+          )
+        );
+
+        // Checked, not the plain transfer: it makes the cluster verify the
+        // decimals we scaled by, so a wrong value fails the transaction instead
+        // of quietly moving the wrong amount.
+        instructions.push(
+          createTransferCheckedInstruction(
+            source,
+            splMint,
+            destination,
+            keypair.publicKey,
+            toBaseUnits(params.amount, decimals),
+            decimals,
+            [],
+            tokenProgram
+          )
+        );
+      }
 
       const { blockhash } = await connection.getLatestBlockhash("confirmed");
       const message = new TransactionMessage({

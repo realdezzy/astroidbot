@@ -50,6 +50,13 @@ jobs:
       - name: Typecheck
         run: npm run build
 
+      # The ratchet in scripts/lint-ratchet.mjs holds warnings at a ceiling
+      # that can only fall, and zero errors is hard. It was documented as "the
+      # CI gate" while running nowhere in CI, so the ceiling could rise for as
+      # long as nobody ran it locally.
+      - name: Lint gate
+        run: npm run lint:gate
+
       - name: Run backend tests
         run: npm test
 
@@ -59,4 +66,11 @@ jobs:
 
       - name: Run frontend tests
         run: npm test
+        working-directory: web
+
+      # `npm test` does not typecheck the frontend — web/package.json's build
+      # is `tsc -b && vite build`, so without this a type error in the dashboard
+      # reaches main with a green tick.
+      - name: Build frontend
+        run: npm run build
         working-directory: web
