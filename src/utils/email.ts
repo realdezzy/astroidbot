@@ -1,11 +1,15 @@
-import nodemailer from "nodemailer";
+// `Transporter` is a named type export, not a namespace member: writing
+// `nodemailer.Transporter` failed with TS2503 and broke `npm run build`
+// outright, which took the Docker image build — where that command is the
+// deploy gate — with it.
+import nodemailer, { type Transporter } from "nodemailer";
 import { ConfigManager } from "../config.js";
 import { logger } from "./logger.js";
 
 
-let transporter: nodemailer.Transporter | null = null;
+let transporter: Transporter | null = null;
 
-function getTransporter(): nodemailer.Transporter | null {
+function getTransporter(): Transporter | null {
   if (transporter) return transporter;
 
   const config = ConfigManager.getInstance().config;

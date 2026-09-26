@@ -3,6 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     globals: true,
+    // Establishes the env every test needs before src/config.ts reads it.
+    // Without this the suite passed only where a populated .env existed —
+    // see tests/setup.ts.
+    setupFiles: ["tests/setup.ts"],
     include: ["tests/**/*.test.ts"],
     // Integration suites talk to live chains and, for some cases, need a
     // funded wallet. They are excluded from `npm test` and run by

@@ -6,14 +6,21 @@ dist/
 .git/
 .gitignore
 .env.example
-tests/
 web/node_modules/
 web/dist/
-vitest.config.ts
 jest.config.*
-tsconfig.json
-eslint.config.js
 Dockerfile
 docker-compose.yml
 .dockerignore
 README.md
+
+# NOT excluded, deliberately: the Dockerfile's build stage is the deploy gate.
+# It copies tests/, tsconfig.json, tsconfig.eslint.json, eslint.config.js,
+# vitest.config.ts and .lint-baseline.json, then runs the typecheck, the lint
+# ratchet and the suite before anything is compiled. Excluding them here made
+# `docker compose build` fail outright on
+#   failed to compute checksum of ref ...: "/tests": not found
+# which took the whole documented deploy path with it. If the gate moves out of
+# the image build, remove its inputs from the Dockerfile first and then re-add
+# them here — in that order, so the build never references a path this file
+# hides.

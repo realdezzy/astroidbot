@@ -12,6 +12,21 @@
 -- are the ones push already provisioned, where these objects exist and the
 -- history does not know it.
 -- DropForeignKey
+--
+-- PushSubscription's own FK needs dropping too, and its absence here is what
+-- made this migration fail on precisely the databases it exists to fix. The
+-- table is created with CREATE TABLE IF NOT EXISTS, so where push had already
+-- provisioned it the create is skipped — and the constraint it came with
+-- survives. The unguarded ADD CONSTRAINT at the bottom then aborts with
+-- 42710 "constraint already exists", which marks the migration failed and
+-- blocks every later one behind P3009.
+--
+-- Every ADD CONSTRAINT below is paired with a DROP IF EXISTS up here. Keep that
+-- pairing: a drift-closing migration has to be runnable against a database that
+-- already has the objects, or it only works where it is not needed.
+ALTER TABLE "PushSubscription" DROP CONSTRAINT IF EXISTS "PushSubscription_userId_fkey";
+
+-- DropForeignKey
 ALTER TABLE "IndexedSwap" DROP CONSTRAINT IF EXISTS "IndexedSwap_poolId_fkey";
 
 -- DropForeignKey
