@@ -1,16 +1,58 @@
 import { DatabaseService } from "../db.js";
-import { TransactionService } from "../transaction.js";
 import { ConfigManager } from "../../config.js";
 import { getTokensMeta } from "@velarprotocol/velar-sdk";
 import { logger } from "../../utils/logger.js";
 import { FungibleConditionCode } from "@stacks/transactions";
 import { createSTXPostCondition } from "../transaction.js";
+import { executeSwapPayload } from "../chains/executeSwap.js";
+import { walletChainId } from "../chains/walletChain.js";
+import { resolveTradeSettings } from "../tradeSettings.js";
+import { RiskManager } from "../riskManager.js";
+import { PortfolioManager } from "../portfolio.js";
+import { DEXRegistry } from "../dex/dexRegistry.js";
+import type { TransactionPayload } from "../../types.js";
 
-async function getTokenDetails(symbol: string) {
-  const tokens = await getTokensMeta();
-  return tokens.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+/**
+ * The mark price for a perp market, or a thrown error.
+ *
+ * Both call sites used to declare `let price = 2.0` and overwrite it from Velar
+ * when that worked, logging a warning otherwise. On the close path the result
+ * went straight into the liquidation comparison, so a failed price call decided
+ * — either way — whether a leveraged position was liquidated, against a number
+ * nobody had observed. $2.00 is also a plausible STX price, which is why it
+ * survived review.
+ *
+ * Leverage makes this the least forgiving place on the platform to guess, so
+ * this refuses instead. The same call is made twice elsewhere in the codebase
+ * ("stop fabricating market data"; "an unpriceable token is not a token worth
+ * zero") and the reasoning is identical: refusing costs an error the caller can
+ * show, guessing costs the position.
+ */
+async function requireMarkPrice(market: string): Promise<number> {
+  const symbol = market.split("-")[0] || market;
+
+  let tokens: Awaited<ReturnType<typeof getTokensMeta>>;
+  try {
+    tokens = await getTokensMeta();
+  } catch (error) {
+    throw new Error(
+      `Cannot determine a price for ${symbol}: the price feed is unreachable ` +
+      `(${error instanceof Error ? error.message : String(error)})`
+    );
+  }
+
+  const details = tokens.find((t) => t.symbol?.toUpperCase() === symbol.toUpperCase());
+  const price = details?.price != null ? Number(details.price) : NaN;
+
+  // A market absent from the feed and a feed that threw are the same condition
+  // — no price — and a zero or NaN is worse than either, because it would sail
+  // through arithmetic and produce a liquidation price of 0.
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error(`Cannot determine a price for ${symbol}: not quoted by the price feed`);
+  }
+
+  return price;
 }
-
 
 export class PerpService {
   private static instance: PerpService;
@@ -28,26 +70,19 @@ export class PerpService {
   async openPosition(
     userId: number,
     walletId: number,
-    market: string, 
+    market: string,
     direction: "LONG" | "SHORT",
-    margin: number, 
-    leverage: number 
+    margin: number,
+    leverage: number
   ) {
     const db = DatabaseService.getInstance();
     const wallet = await db.findWalletById(walletId);
     if (!wallet) throw new Error("Wallet not found");
     if (wallet.userId !== userId) throw new Error("Unauthorized wallet access");
 
+    const chainId = walletChainId(wallet);
     const symbol = market.split("-")[0] || market;
-    let entryPrice = 2.0;
-    try {
-      const details = await getTokenDetails(symbol);
-      if (details && details.price) {
-        entryPrice = Number(details.price);
-      }
-    } catch (err) {
-      logger.warn(`Failed to fetch Velar price for ${symbol}, using fallback`, { error: err });
-    }
+    const entryPrice = await requireMarkPrice(market);
 
     const marginMaintenance = 0.025;
     const liquidationPrice = direction === "LONG"
@@ -56,48 +91,77 @@ export class PerpService {
 
     const size = margin * leverage;
 
+    const settings = await resolveTradeSettings(userId, "personal", chainId);
+
+    // Leverage was the one product here with no exposure ceiling: there was no
+    // RiskManager call anywhere in this module, so `maxPositionPct` and
+    // `dailyLossLimit` bound spot trades and not this.
+    //
+    // Sized on `size`, not `margin`. The margin is what leaves the wallet; the
+    // notional is the exposure the limits exist to bound, and checking the
+    // margin would let a user at 5x take five times the position their cap
+    // allows while the check reported compliance.
+    const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, chainId);
+    const balances = await PortfolioManager.getInstance().fetchBalances(
+      wallet.address, tokens, userId, true, chainId
+    );
+    const risk = await RiskManager.getInstance().evaluateTrade(
+      userId,
+      {
+        tokenIn: "STX",
+        tokenOut: symbol,
+        amountIn: size,
+        direction: direction === "LONG" ? "BUY" : "SELL",
+        reason: `Open perp ${leverage}x ${direction} on ${market}`,
+      },
+      balances,
+      {
+        slippageBps: settings.slippageBps,
+        maxPositionPct: settings.maxPositionPct,
+        dailyLossLimit: settings.dailyLossLimit,
+      }
+    );
+    if (!risk.approved) {
+      throw new Error(risk.reason ?? "Trade rejected by risk limits");
+    }
+
     const config = ConfigManager.getInstance().config;
-    const contractAddress = config.VELAR_PERP_CONTRACT_ADDRESS;
-    const contractName = config.VELAR_PERP_CONTRACT_NAME;
-    const functionName = "open-position";
-
-    const functionArgs = [
-      `'${symbol}`,
-      `'${direction}`,
-      `u${Math.floor(leverage)}`,
-      `u${Math.floor(margin * 1000000)}`
-    ];
-
-    const txService = TransactionService.getInstance();
-    const action = {
-      tokenIn: "STX",
-      tokenOut: symbol,
-      amountIn: margin,
-      direction: direction === "LONG" ? "BUY" as const : "SELL" as const,
-      reason: `Open perp leverage position ${leverage}x ${direction} on ${market}`
-    };
-
     const txFee = 100_000n;
     const stxLimit = BigInt(Math.floor(margin * 1_000_000)) + txFee;
-    const postConditionsOverride = [
-      createSTXPostCondition(wallet.address, FungibleConditionCode.LessEqual, stxLimit)
-    ];
 
-    const settings = await db.findTradeSettings(userId, "personal");
-    const useGasless = settings?.useGasless ?? false;
+    const payload: TransactionPayload = {
+      kind: "stacks",
+      contractAddress: config.VELAR_PERP_CONTRACT_ADDRESS,
+      contractName: config.VELAR_PERP_CONTRACT_NAME,
+      functionName: "open-position",
+      functionArgs: [
+        `'${symbol}`,
+        `'${direction}`,
+        `u${Math.floor(leverage)}`,
+        `u${Math.floor(margin * 1000000)}`,
+      ],
+      // The cap on how much STX can leave the wallet. It rides on the payload
+      // now rather than being passed beside it, which is what lets this route
+      // through the shared dispatch point without losing it.
+      postConditions: [
+        createSTXPostCondition(wallet.address, FungibleConditionCode.LessEqual, stxLimit),
+      ],
+    };
 
-    const result = await txService.execute(
-      action,
-      contractAddress,
-      contractName,
-      functionName,
-      functionArgs,
+    const result = await executeSwapPayload(payload, {
+      action: {
+        tokenIn: "STX",
+        tokenOut: symbol,
+        amountIn: margin,
+        direction: direction === "LONG" ? "BUY" : "SELL",
+        reason: `Open perp leverage position ${leverage}x ${direction} on ${market}`,
+      },
       walletId,
-      wallet.address,
-      margin * 2,
-      useGasless,
-      postConditionsOverride
-    );
+      senderAddress: wallet.address,
+      maxOutbound: margin * 2,
+      useGasless: settings.useGasless,
+      chainId,
+    });
 
     if ("error" in result) {
       throw new Error(`On-chain transaction execution failed: ${result.error}`);
@@ -138,58 +202,51 @@ export class PerpService {
     const wallet = await db.findWalletById(position.walletId);
     if (!wallet) throw new Error("Wallet not found");
 
+    const chainId = walletChainId(wallet);
     const symbol = position.market.split("-")[0] || position.market;
-    let currentPrice = 2.0;
-    try {
-      const details = await getTokenDetails(symbol);
-      if (details && details.price) {
-        currentPrice = Number(details.price);
-      }
-    } catch (err) {
-      logger.warn(`Failed to fetch Velar price for ${symbol}, using fallback`, { error: err });
-    }
+
+    // Refuses rather than guessing, and here the refusal is the whole point:
+    // this number decides `isLiquidated`.
+    const currentPrice = await requireMarkPrice(position.market);
 
     const isLiquidated = position.direction === "LONG"
       ? currentPrice <= position.liquidationPrice
       : currentPrice >= position.liquidationPrice;
 
-    const config = ConfigManager.getInstance().config;
-    const contractAddress = config.VELAR_PERP_CONTRACT_ADDRESS;
-    const contractName = config.VELAR_PERP_CONTRACT_NAME;
-    const functionName = "close-position";
-    const functionArgs = [
-      `u${positionId}`
-    ];
+    // Deliberately no RiskManager gate on the way out. Closing reduces
+    // exposure, so gating it on the same limits that would block an open would
+    // trap a user in a position exactly when they are over their cap — which is
+    // when they most need to be able to leave.
+    const settings = await resolveTradeSettings(userId, "personal", chainId);
 
-    const txService = TransactionService.getInstance();
-    const action = {
-      tokenIn: symbol,
-      tokenOut: "STX",
-      amountIn: position.size,
-      direction: position.direction === "LONG" ? "SELL" as const : "BUY" as const,
-      reason: `Close perp leverage position ${positionId} on ${position.market}`
+    const config = ConfigManager.getInstance().config;
+    const txFee = 100_000n;
+
+    const payload: TransactionPayload = {
+      kind: "stacks",
+      contractAddress: config.VELAR_PERP_CONTRACT_ADDRESS,
+      contractName: config.VELAR_PERP_CONTRACT_NAME,
+      functionName: "close-position",
+      functionArgs: [`u${positionId}`],
+      postConditions: [
+        createSTXPostCondition(wallet.address, FungibleConditionCode.LessEqual, txFee),
+      ],
     };
 
-    const txFee = 100_000n;
-    const postConditionsOverride = [
-      createSTXPostCondition(wallet.address, FungibleConditionCode.LessEqual, txFee)
-    ];
-
-    const settings = await db.findTradeSettings(userId, "personal");
-    const useGasless = settings?.useGasless ?? false;
-
-    const result = await txService.execute(
-      action,
-      contractAddress,
-      contractName,
-      functionName,
-      functionArgs,
-      position.walletId,
-      wallet.address,
-      position.size,
-      useGasless,
-      postConditionsOverride
-    );
+    const result = await executeSwapPayload(payload, {
+      action: {
+        tokenIn: symbol,
+        tokenOut: "STX",
+        amountIn: position.size,
+        direction: position.direction === "LONG" ? "SELL" : "BUY",
+        reason: `Close perp leverage position ${positionId} on ${position.market}`,
+      },
+      walletId: position.walletId,
+      senderAddress: wallet.address,
+      maxOutbound: position.size,
+      useGasless: settings.useGasless,
+      chainId,
+    });
 
     if ("error" in result) {
       throw new Error(`On-chain transaction execution failed: ${result.error}`);
@@ -232,4 +289,3 @@ export class PerpService {
     };
   }
 }
-

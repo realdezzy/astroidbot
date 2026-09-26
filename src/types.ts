@@ -86,7 +86,13 @@ export interface TransactionPayload {
   contractAddress?: string;
   contractName?: string;
   functionName?: string;
-  functionArgs?: ClarityValue[];
+  // `ClarityArgs`, not `ClarityValue[]`: `TransactionService.execute` has
+  // always accepted the string forms `parseClarityArgs` understands, and a
+  // payload has to be able to carry what the executor accepts. Narrowing it
+  // here meant a non-swap Clarity call — a perp open/close — could not be
+  // expressed as a payload at all, which is why that path bypassed dispatch
+  // and called the executor directly.
+  functionArgs?: ClarityArgs;
   postConditions?: PostCondition[];
   // EVM — always a list of calls (single-call is a one-element array) so a
   // provider can express multi-step operations (e.g. ERC-20 approve + swap)
@@ -121,7 +127,7 @@ export function assertStacksPayload(payload: TransactionPayload): asserts payloa
   contractAddress: string;
   contractName: string;
   functionName: string;
-  functionArgs: ClarityValue[];
+  functionArgs: ClarityArgs;
   postConditions: PostCondition[];
 } {
   if (

@@ -8,6 +8,7 @@ import type { SwappableToken } from "../types.js";
 import { executeSwapPayload } from "./chains/executeSwap.js";
 import { walletChainId, walletStableSymbol } from "./chains/walletChain.js";
 import { resolveTradeSettings } from "./tradeSettings.js";
+import { RiskManager } from "./riskManager.js";
 import { resolveMarketDataProvider } from "./marketData/index.js";
 import type { ChainId } from "../types/chain.js";
 
@@ -283,7 +284,59 @@ export class LimitOrderService {
             throw new Error(`DEX provider ${providerName} not found`);
           }
 
-          const minOut = est.amountOut * 0.99;
+          const settings = await resolveTradeSettings(order.userId, "personal", chainId);
+
+          // A triggered limit order is a trade, so it goes through the same
+          // gate as every other trade. This file used to resolve the settings
+          // below and read only `useGasless` off them, which meant
+          // `maxPositionPct` and `dailyLossLimit` bound trades placed from the
+          // web, the bot and the queue but not the one kind that fires while
+          // nobody is watching.
+          //
+          // Before the payload, not after: building one spends quotes and
+          // allowance reads against the chain, and a declined trade should not
+          // pay for them.
+          const tokens = await registry.getSwappableTokens(false, chainId);
+          const balances = await PortfolioManager.getInstance().fetchBalances(
+            wallet.address, tokens, order.userId, true, chainId
+          );
+          const risk = await RiskManager.getInstance().evaluateTrade(
+            order.userId,
+            {
+              tokenIn: order.tokenIn,
+              tokenOut: order.tokenOut,
+              amountIn: order.amountIn,
+              direction: order.direction as "BUY" | "SELL",
+              reason,
+            },
+            balances,
+            {
+              slippageBps: settings.slippageBps,
+              maxPositionPct: settings.maxPositionPct,
+              dailyLossLimit: settings.dailyLossLimit,
+            }
+          );
+
+          if (!risk.approved) {
+            // Left ACTIVE rather than routed through handleLimitOrderFailure.
+            // A decline is not a broken order: a daily-loss breach clears
+            // overnight and an oversized position clears when the portfolio
+            // moves, so counting these toward the five-strike suspension would
+            // retire a perfectly valid order within five minutes of a bad day.
+            logger.warn("Limit order held back by risk limits", {
+              orderId: order.id,
+              userId: order.userId,
+              reason: risk.reason,
+            });
+            continue;
+          }
+
+          // The user's slippage, not a constant. This was
+          // `est.amountOut * 0.99` — which happens to equal the product
+          // default of 100 bps, so it looked right for anyone who had never
+          // touched the setting and quietly overrode everyone who had. Someone
+          // tightening to 10 bps to avoid being sandwiched got 100 anyway.
+          const minOut = est.amountOut * (1 - settings.slippageBps / 10_000);
           const payload = await provider.buildSwapPayload(
             order.tokenIn, order.tokenOut, order.amountIn, minOut, wallet.address
           );
@@ -292,7 +345,6 @@ export class LimitOrderService {
             throw new Error("Failed to build transaction payload");
           }
 
-          const settings = await resolveTradeSettings(order.userId, "personal", chainId);
           const useGasless = settings.useGasless;
 
           const result = await executeSwapPayload(payload, {

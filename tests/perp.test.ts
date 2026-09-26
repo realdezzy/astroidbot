@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { PerpService } from "../src/services/perp/perpService.js";
 import { ConfigManager } from "../src/config.js";
-import { TransactionService } from "../src/services/transaction.js";
 
 vi.mock("@velarprotocol/velar-sdk", () => {
   return {
@@ -61,17 +60,46 @@ vi.mock("../src/services/db.js", () => {
   };
 });
 
-vi.mock("../src/services/transaction.js", () => {
-  const mockTxInstance = {
-    execute: vi.fn().mockResolvedValue({ txId: "0x123456" }),
-  };
-  return {
-    TransactionService: {
-      getInstance: () => mockTxInstance,
-    },
-    createSTXPostCondition: vi.fn().mockReturnValue({}),
-  };
-});
+vi.mock("../src/services/transaction.js", () => ({
+  createSTXPostCondition: vi.fn().mockReturnValue({}),
+}));
+
+// Perps execute through the shared chain dispatch point now, not by calling
+// TransactionService directly. Partial mock because walletChain.js imports
+// resolveChainId from this module.
+// vi.hoisted: PerpService is imported statically at the top of this file, so a
+// plain const would not be initialised by the time the mock factory runs.
+const { executeSwapPayload } = vi.hoisted(() => ({
+  executeSwapPayload: vi.fn().mockResolvedValue({ txId: "0x123456" }),
+}));
+vi.mock("../src/services/chains/executeSwap.js", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  executeSwapPayload,
+}));
+
+vi.mock("../src/services/riskManager.js", () => ({
+  RiskManager: { getInstance: () => ({ evaluateTrade: vi.fn().mockResolvedValue({ approved: true }) }) },
+}));
+
+vi.mock("../src/services/tradeSettings.js", () => ({
+  resolveTradeSettings: vi.fn().mockResolvedValue({
+    slippageBps: 100, maxPositionPct: 25, dailyLossLimit: 5, useGasless: false,
+  }),
+}));
+
+vi.mock("../src/services/portfolio.js", () => ({
+  PortfolioManager: {
+    getInstance: () => ({
+      fetchBalances: vi.fn().mockResolvedValue([
+        { token: "STX", symbol: "STX", balance: 10_000, usdValue: 25_000 },
+      ]),
+    }),
+  },
+}));
+
+vi.mock("../src/services/dex/dexRegistry.js", () => ({
+  DEXRegistry: { getInstance: () => ({ getSwappableTokens: vi.fn().mockResolvedValue([]) }) },
+}));
 
 describe("PerpService", () => {
   beforeAll(() => {
@@ -115,18 +143,24 @@ describe("PerpService", () => {
     expect(position.status).toBe("OPEN");
     expect(position.txId).toBe("0x123456");
 
-    const txService = TransactionService.getInstance();
-    expect(txService.execute).toHaveBeenCalledWith(
-      expect.any(Object),
-      config.VELAR_PERP_CONTRACT_ADDRESS,
-      config.VELAR_PERP_CONTRACT_NAME,
-      "open-position",
-      expect.arrayContaining(["'STX", "'LONG", "u5", "u100000000"]),
-      1,
-      "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE",
-      200,
-      false,
-      expect.any(Array)
+    // The contract call is now carried as a TransactionPayload through the one
+    // dispatch point every other trade path uses, rather than handed to
+    // TransactionService directly.
+    expect(executeSwapPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "stacks",
+        contractAddress: config.VELAR_PERP_CONTRACT_ADDRESS,
+        contractName: config.VELAR_PERP_CONTRACT_NAME,
+        functionName: "open-position",
+        functionArgs: expect.arrayContaining(["'STX", "'LONG", "u5", "u100000000"]),
+        postConditions: expect.any(Array),
+      }),
+      expect.objectContaining({
+        walletId: 1,
+        senderAddress: "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE",
+        maxOutbound: 200,
+        chainId: "stacks:mainnet",
+      })
     );
   });
 });
