@@ -37,6 +37,12 @@ const mockDbInstance = {
 };
 
 const mockEnqueueTrade = vi.fn().mockResolvedValue({ id: "job_123" });
+const mockConfirmAndExecute = vi.fn();
+vi.mock("../../../src/services/social/commandProcessor.js", () => ({
+  SocialCommandProcessor: {
+    getInstance: () => ({ confirmAndExecute: mockConfirmAndExecute }),
+  },
+}));
 
 /**
  * Only X is configured here. Farcaster's absence is deliberate: a deployment
@@ -260,20 +266,15 @@ describe("Social API Routes Integration Tests", () => {
     expect(res.body.command.parsedIntent).toEqual({ action: "buy", amount: 25, denomination: "usd", token: "DEGEN" });
   });
 
-  it("POST /api/me/social-commands/confirm executes trade and updates command status", async () => {
-    const futureDate = new Date(Date.now() + 300_000);
-    mockSocialCommandDb.findUnique.mockResolvedValue({
-      id: 5,
-      platform: "x",
-      parsedIntent: JSON.stringify({ action: "buy", amount: 25, denomination: "usd", token: "DEGEN" }),
-      status: "AWAITING_CONFIRMATION",
-      confirmExpiresAt: futureDate,
-      socialAccount: { userId: 10 },
+  it("POST /api/me/social-commands/confirm delegates to the command processor", async () => {
+    // The route used to build the trade itself, and every difference from the
+    // processor's version was a bug — an unscoped default wallet, a hardcoded
+    // "USDC" stable, and no denomination conversion. This test now pins the
+    // delegation; `commandProcessor.test.ts` pins what the processor does.
+    mockConfirmAndExecute.mockResolvedValue({
+      ok: true,
+      message: "Queued: buy ~$25.00 of DEGEN on base:mainnet.",
     });
-    mockDbInstance.findWalletsByUserId.mockResolvedValue([
-      { id: 1, address: "0x123", isDefault: true },
-    ]);
-    mockDbInstance.findDefaultWalletByUserId.mockResolvedValue({ id: 1, address: "0x123", isDefault: true });
 
     const res = await request(server)
       .post("/api/me/social-commands/confirm")
@@ -282,18 +283,23 @@ describe("Social API Routes Integration Tests", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(mockEnqueueTrade).toHaveBeenCalledWith(
-      expect.objectContaining({
-        walletId: 1,
-        userId: 10,
-        tokenIn: "USDC",
-        tokenOut: "DEGEN",
-        amountIn: 25,
-      })
-    );
-    expect(mockSocialCommandDb.update).toHaveBeenCalledWith({
-      where: { id: 5 },
-      data: { status: "EXECUTED" },
+    expect(res.body.message).toContain("DEGEN");
+    expect(mockConfirmAndExecute).toHaveBeenCalledWith("valid_token", 10);
+  });
+
+  it("POST /api/me/social-commands/confirm surfaces a rejection as a 4xx", async () => {
+    mockConfirmAndExecute.mockResolvedValue({
+      ok: false,
+      reason: "no_wallet",
+      message: "You have no wallet on base:mainnet. Create one to trade this token.",
     });
+
+    const res = await request(server)
+      .post("/api/me/social-commands/confirm")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ token: "valid_token" });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
   });
 });

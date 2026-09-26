@@ -1,18 +1,48 @@
 # Market data & the token indexer
 
-Everything the discovery pages show — price, volume, liquidity, transaction counts, the 5M/1H/6H/24H columns — comes from a `MarketDataProvider`. There are two, and they are not peers.
+Everything the discovery pages show — price, volume, liquidity, transaction counts, the 5M/1H/6H/24H columns — comes from a `MarketDataProvider`. Several exist and they are not peers: one reads our own index, one reads an external API, and the rest compose those two.
 
 | Provider | What it is | When to use it |
 |---|---|---|
-| `internal` | Our own swap-event index | **Production.** The default. |
+| `internal` | Our own swap-event index | Pairs with `INDEXER_MODE=full`. The historical default. |
 | `dexscreener` | A third-party API | Development only, to exercise the interface before an index has data. |
 | `auto` | `internal`, falling back to DexScreener per chain | The window while a newly-enabled chain warms up. |
+| `geckoterminal` | GeckoTerminal / CoinGecko onchain | The external source, with no fallback. |
+| `hybrid` | `geckoterminal`, falling back to DexScreener | Pairs with `INDEXER_MODE=discovery`. |
 
 ```bash
 MARKET_DATA_PROVIDER="internal"
 ```
 
-The reason production doesn't use DexScreener is not that it's inaccurate — it's that it makes someone else's rate limit, uptime and chain coverage load-bearing for our own product surface. `auto` exists because a freshly-enabled chain's index starts empty and a page that's blank for a day looks broken; it is a migration aid, not an end state.
+The reason `internal` doesn't use DexScreener is not that it's inaccurate — it's that it makes someone else's rate limit, uptime and chain coverage load-bearing for our own product surface. `auto` exists because a freshly-enabled chain's index starts empty and a page that's blank for a day looks broken; it is a migration aid, not an end state.
+
+`hybrid` is a different bet rather than a stronger `auto`. It says the index is no longer ingesting swaps at all: pool discovery and liquidity still come from our own logs — the half that sees a new pool seconds after it exists, before an aggregator lists it, which is what the sniper strategy trades on — while price, volume and candles are bought. The two halves have completely different economics. Discovery is one `eth_getLogs` per factory per range; ingestion is every `Swap` log on the chain, and the overwhelming majority of the RPC bill, computing numbers an aggregator already computes correctly.
+
+Nothing was deleted to make this possible. `INDEXER_MODE=full` with `MARKET_DATA_PROVIDER=internal` is exactly today's system, and reverting is two environment variables.
+
+### GeckoTerminal specifics
+
+All six chains this deployment enables by default are covered (`eth`, `base`, `celo`, `robinhood`, `solana`, `stacks`). Keyless the API allows **30 calls a minute**, which one discovery page can spend — it is a development tier. A CoinGecko paid key raises it to 500/minute and moves the client to `pro-api.coingecko.com`; `GECKOTERMINAL_API_KEY` is the only switch.
+
+Three things in `src/services/geckoTerminal.ts` are load-bearing:
+
+- **Batching and a shared cache.** Token metrics go 30 addresses per call, and responses are cached in *Redis* rather than per process — the API server and the indexer both read this API, and a per-process cache would double the call rate against a limit counted per minute.
+- **A 429 silences the client for the window.** Retrying into a rate limit is what keeps you inside it.
+- **Monetary fields are sanity-clamped.** `total_reserve_in_usd` returned a ~600-digit number for USDC on Base during evaluation. That is not a large pool, it is a broken field — and it would take the top spot on every liquidity-ranked page. Anything non-finite, negative or above `GECKOTERMINAL_MAX_LIQUIDITY_USD` reads as unknown, which sorts out of the way.
+
+### The three seams
+
+| Surface | Interface | Implementations |
+|---|---|---|
+| Price, volume, liquidity, change columns | `MarketDataProvider` (`marketData/types.ts`) | `internal`, `dexscreener`, `geckoterminal`, and the two fallbacks |
+| Chart candles | `CandleSource` (`marketData/candles/types.ts`) | `internal` (today's Prisma reads, moved verbatim), `geckoterminal` |
+| Recent trades, top traders | `TradesSource` (`marketData/trades/types.ts`) | `internal`, `geckoterminal` |
+
+`CandleService` keeps `getPeriodStart()` and `aggregate()` and dispatches to a source. Only sources that declare `needsAggregation` are folded: the internal one returns five-minute buckets, while the external one is asked for the timeframe directly. Folding already-folded candles shifts every open and produces a chart that looks entirely plausible and is wrong.
+
+`CANDLE_SOURCE` defaults to `auto`, which follows `MARKET_DATA_PROVIDER` — a chart drawn from our own candles under a price column bought from an aggregator is two different worlds stacked on one page, and they disagree visibly. Set it explicitly to run the two side by side, which is how they get compared before a default flips.
+
+The trades source has no flag of its own and follows the provider, because there is no deployment where it should disagree: under `discovery` the internal table stops gaining rows, and a "recent trades" panel whose newest trade is from whenever ingestion was switched off is worse than one that says it has nothing.
 
 ## Where it runs
 
@@ -37,6 +67,29 @@ It began inside the bot process and was split out for three reasons:
 - **Restart cost.** Adding a chain to the index restarts the indexer. It should not also drop every WebSocket connection and stop Telegram polling.
 
 **There is no flag for where ingestion runs.** The API process has no ingestion code path to enable — `runCycle()` does not call the indexer at all — so a deployment that doesn't want market data doesn't run the container, and points `MARKET_DATA_PROVIDER` somewhere else. An earlier version had an `INDEXER_MODE` with an `inline` option; all it could really express was which processes were disobeying the rule.
+
+`INDEXER_MODE` now means something different and answers a question that is actually ours to answer — *how much* of the indexer runs, not where:
+
+| Mode | What runs |
+|---|---|
+| `full` | Discovery, swap ingestion, candles, rollups, the downward backfill. The rollback target. |
+| `discovery` (default) | Pool discovery, token identity, liquidity. No swap logs, no candles, no history walk. |
+| `off` | Nothing. No indexer is built, so a chain nothing indexes doesn't appear to be indexed successfully. |
+
+Four things about `discovery` are worth knowing, because each encodes something that would otherwise break quietly:
+
+- **The swap cursor is not advanced.** `lastBlock` means "swaps are ingested up to here". Moving it while reading none would make a later switch back to `full` step over every block this mode ran for and call the hole ingested.
+- **Pool discovery is clamped to the head, not to the swap cursor.** In a full pass discovery is clamped to the range swaps are about to be read for — correct there, since a swap must never be claimed from a range whose pool set isn't known. With the swap cursor frozen, that clamp would pin discovery where ingestion stopped and it would never move again.
+- **Liquidity gets its own pass.** In a full pass `refreshLiquidity` rides along with ingestion, for pools that actually traded. Nothing would call it here — and `IndexedPool.liquidityUsd` decides which pool sets a token's price, gates whether that price is trusted, and is the floor the catalogue applies before listing a token at all. The pass rotates: never-measured pools first, then least-recently-written, capped at `INDEXER_MAX_POOLS_PER_CHAIN`. It also writes `lastPrice0` from `slot0`, which in a full pass would interleave two clocks on one column but here is the only price reading that exists — without it the USD price graph never expands past the stables.
+- **The catalogue would otherwise stop growing.** `promoteIndexedTokens` filters on `lastRolledUpAt: { not: null }`, and only the candle rollup ever set it. `RollupService.stampChain` sets it from measured liquidity instead, writing the venue, the pair's age and the depth — and deliberately *not* price, volume or transaction counts, which in this mode come from the external provider. A zero there would claim the token didn't trade when the truth is that we stopped counting.
+
+**Stacks is the exception, and not by oversight.** It has no factory and no per-pair contract: a pool is only ever announced *by a trade*, and its depth comes from reserves carried in the swap print. Reading the trades is how pools are discovered there, so `discovery` keeps the forward pass on that chain and drops only the backfill walk — which is the expensive half of a Stacks pass anyway. Solana's pools come from the router's `routePlan` rather than from swaps, so discovery genuinely stands alone there.
+
+### The quant layer
+
+`QUANT_ENABLED` (default `false`) switches off technical features, regime gating, signal fusion and volatility sizing. The reason is the input, not the maths: `FeatureEngine.compute` needs thirty five-minute candles and below that returns a full set of *neutral readings* — RSI 50, MACD 0, volatility 0, EMA12 exactly equal to EMA26 — which are indistinguishable from measurements and are consumed as such. Signal fusion scores that EMA equality as a bearish crossover.
+
+So the disabled state is explicit (`Features.available`) rather than zeroed, and it is logged once at first use rather than per cycle. The regime gate fails **open** when quant is off: half the gates in `STRATEGY_REGIME_GATES` omit `UNKNOWN`, so returning it would retire grid, breakout, momentum and mean reversion entirely — that is not "stop consulting technical signals", it is "stop trading".
 
 **Mutual exclusion is a cross-process problem.** Two runs of the same chain would read the same cursor, ingest the same blocks, and add the same volume — which accumulates additively, so the inflation is permanent and looks exactly like real trading. A per-chain Redis lock (`indexer:ingest:<chainId>`, TTL `INDEXER_LOCK_TTL_MS`) is what prevents it; an in-process guard could only see runs inside one process, which stopped being the interesting case the moment there were two. It is per chain rather than per pass, so a chain locked by someone else doesn't hold up the others.
 
@@ -142,7 +195,13 @@ For the same reason, anchor pools are exempt from `INDEXER_MAX_POOLS_PER_CHAIN`.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MARKET_DATA_PROVIDER` | `internal` | `internal` \| `dexscreener` \| `auto` |
+| `MARKET_DATA_PROVIDER` | `internal` | `internal` \| `dexscreener` \| `auto` \| `geckoterminal` \| `hybrid` |
+| `CANDLE_SOURCE` | `auto` | `auto` (follow the provider) \| `internal` \| `geckoterminal` |
+| `INDEXER_MODE` | `discovery` | `full` \| `discovery` \| `off` |
+| `QUANT_ENABLED` | `false` | Technical features, regime gating, signal fusion |
+| `GECKOTERMINAL_API_KEY` | — | CoinGecko paid key; absent means the 30/min keyless tier |
+| `GECKOTERMINAL_CACHE_TTL_SECONDS` | `60` | Redis TTL on API responses |
+| `GECKOTERMINAL_MAX_LIQUIDITY_USD` | `1e12` | Above this a reported figure is treated as broken |
 | `INDEXER_POLL_INTERVAL_SECONDS` | `POLL_INTERVAL_SECONDS` | Indexer tick |
 | `INDEXER_PORT` | `8007` | Health endpoint for the indexer container |
 | `INDEXER_LOCK_TTL_MS` | `300000` | Per-chain ingestion lock; must outlast a normal pass |

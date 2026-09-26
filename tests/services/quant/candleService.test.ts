@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { loadTestConfig } from "../../helpers/config.js";
 
 const mockIndexedToken = { findFirst: vi.fn() };
 const mockIndexedPool = { findFirst: vi.fn() };
@@ -17,6 +18,17 @@ vi.mock("../../../src/services/db.js", () => ({
       },
     }),
   },
+}));
+
+/**
+ * The service caches served candles in Redis now. The cache is stubbed to a
+ * permanent miss rather than left real: these tests are about what the source
+ * returns, and a warm cache would make the second assertion in a file pass
+ * without touching the source at all.
+ */
+const mockRedis = { get: vi.fn(), set: vi.fn() };
+vi.mock("../../../src/services/redis.js", () => ({
+  RedisService: { getInstance: () => mockRedis },
 }));
 
 const { CandleService } = await import("../../../src/services/quant/candleService.js");
@@ -56,6 +68,12 @@ describe("CandleService", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    // The source is now configurable; these assertions are about the internal
+    // one, which is also the rollback path and must keep behaving exactly so.
+    loadTestConfig({ CANDLE_SOURCE: "internal" });
+    svc.setCandleSource(null);
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.set.mockResolvedValue(undefined);
     mockIndexedToken.findFirst.mockResolvedValue({ contractId: "0xabc", symbol: "WETH" });
     mockIndexedPool.findFirst.mockResolvedValue({ id: 7, liquidityUsd: 50_000 });
     mockPoolCandle.findMany.mockResolvedValue([]);

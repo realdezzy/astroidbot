@@ -1,43 +1,20 @@
-import { DatabaseService } from "../db.js";
+import { RedisService } from "../redis.js";
 import { logger } from "../../utils/logger.js";
 import { DEFAULT_CHAIN_ID } from "../chains/descriptors/index.js";
-import { BUCKET_MS } from "../indexer/types.js";
+import {
+  candleCacheTtlSeconds,
+  resolveCandleSource,
+  timeframeMs,
+} from "../marketData/candles/index.js";
+import type { CandleData, CandleQuery, CandleSource } from "../marketData/candles/types.js";
 
-/**
- * Timeframe to span. `BUCKET_MS` (five minutes) is the index's resolution, so
- * it is also the floor: anything below it cannot be served without inventing
- * the difference.
- */
-/** The columns every candle read needs, named once. */
-const BUCKET_FIELDS = {
-  bucketStart: true,
-  open: true,
-  high: true,
-  low: true,
-  close: true,
-  volumeUsd: true,
-} as const;
-
-const TIMEFRAME_MS: Record<string, number> = {
-  "1m": 60_000,
-  "5m": 300_000,
-  "15m": 900_000,
-  "1h": 3_600_000,
-  "4h": 14_400_000,
-  "1d": 86_400_000,
-};
-
-export interface CandleData {
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  timestamp: Date;
-}
+export type { CandleData } from "../marketData/candles/types.js";
 
 export class CandleService {
   private static instance: CandleService;
+
+  /** Resolved lazily: config isn't loaded when the singleton is constructed. */
+  private source: CandleSource | null = null;
 
   private constructor() {}
 
@@ -46,6 +23,22 @@ export class CandleService {
       CandleService.instance = new CandleService();
     }
     return CandleService.instance;
+  }
+
+  /**
+   * The configured source. Two exist and they are not peers: `internal` reads
+   * the candles our own indexer folded from swap logs, and `geckoterminal`
+   * buys the same series from an API. Which one answers is a config decision,
+   * which is what makes flipping back a one-line change rather than a revert.
+   */
+  candleSource(): CandleSource {
+    if (!this.source) this.source = resolveCandleSource();
+    return this.source;
+  }
+
+  /** Test seam for installing a stub source. */
+  setCandleSource(source: CandleSource | null): void {
+    this.source = source;
   }
 
   /**
@@ -82,7 +75,7 @@ export class CandleService {
   }
 
   /**
-   * Historical candles for a token, from the swap index.
+   * Historical candles for a token.
    *
    * These used to come from the `Candle` table, and when that table had no
    * rows `autoSeed` generated some with `Math.random()` — prices as a random
@@ -93,14 +86,11 @@ export class CandleService {
    * real rows there, and nothing calls it, so every row in that table was
    * invented.
    *
-   * They now come from `PoolCandle`, which the indexer folds from swap logs it
-   * actually read. When the index has nothing, this returns nothing: an empty
+   * They now come from a `CandleSource`: either `PoolCandle`, which the
+   * indexer folds from swap logs it actually read, or an external OHLCV
+   * endpoint. When the source has nothing, this returns nothing: an empty
    * chart is a true statement about a token nobody has traded, and an invented
    * one is not.
-   *
-   * Price comes from the token's deepest pool, which is the same rule
-   * `RollupService` uses — averaging a deep pool with a dust pool moves the
-   * quoted price toward one nobody can trade at.
    */
   async getCandles(
     token: string,
@@ -108,39 +98,33 @@ export class CandleService {
     limit = 100,
     chainId: string = DEFAULT_CHAIN_ID
   ): Promise<CandleData[]> {
-    const intervalMs = TIMEFRAME_MS[timeframe];
-
-    // The index's finest resolution is a five-minute bucket. Anything finer
-    // would have to be interpolated, which is the thing this method stopped
-    // doing.
-    if (!intervalMs || intervalMs < BUCKET_MS) {
-      logger.debug("[candles] timeframe finer than the index records", { token, timeframe });
-      return [];
-    }
-
-    const poolId = await this.deepestPoolFor(token, chainId);
-    if (poolId === null) return [];
-
-    // Over-read deliberately: `limit` counts aggregated candles, and each one
-    // consumes `intervalMs / BUCKET_MS` buckets.
-    const bucketsPerCandle = Math.max(1, Math.round(intervalMs / BUCKET_MS));
-    const rows = await DatabaseService.getInstance().prisma.poolCandle.findMany({
-      where: { poolId },
-      orderBy: { bucketStart: "desc" },
-      take: limit * bucketsPerCandle,
-      select: BUCKET_FIELDS,
-    });
-    if (rows.length === 0) return [];
-
-    return this.aggregate(rows.reverse(), timeframe).slice(-limit);
+    return this.read({ chainId, symbol: token }, timeframe, limit);
   }
 
   /**
-   * The same candles, bounded by a date range rather than a count.
+   * The same read, addressed by contract rather than by symbol.
+   *
+   * The discovery route already resolved the token to a contract before asking
+   * for its chart, and handing the symbol back was a round trip through a
+   * lookup that can return a *different* token — same ticker, different
+   * address, on a chain where both are listed. A caller holding the contract
+   * should say so.
+   */
+  async getCandlesForContract(
+    chainId: string,
+    contractId: string,
+    timeframe: string,
+    limit = 100
+  ): Promise<CandleData[]> {
+    return this.read({ chainId, contractId }, timeframe, limit);
+  }
+
+  /**
+   * Candles bounded by a date range rather than a count.
    *
    * Backtests need this shape: "every candle between these two dates" cannot
    * be expressed as a limit, because how many candles that is depends on how
-   * much the token traded. It shares pool resolution and aggregation with
+   * much the token traded. It shares source resolution and aggregation with
    * `getCandles` so a backtest and a chart of the same window cannot disagree.
    */
   async getCandlesBetween(
@@ -150,51 +134,79 @@ export class CandleService {
     endDate: Date,
     chainId: string = DEFAULT_CHAIN_ID
   ): Promise<CandleData[]> {
-    const intervalMs = TIMEFRAME_MS[timeframe];
-    if (!intervalMs || intervalMs < BUCKET_MS) {
-      logger.debug("[candles] timeframe finer than the index records", { token, timeframe });
-      return [];
-    }
+    const source = this.candleSource();
+    if (!this.servable(source, token, timeframe)) return [];
 
-    const poolId = await this.deepestPoolFor(token, chainId);
-    if (poolId === null) return [];
-
-    const rows = await DatabaseService.getInstance().prisma.poolCandle.findMany({
-      where: { poolId, bucketStart: { gte: startDate, lte: endDate } },
-      orderBy: { bucketStart: "asc" },
-      select: BUCKET_FIELDS,
-    });
+    const rows = await source.getCandlesBetween(
+      { chainId, symbol: token },
+      timeframe,
+      startDate,
+      endDate
+    );
     if (rows.length === 0) return [];
 
-    return this.aggregate(rows, timeframe);
+    return source.needsAggregation ? this.aggregate(rows, timeframe) : rows;
   }
 
   /**
-   * The id of the deepest pool trading this symbol on this chain.
+   * One cached read through the configured source.
    *
-   * The index keys pools by contract address while callers ask by symbol, so
-   * the symbol is resolved through `IndexedToken` first. Deepest rather than
-   * first because that is the rule `RollupService` applies when it decides a
-   * token's price — averaging a deep pool with a dust pool moves the quote
-   * toward one nobody can trade at, and a chart disagreeing with the price
-   * column above it is worse than either.
+   * The cache is in Redis rather than in process for the same reason the
+   * GeckoTerminal client's is: the external source's binding constraint is
+   * calls per minute, and two processes each holding their own cache doubles
+   * the rate against it. The TTL scales with the timeframe — a daily candle
+   * that cannot have moved should not be re-fetched every sixty seconds.
+   *
+   * A cache miss that returns nothing is not stored. "No data" is usually a
+   * token whose pool is about to be discovered, and caching the absence makes
+   * an empty chart persist past the moment it stopped being true.
    */
-  private async deepestPoolFor(token: string, chainId: string): Promise<number | null> {
-    const db = DatabaseService.getInstance();
+  private async read(
+    query: CandleQuery,
+    timeframe: string,
+    limit: number
+  ): Promise<CandleData[]> {
+    const source = this.candleSource();
+    const subject = query.contractId ?? query.symbol ?? "";
+    if (!this.servable(source, subject, timeframe)) return [];
 
-    const indexed = await db.prisma.indexedToken.findFirst({
-      where: { chainId, symbol: { equals: token.toUpperCase(), mode: "insensitive" } },
-      select: { contractId: true },
-    });
-    if (!indexed) return null;
+    const cacheKey = `candles:${source.name}:${query.chainId}:${subject.toLowerCase()}:${timeframe}:${limit}`;
+    const redis = RedisService.getInstance();
 
-    const pool = await db.prisma.indexedPool.findFirst({
-      where: { chainId, baseToken: indexed.contractId },
-      orderBy: { liquidityUsd: { sort: "desc", nulls: "last" } },
-      select: { id: true },
-    });
+    const hit = await redis.get(cacheKey).catch(() => null);
+    if (hit) {
+      const parsed = parseCached(hit);
+      if (parsed) return parsed;
+    }
 
-    return pool?.id ?? null;
+    const rows = await source.getCandles(query, timeframe, limit);
+    if (rows.length === 0) return [];
+
+    const candles = source.needsAggregation
+      ? this.aggregate(rows, timeframe).slice(-limit)
+      : rows.slice(-limit);
+
+    await redis
+      .set(cacheKey, JSON.stringify(candles), candleCacheTtlSeconds(timeframe))
+      .catch(() => {});
+
+    return candles;
+  }
+
+  /** Whether the source can answer this timeframe at all. */
+  private servable(source: CandleSource, subject: string, timeframe: string): boolean {
+    if (timeframeMs(timeframe) === null) return false;
+
+    if (!source.supportsTimeframe(timeframe)) {
+      logger.debug("[candles] timeframe finer than the source records", {
+        subject,
+        timeframe,
+        source: source.name,
+      });
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -205,25 +217,20 @@ export class CandleService {
    * chart that looks entirely plausible and is wrong, which is the worst
    * available outcome.
    *
+   * Only sources that say `needsAggregation` go through here. Folding candles
+   * that are already at the requested timeframe would silently shift every
+   * open, so the source declares its resolution rather than the caller
+   * guessing from row spacing.
+   *
    * Input must be chronological.
    */
-  private aggregate(
-    rows: {
-      bucketStart: Date;
-      open: number;
-      high: number;
-      low: number;
-      close: number;
-      volumeUsd: number;
-    }[],
-    timeframe: string
-  ): CandleData[] {
+  private aggregate(rows: CandleData[], timeframe: string): CandleData[] {
     const out: CandleData[] = [];
     let current: CandleData | null = null;
     let currentStart = -1;
 
     for (const row of rows) {
-      const periodStart = this.getPeriodStart(row.bucketStart.getTime(), timeframe).getTime();
+      const periodStart = this.getPeriodStart(row.timestamp.getTime(), timeframe).getTime();
 
       if (!current || periodStart !== currentStart) {
         if (current) out.push(current);
@@ -233,7 +240,7 @@ export class CandleService {
           high: row.high,
           low: row.low,
           close: row.close,
-          volume: row.volumeUsd,
+          volume: row.volume,
           timestamp: new Date(periodStart),
         };
         continue;
@@ -242,10 +249,28 @@ export class CandleService {
       current.high = Math.max(current.high, row.high);
       current.low = Math.min(current.low, row.low);
       current.close = row.close;
-      current.volume += row.volumeUsd;
+      current.volume += row.volume;
     }
 
     if (current) out.push(current);
     return out;
+  }
+}
+
+/**
+ * Revives a cached series.
+ *
+ * `timestamp` is a `Date` in the interface and JSON has no date type, so it
+ * comes back as a string — and every consumer calls `.getTime()` on it.
+ * A corrupt entry is discarded rather than thrown: the read behind it is
+ * cheap, and a cache should never be able to fail a request.
+ */
+function parseCached(raw: string): CandleData[] | null {
+  try {
+    const parsed = JSON.parse(raw) as (Omit<CandleData, "timestamp"> & { timestamp: string })[];
+    if (!Array.isArray(parsed)) return null;
+    return parsed.map((c) => ({ ...c, timestamp: new Date(c.timestamp) }));
+  } catch {
+    return null;
   }
 }

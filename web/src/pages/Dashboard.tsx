@@ -9,6 +9,7 @@ import {
   Bot,
   PieChart,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
@@ -57,17 +58,33 @@ export function Dashboard() {
     refetchInterval: isActive ? 10_000 : false,
   });
 
-  const { data: wallets } = useQuery<Wallet[]>({
+  const {
+    data: wallets,
+    isLoading: walletsLoading,
+    error: walletsError,
+  } = useQuery<Wallet[]>({
     queryKey: ["wallets"],
     queryFn: () => apiFetch("/me/wallets"),
     refetchInterval: interval,
   });
 
-  const { data: trades } = useQuery<TradeSummary>({
+  const {
+    data: trades,
+    isLoading: tradesLoading,
+    error: tradesError,
+  } = useQuery<TradeSummary>({
     queryKey: ["trades-summary"],
     queryFn: () => apiFetch("/me/trades?limit=10"),
     refetchInterval: interval,
   });
+
+  // A failed fetch is not an empty portfolio.
+  //
+  // Neither query surfaced `isLoading` or `error`, so an API that was down
+  // rendered a confident $0.00 portfolio, zero open trades and a flat daily
+  // PnL — the same screen a user with nothing would see, and the screen most
+  // likely to make someone act.
+  const loadError = walletsError ?? tradesError;
 
   const totalBalance = wallets?.reduce((sum, w) => sum + w.balanceUsd, 0) ?? 0;
   const confirmedTrades =
@@ -87,6 +104,8 @@ export function Dashboard() {
     const outUsd = t.amountOutUsd ?? 0;
     return sum + (outUsd - inUsd);
   }, 0);
+
+  const tradesUnavailable = tradesLoading || Boolean(tradesError);
 
   return (
     <div>
@@ -109,6 +128,18 @@ export function Dashboard() {
         </div>
       </div>
 
+      {loadError && (
+        <div className="mb-6 flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 p-3">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-400" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-400">Dashboard data could not be loaded</p>
+            <p className="text-xs text-muted-text mt-0.5">
+              {loadError.message || "The API did not respond."} The figures below are incomplete.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Portfolio Value Hero */}
       <div className="glass-card p-6 mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -119,9 +150,17 @@ export function Dashboard() {
                 Portfolio Value
               </span>
             </div>
-            <span className="text-3xl font-bold text-title-text">
-              {formatUSD(totalBalance)}
-            </span>
+            {walletsLoading ? (
+              <span className="inline-block h-9 w-44 rounded-lg bg-input-bg animate-pulse" />
+            ) : walletsError ? (
+              <span className="text-3xl font-bold text-muted-text/60" title={walletsError.message}>
+                Unavailable
+              </span>
+            ) : (
+              <span className="text-3xl font-bold text-title-text">
+                {formatUSD(totalBalance)}
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -157,18 +196,20 @@ export function Dashboard() {
         <StatCard
           icon={RefreshCw}
           label="Active Trades"
-          value={String(pendingTrades.length)}
+          value={tradesUnavailable ? "—" : String(pendingTrades.length)}
         />
         <StatCard
           icon={Zap}
           label="Confirmed Today"
-          value={String(confirmedTrades.length)}
+          value={tradesUnavailable ? "—" : String(confirmedTrades.length)}
         />
         <StatCard
           icon={dailyPnl >= 0 ? TrendingUp : TrendingDown}
           label="Daily PnL"
-          value={`${dailyPnl >= 0 ? "+" : ""}${formatUSD(dailyPnl)}`}
-          trend={dailyPnl >= 0 ? "up" : "down"}
+          value={
+            tradesUnavailable ? "—" : `${dailyPnl >= 0 ? "+" : ""}${formatUSD(dailyPnl)}`
+          }
+          trend={tradesUnavailable ? null : dailyPnl >= 0 ? "up" : "down"}
         />
       </div>
 
@@ -177,7 +218,13 @@ export function Dashboard() {
         <h3 className="text-sm font-bold text-title-text uppercase tracking-wider mb-4">
           Recent Trades
         </h3>
-        {trades && trades.items.length > 0 ? (
+        {tradesError ? (
+          <div className="text-center py-8 text-muted-text text-sm">
+            Recent trades could not be loaded.
+          </div>
+        ) : tradesLoading ? (
+          <div className="text-center py-8 text-muted-text text-sm">Loading trades…</div>
+        ) : trades && trades.items.length > 0 ? (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-muted-text border-b border-divider-color">

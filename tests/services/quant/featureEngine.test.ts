@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FeatureEngine } from "../../../src/services/quant/featureEngine.js";
+import { loadTestConfig } from "../../helpers/config.js";
 
 const mockGetCandles = vi.fn();
 const mockGetTokenPrice = vi.fn();
@@ -29,6 +30,10 @@ describe("FeatureEngine", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    // These tests are about the arithmetic, which only runs with the quant
+    // layer switched on. Off is the deployment default and is covered by
+    // quantMode.test.ts.
+    loadTestConfig({ QUANT_ENABLED: "true" });
     mockGetTokenPrice.mockResolvedValue(2.0);
   });
 

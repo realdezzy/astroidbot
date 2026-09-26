@@ -20,10 +20,10 @@ Base and Celo share a family and differ on network. They sign identically and ro
 `ENABLED_CHAINS` is a comma-separated list of ChainIds:
 
 ```bash
-ENABLED_CHAINS="stacks:mainnet,base:mainnet,solana:mainnet"
+ENABLED_CHAINS="stacks:mainnet,base:mainnet,robinhood:mainnet,arc:mainnet,solana:mainnet"
 ```
 
-**The default is multichain**: `stacks:mainnet,base:mainnet,solana:mainnet` — one chain per execution family. A deployment that configures nothing gets a working multichain deployment, because that is what this product is. It used to default to `stacks:mainnet` alone, to keep pre-multichain deployments byte-identical; that debt is paid, and the cost of keeping it was that every multichain surface was invisible in normal use. A picker with one option looks like a picker with a bug, and the aggregation defects that only appear with two chains cannot appear at all.
+**The default is multichain**: `stacks:mainnet,base:mainnet,robinhood:mainnet,arc:mainnet,solana:mainnet` — every execution family, plus the EVM chains whose parameters are verified. A deployment that configures nothing gets a working multichain deployment, because that is what this product is. It used to default to `stacks:mainnet` alone, to keep pre-multichain deployments byte-identical; that debt is paid, and the cost of keeping it was that every multichain surface was invisible in normal use. A picker with one option looks like a picker with a bug, and the aggregation defects that only appear with two chains cannot appear at all.
 
 Ethereum mainnet is deliberately excluded from the default. It trades fine, but it is not practical to *index* through a public RPC (see `Docs/market-data.md`), and a default that quietly needs a paid endpoint is not a default. Add it — or Celo, Robinhood, the testnets — with one env var.
 
@@ -65,7 +65,7 @@ RPC_URL_SOLANA_MAINNET="https://your-solana-rpc.example"
 
 A chain is **tradable** only when it has a routing DEX configured. Without one it still supports wallets, balances and discovery — `DEXRegistry` simply never offers it a quote.
 
-This matters for new networks whose DEX deployments don't exist or aren't verifiable yet. They ship as listable and become tradable by adding a `dex` block. `solana:devnet` is registered this way, since Jupiter doesn't serve devnet, as is `arc:testnet`, which has no DEX at all yet.
+This matters for new networks whose DEX deployments don't exist or aren't verifiable yet. They ship as listable and become tradable by adding a `dex` block. `solana:devnet` is registered this way, since Jupiter doesn't serve devnet, as is `arc:testnet`. Arc *mainnet* was registered this way too until Uniswap shipped there; adding the `dex` block was the whole change.
 
 ## The built-in catalogue
 
@@ -80,15 +80,29 @@ Every chain this build can describe. Being listed here is inert until `ENABLED_C
 | `base:sepolia` | evm | ETH | yes | |
 | `celo:mainnet` | evm | CELO | yes | Uniswap V3, EOA custody |
 | `robinhood:mainnet` | evm | ETH | yes | Arbitrum Orbit L2, chain 4663, Uniswap V3 |
-| `arc:testnet` | evm | USDC | **no** | Circle's Arc — testnet only, no DEX yet |
+| `arc:mainnet` | evm | USDC | yes | Circle's Arc, chain 5042 — Uniswap v2/v3/v4, gas is USDC |
+| `arc:testnet` | evm | USDC | **no** | Arc testnet, no DEX |
 | `solana:mainnet` | svm | SOL | yes | Jupiter |
 | `solana:devnet` | svm | SOL | **no** | Jupiter doesn't serve devnet |
 
 Two entries deserve explanation.
 
-**Robinhood Chain** is a real Arbitrum Orbit L2 with a real Uniswap V3 deployment. Every address in its descriptor was read back off the chain rather than copied from a listing — `QuoterV2.factory()` and a live pool's `factory()` agree, and `SwapRouter02.WETH9()` matches the wrapped-native address. Note that its bridged dollar, **rUSDC, has 18 decimals**, not the 6 that USDC carries almost everywhere else; assuming 6 misprices every quote by 10¹² while looking entirely reasonable.
+**Robinhood Chain** is a real Arbitrum Orbit L2 with a real Uniswap V3 deployment. Every address in its descriptor was read back off the chain rather than copied from a listing — `QuoterV2.factory()` and a live pool's `factory()` agree, and `SwapRouter02.WETH9()` matches the wrapped-native address. Its dollar is **USDG** (Paxos' Global Dollar, 6 decimals), which is what bridged USDC becomes and what every pool there quotes against. This paragraph said `rUSDC` for a while, and that was worse than a wrong address because `rUSDC` is a *real* contract on the chain — it just has no pool at any fee tier, so every price resolved to 0.
 
-**Arc has no mainnet.** Circle's Arc is in public testnet and their docs state mainnet parameters are published separately when available. So there is no `arc:mainnet` descriptor, deliberately: an entry with invented parameters would be accepted by `ENABLED_CHAINS`, wallets would be generated against a chain id that doesn't exist, and the failure would surface as unexplained broadcast errors instead of "that chain isn't supported yet".
+**Arc's gas token is a stablecoin, and that breaks two assumptions the other EVM chains share.** Chain 5042's native asset is USDC, and `0x3600000000000000000000000000000000000000` is not a wrapper for it — it is the same balance `eth_getBalance` returns, viewed at 6 decimals instead of 18. That was checked on eight live accounts, where `balanceOf` equalled `eth_getBalance / 1e12` to the unit.
+
+So Arc sets `nativeErc20` rather than `wrappedNative`, and the distinction is not cosmetic:
+
+- `wrappedNative` means "wrap to trade": resolve the native symbol to this address *at the descriptor's `nativeDecimals`*, and bracket the swap with `deposit`/`withdraw`. Both halves are wrong here. Arc's `SwapRouter02.WETH9()` points at 53 bytes of stub, and 18 decimals against a 6-decimal token asks the router to spend 10¹² times the intended amount — on the single most common trade on the chain.
+- `nativeErc20` means "this ERC-20 *is* the native asset": resolve at its own decimals, wrap nothing, and count the balance **once**. `fetchEvmBalances` reads the native balance and then `balanceOf` across the token list; on Arc those are the same money, and reporting both would double every Arc wallet's value — which is the figure `RiskManager` sizes positions against.
+
+One consequence worth knowing: Arc is the first chain here where `nativeSymbol == stableSymbol`, which the adapter conformance suite otherwise forbids for a tradable chain. The rule stands for chains where the equality is an accident; a chain declaring `nativeErc20` is exempt, because there the gas token genuinely is the quote unit. Both `getTokenPrice` and `limitOrder`'s `priceInUsd` short-circuit the identity to 1 rather than trying to route it.
+
+Every address in the descriptor was read back off chain 5042, which on this chain is not a formality: Uniswap's canonical v3 factory address holds a contract on Arc that is **not** the v3 factory, and Arc's v2 router is byte-identical to Robinhood's v3 factory.
+
+Two operational notes. Arc produces a block every **0.507 s** (measured across 50,000 blocks), so the descriptor states `blockTimeSeconds` — without it the global 12-block confirmation depth would be six seconds of reorg protection. And its public RPC caps `eth_getLogs` at just under 10,000 blocks while rate-limiting with `"rate limit exceeded"`; both are already handled, since the default chunk is 2,000 blocks and that message is classified as transient rather than oversized.
+
+Arc is also deliberately **absent** from GeckoTerminal's network table in `geckoTerminal.ts`. Their API does publish an `arc` network, but it publishes no pools on it, and a slug that resolves to an empty list reads as "this chain has no tokens" rather than "this source can't answer". Our own index covers Arc; map it there once their network returns pools.
 
 ## Adding a chain
 
@@ -97,15 +111,15 @@ Two entries deserve explanation.
 For a network whose parameters aren't settled enough to hardcode — a new L2, a chain we can't verify from here — use `CUSTOM_EVM_CHAINS`. No code change, no release:
 
 ```bash
-ENABLED_CHAINS="stacks:mainnet,arc:mainnet"
+ENABLED_CHAINS="stacks:mainnet,example:mainnet"
 CUSTOM_EVM_CHAINS='[{
-  "chainId": "arc:mainnet",
-  "displayName": "ARC",
-  "id": 4242,
-  "rpcUrl": "https://rpc.arc.example",
-  "nativeSymbol": "ARC",
+  "chainId": "example:mainnet",
+  "displayName": "Example",
+  "id": 424242,
+  "rpcUrl": "https://rpc.example.invalid",
+  "nativeSymbol": "ETH",
   "stableSymbol": "USDC",
-  "explorerBaseUrl": "https://explorer.arc.example"
+  "explorerBaseUrl": "https://explorer.example.invalid"
 }]'
 ```
 

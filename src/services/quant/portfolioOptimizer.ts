@@ -34,6 +34,12 @@ export class PortfolioOptimizer {
       return baseAmountIn;
     }
 
+    // Volatility targeting divides by measured volatility and Kelly sizing
+    // multiplies by a forecast's confidence. With neither measured, the size
+    // that comes out is arithmetic on placeholders — so the requested size is
+    // passed through untouched and the strategy's own sizing stands.
+    if (!features.available) return baseAmountIn;
+
     try {
       // 1. Kelly Sizing Multiplier
       // Kelly % = win_prob - (1 - win_prob) / win_loss_ratio

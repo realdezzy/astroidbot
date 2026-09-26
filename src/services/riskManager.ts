@@ -9,7 +9,14 @@ interface RiskEvaluation {
 
 export class RiskManager {
   private static instance: RiskManager;
-  private dailyPnlReported = false;
+  /**
+   * Users whose daily-loss breach has already been logged this run.
+   *
+   * This was a single process-wide boolean, so the first user to breach the
+   * limit suppressed the warning for everyone else on the instance — the
+   * log line said one user had stopped trading when in fact any number had.
+   */
+  private dailyPnlReported = new Set<number>();
 
   private constructor() {
   }
@@ -54,15 +61,31 @@ export class RiskManager {
     }
 
     const dailyPnlUsd = await this.calculateDailyPnlUsd(userId);
+
+    // Fail closed. This used to return 0 when the query threw, which did not
+    // read as "unknown" but as "flat" — a database blip silently switched the
+    // daily loss limit off for as long as it lasted. A risk control that
+    // disables itself under the conditions where it is most likely to matter
+    // is worse than no control, because it is still on the settings screen.
+    if (dailyPnlUsd === null) {
+      return { approved: false, reason: "Unable to verify the daily loss limit right now" };
+    }
+
     const dailyPnlPct = totalValue > 0 ? (dailyPnlUsd / totalValue) * 100 : 0;
-    if (dailyPnlPct < -settings.dailyLossLimit || dailyPnlUsd < -settings.dailyLossLimit) {
-      if (!this.dailyPnlReported) {
+
+    // Percent only. `dailyLossLimit` is validated above as a percentage
+    // (0-100), but this comparison also tested it against raw dollars, so the
+    // product default of 5.0 froze every user who was down $5.01 regardless of
+    // portfolio size. A $100,000 account was cut off by a rounding error.
+    if (dailyPnlPct < -settings.dailyLossLimit) {
+      if (!this.dailyPnlReported.has(userId)) {
         logger.warn("Daily loss limit reached", {
+          userId,
           dailyPnlPct: dailyPnlPct.toFixed(2),
           dailyPnlUsd: dailyPnlUsd.toFixed(2),
           limit: settings.dailyLossLimit,
         });
-        this.dailyPnlReported = true;
+        this.dailyPnlReported.add(userId);
       }
       return {
         approved: false,
@@ -147,11 +170,18 @@ export class RiskManager {
   }
 
   async resetDailyLossReporting(): Promise<void> {
-    this.dailyPnlReported = false;
+    this.dailyPnlReported.clear();
   }
 
+  /**
+   * Today's realised PnL for display.
+   *
+   * Reporting-only, so an unknown value collapses to 0 here rather than
+   * propagating. The trade gate in `evaluateTrade` must not do this — there,
+   * "unknown" has to block.
+   */
   async getDailyPnl(userId: number): Promise<number> {
-    return this.calculateDailyPnlUsd(userId);
+    return (await this.calculateDailyPnlUsd(userId)) ?? 0;
   }
 
   private findBalance(balances: TokenBalance[], token: string): TokenBalance | undefined {
@@ -170,7 +200,8 @@ export class RiskManager {
     return 0;
   }
 
-  private async calculateDailyPnlUsd(userId: number): Promise<number> {
+  /** Today's realised PnL in USD, or `null` when it could not be determined. */
+  private async calculateDailyPnlUsd(userId: number): Promise<number | null> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -196,9 +227,14 @@ export class RiskManager {
       }
 
       return totalPnl;
-    } catch {
-      logger.error("Failed to calculate daily PnL");
-      return 0;
+    } catch (error) {
+      // `null`, not `0`. The caller must be able to tell "no loss" from "we
+      // could not find out", because those warrant opposite decisions.
+      logger.error("Failed to calculate daily PnL", {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 }

@@ -55,10 +55,57 @@ const envSchema = z.object({
   PIMLICO_API_KEY: z.string().optional(),
   ENABLED_CHAINS: z
     .string()
-    .default("stacks:mainnet,base:mainnet,robinhood:mainnet,solana:mainnet"),
+    .default("stacks:mainnet,base:mainnet,robinhood:mainnet,arc:mainnet,solana:mainnet"),
   CUSTOM_EVM_CHAINS: z.string().default(""),
   JUPITER_API_KEY: z.string().optional(),
-  MARKET_DATA_PROVIDER: z.enum(["internal", "dexscreener", "auto"]).default("internal"),
+  MARKET_DATA_PROVIDER: z
+    .enum(["internal", "dexscreener", "auto", "geckoterminal", "hybrid"])
+    .default("internal"),
+  // GeckoTerminal is keyless at 30 calls/minute, which is a development tier
+  // and nothing more — a single discovery page can spend that. A CoinGecko
+  // paid key raises it to 500/min and moves the client onto the pro host; the
+  // key's presence is the only switch, so an unset key degrades to the free
+  // endpoint rather than failing closed.
+  GECKOTERMINAL_API_KEY: z.string().optional(),
+  // Responses are cached in Redis rather than per process: the API process and
+  // the indexer both read this API, and a per-process cache would double the
+  // call rate against a limit measured per minute.
+  GECKOTERMINAL_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
+  // A ceiling on any liquidity figure the API reports. `total_reserve_in_usd`
+  // came back as a ~600-digit number for USDC on Base, which is not a large
+  // pool — it is a broken field. A value above this is treated as unknown,
+  // because a nonsense number sorts to the top of a liquidity-ranked table and
+  // an unknown one sorts out of the way.
+  GECKOTERMINAL_MAX_LIQUIDITY_USD: z.coerce.number().positive().default(1e12),
+  // Where chart candles come from.
+  //   auto          — follow MARKET_DATA_PROVIDER, so the chart and the price
+  //                   column above it cannot come from different worlds.
+  //   internal      — PoolCandle, written by our own indexer. The rollback path.
+  //   geckoterminal — the external OHLCV endpoint.
+  CANDLE_SOURCE: z.enum(["auto", "internal", "geckoterminal"]).default("auto"),
+  // How much of the indexer runs.
+  //   full      — today's behaviour exactly: discovery, swap ingestion, candles,
+  //               rollups, backfill. The rollback target.
+  //   discovery — pool discovery, token identity and liquidity only. The half
+  //               that beats the aggregators to a new pool, without the half
+  //               that duplicates what they already compute correctly.
+  //   off       — the process indexes nothing (the container simply isn't run).
+  //
+  // Defaults to `full` deliberately, even though `discovery` is where this
+  // deployment is going. `discovery` is only coherent alongside an external
+  // MARKET_DATA_PROVIDER, and that default has not flipped yet: pairing
+  // discovery mode with the `internal` provider leaves the price column served
+  // from rollups nothing refreshes any more, which does not fail — it ages,
+  // invisibly, which is worse. The two switch together, after the A/B, and
+  // until then the shipped default is exactly the behaviour that exists today.
+  INDEXER_MODE: z.enum(["full", "discovery", "off"]).default("full"),
+  // Technical features, regime gating and signal fusion. Off by default: with
+  // no candles the feature engine returns an all-zero set, and a zero RSI or a
+  // zero MACD reads downstream as a real reading rather than as an absence.
+  QUANT_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .transform((v) => v === "true" || v === "1")
+    .default("false"),
   // Read off process.env before, which is why a typo in either was silent.
   CLICKHOUSE_ENABLED: z
     .enum(["true", "false", "1", "0"])

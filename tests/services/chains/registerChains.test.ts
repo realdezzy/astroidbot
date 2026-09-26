@@ -36,10 +36,10 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
     await loadWith({});
     registerEnabledChains();
     expect(ChainAdapterRegistry.getInstance().list().map((d) => d.chainId))
-      .toEqual(["stacks:mainnet", "base:mainnet", "robinhood:mainnet", "solana:mainnet"]);
+      .toEqual(["stacks:mainnet", "base:mainnet", "robinhood:mainnet", "arc:mainnet", "solana:mainnet"]);
   });
 
-  it("ships two EVM chains by default, not one", async () => {
+  it("ships more than one EVM chain by default", async () => {
     await loadWith({});
     registerEnabledChains();
 
@@ -47,7 +47,7 @@ describe("registerEnabledChains", { timeout: 30_000 }, () => {
       .list()
       .filter((d) => d.family === "evm")
       .map((d) => d.chainId);
-    expect(evm).toEqual(["base:mainnet", "robinhood:mainnet"]);
+    expect(evm).toEqual(["base:mainnet", "robinhood:mainnet", "arc:mainnet"]);
   });
 
   it("names each chain's actually-traded stablecoin", async () => {

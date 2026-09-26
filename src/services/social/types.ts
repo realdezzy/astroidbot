@@ -67,6 +67,11 @@ export type SocialRejection =
   | "rate_limited"
   | "no_wallet"
   | "globally_disabled"
+  // Confirmation-link outcomes. The web confirm surface reaches these; the
+  // mention-driven path never does, because it has no link to redeem.
+  | "not_found"
+  | "expired"
+  | "not_authorized"
   | "execution_failed";
 
 export interface SocialDecision {

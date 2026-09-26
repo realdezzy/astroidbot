@@ -111,6 +111,114 @@ export class RollupService {
   }
 
   /**
+   * Stamps identity-level metrics onto `IndexedToken` without a candle rollup.
+   *
+   * **This is what keeps the catalogue growing in discovery mode**, and it is
+   * the single thing about that mode most likely to break quietly.
+   * `TokenDiscoveryService.promoteIndexedTokens` filters on
+   * `lastRolledUpAt: { not: null }` — a token that has never been rolled up has
+   * no trustworthy liquidity reading, so the liquidity floor can't be applied
+   * to it. Only `rollupChain` ever set that column, and it derives everything
+   * from candles. With no candles being written, nothing would set it, no
+   * token would ever clear the filter, and the catalogue would simply stop
+   * gaining rows — with no error anywhere, because "no new tokens" is also
+   * what a quiet chain looks like.
+   *
+   * What it writes is bounded on purpose: liquidity, the venue, the pair's age
+   * and the rollup timestamp. Price, volume and the change columns are *not*
+   * written, because in this mode they come from the external provider and a
+   * zero here would claim the token didn't trade when the truth is that we
+   * stopped counting.
+   *
+   * Only rows that already exist are touched, the same rule `writeTokens`
+   * follows: a pool knows an address and a depth, not a symbol, and a row
+   * created here could never render.
+   */
+  async stampChain(chainId: ChainId): Promise<number> {
+    const db = DatabaseService.getInstance();
+
+    const pools = await db.prisma.indexedPool.findMany({
+      where: { chainId, baseToken: { not: null }, liquidityUsd: { not: null } },
+      select: { baseToken: true, dexId: true, liquidityUsd: true, pairCreatedAt: true },
+    });
+
+    if (pools.length === 0) return 0;
+
+    const byToken = new Map<string, { liquidityUsd: number; bestDepth: number; dexId: string; pairCreatedAt: Date | null }>();
+
+    for (const pool of pools) {
+      const contractId = pool.baseToken!;
+      const depth = pool.liquidityUsd ?? 0;
+      const entry = byToken.get(contractId) ?? {
+        liquidityUsd: 0, bestDepth: -1, dexId: pool.dexId, pairCreatedAt: pool.pairCreatedAt,
+      };
+
+      entry.liquidityUsd += depth;
+
+      // The deepest pool names the venue, matching how the rollup decides
+      // which pool speaks for a token.
+      if (depth > entry.bestDepth) {
+        entry.bestDepth = depth;
+        entry.dexId = pool.dexId;
+      }
+
+      // Earliest pair creation is the token's age, matching how the column
+      // reads: "how long has this been tradeable", not "…in this pool".
+      if (pool.pairCreatedAt && (!entry.pairCreatedAt || pool.pairCreatedAt < entry.pairCreatedAt)) {
+        entry.pairCreatedAt = pool.pairCreatedAt;
+      }
+
+      byToken.set(contractId, entry);
+    }
+
+    const known = await db.prisma.indexedToken.findMany({
+      where: { chainId, contractId: { in: [...byToken.keys()] } },
+      select: { id: true, contractId: true },
+    });
+
+    const updates = known.flatMap((token) => {
+      const metrics = byToken.get(token.contractId);
+      if (!metrics) return [];
+
+      return [
+        db.prisma.indexedToken.update({
+          where: { id: token.id },
+          data: {
+            dexId: metrics.dexId,
+            liquidityUsd: metrics.liquidityUsd > 0 ? metrics.liquidityUsd : null,
+            ...(metrics.pairCreatedAt ? { pairCreatedAt: metrics.pairCreatedAt } : {}),
+            lastRolledUpAt: new Date(),
+          },
+        }),
+      ];
+    });
+
+    if (updates.length === 0) return 0;
+
+    const BATCH = 100;
+    for (let i = 0; i < updates.length; i += BATCH) {
+      await db.prisma.$transaction(updates.slice(i, i + BATCH));
+    }
+    return updates.length;
+  }
+
+  /** `stampChain` across several chains, isolating failures as `rollupAll` does. */
+  async stampAll(chainIds: ChainId[]): Promise<number> {
+    let updated = 0;
+    for (const chainId of chainIds) {
+      try {
+        updated += await this.stampChain(chainId);
+      } catch (error) {
+        logger.warn("[rollup] discovery stamp failed for chain", {
+          chainId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return updated;
+  }
+
+  /**
    * Collapses per-pool rows into per-token metrics.
    *
    * A token can trade in several pools (different fee tiers, different quote

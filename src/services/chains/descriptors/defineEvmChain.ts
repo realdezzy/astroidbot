@@ -14,6 +14,7 @@ export interface EvmChainSpec {
   custody?: EvmChainConfig["custody"];
   bundlerSlug?: string;
   wrappedNative?: `0x${string}`;
+  nativeErc20?: EvmChainConfig["nativeErc20"];
   dex?: EvmChainConfig["dex"];
   v4PoolManager?: EvmChainConfig["v4PoolManager"];
   v4Quoter?: EvmChainConfig["v4Quoter"];
@@ -81,6 +82,7 @@ export function defineEvmChain(spec: EvmChainSpec): ChainDescriptor {
         ? { bundler: { provider: "pimlico" as const, slug: spec.bundlerSlug } }
         : {}),
       ...(spec.wrappedNative ? { wrappedNative: spec.wrappedNative } : {}),
+      ...(spec.nativeErc20 ? { nativeErc20: spec.nativeErc20 } : {}),
       ...(spec.dex ? { dex: spec.dex } : {}),
       ...(spec.tokens ? { tokens: spec.tokens } : {}),
     },

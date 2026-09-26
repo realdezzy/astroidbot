@@ -11,6 +11,23 @@ import { setActiveChain } from "./chainContext.js";
 import { tradeScreen } from "./screens/tradeScreen.js";
 import type { BotContext } from "../types/bot.js";
 import { Prisma } from "@prisma/client";
+import { STRATEGY_TYPES } from "../../shared/strategies.js";
+import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
+
+
+/**
+ * Bounds for the numeric trade settings the assistant is allowed to change.
+ *
+ * Mirrors the limits the settings screen's +/- buttons enforce
+ * (`settingsScreen.ts`), so the same setting cannot be given a value through
+ * conversation that the UI would refuse.
+ */
+const NUMERIC_SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
+  slippageBps: { min: 10, max: 1000 },
+  maxPositionPct: { min: 1, max: 100 },
+  dailyLossLimit: { min: 0.5, max: 25 },
+  rebalanceThreshold: { min: 0.5, max: 10 },
+};
 
 export async function handleNLCommand(ctx: BotContext, text: string): Promise<void> {
   const tid = BigInt(ctx.from?.id ?? 0);
@@ -146,6 +163,27 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
     const key = parsed.key as string;
     const value = parsed.value as string | number | boolean;
     if (!key || value === undefined) return;
+
+    // Clamped to the same bounds the button path enforces. This wrote whatever
+    // number the model produced straight to the row, so a misparse — "set
+    // slippage to 5000" read off a message that said something else entirely —
+    // could set slippage to 50% and hand every trade to the first sandwich bot
+    // that noticed. An LLM is an input source, not an authority.
+    const bound = NUMERIC_SETTING_BOUNDS[key];
+    if (bound) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        await ctx.reply(`❌ ${key} must be a number.`);
+        return;
+      }
+      if (numeric < bound.min || numeric > bound.max) {
+        await ctx.reply(
+          `❌ ${key} must be between ${bound.min} and ${bound.max}. Leaving it unchanged.`
+        );
+        return;
+      }
+    }
+
     const db = DatabaseService.getInstance();
     const s = await db.findTradeSettings(user.id, "personal");
     await db.upsertTradeSettings({
@@ -198,14 +236,33 @@ export async function handleNLCommand(ctx: BotContext, text: string): Promise<vo
 
   if (action === "create_strategy") {
     const type = parsed.type as string;
-    const config = parsed.config as Prisma.InputJsonValue;
+    const config = parsed.config as Record<string, unknown>;
     if (!type || !config) return;
+
+    // Allowlisted and schema-checked. This used to write the model's `type`
+    // and `config` into the row verbatim — an arbitrary string as the strategy
+    // type, and an unvalidated blob as its configuration, for a record the
+    // strategy engine then executes with real funds. The button wizard has
+    // validated both all along; this path simply never called it.
+    if (!(STRATEGY_TYPES as readonly string[]).includes(type)) {
+      await ctx.reply(`❌ "${type}" isn't a strategy type I can create.`);
+      return;
+    }
+
+    const validated = safeValidateStrategyConfig(type, config);
+    if (!validated.success) {
+      await ctx.reply(
+        `❌ That ${type} configuration isn't valid: ${validated.error.issues[0]?.message ?? "unknown error"}`
+      );
+      return;
+    }
+
     const db = DatabaseService.getInstance();
     await db.prisma.tradingStrategy.create({
       data: {
         userId: user.id,
         type,
-        config,
+        config: validated.data as Prisma.InputJsonValue,
         isActive: true,
       }
     });

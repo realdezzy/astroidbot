@@ -9,6 +9,7 @@ import { mainMenu } from "../screens/mainMenu.js";
 import type { BotContext } from "../../types/bot.js";
 import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
 import { setActiveChain } from "../chainContext.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * The single entry point for `callback_query:data`.
@@ -41,7 +42,31 @@ export function callbackRouteCount() {
   return routes().routeCount();
 }
 
+/**
+ * Callback handling, wrapped so a throw still answers the query.
+ *
+ * Telegram spins a button's loading indicator until `answerCallbackQuery` is
+ * called, and gives up after about 30 seconds. A handler that threw never
+ * reached its answer, so the failure surfaced to the user as a button that
+ * hung and then did nothing — indistinguishable from a dead button, which is
+ * the other bug this file has had.
+ */
 export async function handleCallback(ctx: BotContext): Promise<unknown> {
+  try {
+    return await dispatchCallback(ctx);
+  } catch (error) {
+    logger.error("[bot] callback handler failed", {
+      telegramId: ctx.from?.id,
+      data: ctx.callbackQuery?.data,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return ctx
+      .answerCallbackQuery({ text: "Something went wrong. Try again.", show_alert: true })
+      .catch(() => undefined);
+  }
+}
+
+async function dispatchCallback(ctx: BotContext): Promise<unknown> {
   const data = ctx.callbackQuery?.data;
   if (!data) return;
 

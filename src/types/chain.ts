@@ -110,6 +110,30 @@ export interface EvmChainConfig {
   };
   /** Wrapped native token — needed to route native<->ERC20 swaps. */
   wrappedNative?: `0x${string}`;
+  /**
+   * An ERC-20 that *is* the native asset rather than a wrapper for it.
+   *
+   * On most EVM chains the native asset cannot be held as an ERC-20, so
+   * trading it means wrapping: `wrappedNative` plus a deposit/withdraw bracket
+   * around the swap. Arc is not built that way. Its gas token is USDC, and
+   * `0x3600…0000` is the same balance `eth_getBalance` returns — verified on
+   * live accounts, where `balanceOf` equalled `eth_getBalance / 1e12` to the
+   * last unit. Nothing is wrapped, and there is no wrapper to call: Arc's
+   * SwapRouter02 reports a `WETH9()` that holds 53 bytes of stub, and
+   * Uniswap's own SDK marks the chain WETH_NOT_SUPPORTED_ON_CHAIN.
+   *
+   * The two fields are therefore not interchangeable, and the difference is
+   * not cosmetic. `wrappedNative` resolves at `nativeDecimals`, which is 18
+   * on Arc for gas accounting while the ERC-20 view is 6 — using it here
+   * would ask the router to spend 10^12 times the intended amount, on the
+   * single most common trade on the chain. It also carries its own decimals
+   * for that reason, rather than inheriting the descriptor's.
+   *
+   * Consumers: `UniswapV3Provider.resolveToken` (resolve native here, and do
+   * not wrap) and `fetchEvmBalances` (this address and the native balance are
+   * one holding, so count it once).
+   */
+  nativeErc20?: { address: `0x${string}`; decimals: number };
   /** Curated token list: symbol -> address. */
   tokens?: Record<string, { address: `0x${string}`; decimals: number; name: string }>;
 }

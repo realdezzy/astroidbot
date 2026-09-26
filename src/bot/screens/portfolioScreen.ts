@@ -8,6 +8,7 @@ import { chainIcon } from "../keyboards/builders.js";
 import { RiskManager } from "../../services/riskManager.js";
 import { escapeMd, shortenAddress } from "../utils.js";
 import { markdownView, renderScreen } from "../ui/render.js";
+import { logger } from "../../utils/logger.js";
 
 export async function portfolioScreen(ctx: BotContext): Promise<void> {
   ctx.session.backScreen = "main";
@@ -38,7 +39,20 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
 
   let allLines = ["📊 *Portfolio*\n"];
   let grandTotal = 0;
-  let totalPnl = 0;
+
+  // Read once, outside the wallet loop. `getDailyPnl` is a per-*user* figure,
+  // so accumulating it per wallet multiplied it by the wallet count — a user
+  // with three wallets was shown three times their actual PnL. The error also
+  // scaled with the thing a user is most likely to add more of.
+  let totalPnl: number | null = null;
+  try {
+    totalPnl = await RiskManager.getInstance().getDailyPnl(user.id);
+  } catch (error) {
+    logger.warn("[portfolio] daily PnL unavailable", {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   for (const wallet of wallets) {
     const chain = walletDescriptor(wallet);
@@ -49,10 +63,6 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
     );
     const total = balances.reduce((s, b) => s + b.usdValue, 0);
     grandTotal += total;
-
-    try {
-      totalPnl += await RiskManager.getInstance().getDailyPnl(user.id);
-    } catch { }
 
     // Chain shown per wallet: the same ticker exists on several chains, so a
     // balance list without it is ambiguous once a user holds more than one.
@@ -72,7 +82,8 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
     allLines.push("");
   }
 
-  const pnlStr = totalPnl >= 0 ? `+${totalPnl.toFixed(2)}` : totalPnl.toFixed(2);
+  const pnlStr =
+    totalPnl === null ? "—" : totalPnl >= 0 ? `+${totalPnl.toFixed(2)}` : totalPnl.toFixed(2);
   allLines.push(`*Total:* $${grandTotal.toFixed(2)}`);
   allLines.push(`*24h PnL:* ${pnlStr}`);
 

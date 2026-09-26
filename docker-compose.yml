@@ -61,6 +61,13 @@ services:
 
   # Market-data ingestion. Same image, different entrypoint — see
   # src/indexer.ts for why this is a separate process at all.
+  #
+  # How much it does is `INDEXER_MODE` in .env.docker, not a compose setting:
+  # `discovery` (the default) reads pool creations and liquidity but no swaps,
+  # and pairs with MARKET_DATA_PROVIDER="hybrid"; `full` restores swap
+  # ingestion and candles. `off` means this service should simply not be
+  # started — the container would come up, serve /health and index nothing,
+  # which looks exactly like a chain with no activity.
   indexer:
     build: .
     container_name: astroidbot-indexer

@@ -1,6 +1,7 @@
 import { logger } from "../../utils/logger.js";
 import { IndexerService } from "./indexerService.js";
 import { RollupService } from "./rollupService.js";
+import { indexerSettings, ingestionEnabled } from "./settings.js";
 import { pruneOldSwaps } from "./swapStore.js";
 
 /**
@@ -24,8 +25,26 @@ export async function runMarketDataIngestion(): Promise<void> {
   void results;
 
   if (touched.length > 0) {
-    const updated = await RollupService.getInstance().rollupAll(touched);
-    if (updated > 0) logger.debug("[marketData] rolled up tokens", { updated, chains: touched });
+    // Which fold runs depends on what the pass produced. A candle rollup with
+    // no new candles is not harmless: its window aggregates would report a
+    // steadily emptying 24 hours as the last ingested candles age out, which
+    // reads as every token on the chain dying rather than as us having stopped
+    // counting. The discovery stamp writes only what discovery actually
+    // measured — liquidity, venue, age — and leaves price and volume to the
+    // external provider.
+    const rollup = RollupService.getInstance();
+    const ingesting = ingestionEnabled(indexerSettings());
+    const updated = ingesting
+      ? await rollup.rollupAll(touched)
+      : await rollup.stampAll(touched);
+
+    if (updated > 0) {
+      logger.debug("[marketData] rolled up tokens", {
+        updated,
+        chains: touched,
+        mode: ingesting ? "full" : "discovery",
+      });
+    }
   }
 
   if (++runCount % PRUNE_EVERY_N_RUNS === 0) {

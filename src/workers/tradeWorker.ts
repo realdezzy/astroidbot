@@ -10,6 +10,7 @@ import { executeSwapPayload } from "../services/chains/executeSwap.js";
 import { walletChainId } from "../services/chains/walletChain.js";
 import { DEFAULT_CHAIN_ID } from "../services/chains/descriptors/index.js";
 import { resolveTradeSettings } from "../services/tradeSettings.js";
+import { PortfolioManager } from "../services/portfolio.js";
 
 
 interface TradeJob {
@@ -46,10 +47,23 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
   // one this check is about.
   const settings = await resolveTradeSettings(userId, "personal", chainId);
 
+  // Real balances, not a synthetic stand-in. This argument used to be
+  // `[{ token: tokenIn, symbol: tokenIn, balance: amountIn, usdValue: amountIn }]`,
+  // which made the traded amount both the position and the whole portfolio: the
+  // position check was `amountIn / amountIn` and therefore always exactly 100%,
+  // so every buy breached `maxPositionPct` and every sell breached the 50% sell
+  // ceiling. The queue rejected every trade routed through it — which is every
+  // surface but the inline web path — while `RiskManager`'s own tests stayed
+  // green, because the unit was right and only its caller was wrong.
+  const tokens = await registry.getSwappableTokens(false, chainId);
+  const balances = wallet
+    ? await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId, true, chainId)
+    : [];
+
   const riskResult = await RiskManager.getInstance().evaluateTrade(
     userId,
     { tokenIn, tokenOut, amountIn, direction: direction as "BUY" | "SELL", reason },
-    [{ token: tokenIn, symbol: tokenIn, balance: amountIn, usdValue: amountIn }],
+    balances,
     { slippageBps: settings.slippageBps, maxPositionPct: settings.maxPositionPct, dailyLossLimit: settings.dailyLossLimit }
   );
   if (!riskResult.approved) {
@@ -65,10 +79,29 @@ export async function processTradeJob(job: Job<TradeJob>): Promise<void> {
   const payload = await provider.buildSwapPayload(tokenIn, tokenOut, amountIn, minOut, senderAddress);
   if (!payload) throw new Error("Failed to build swap payload");
 
-  const trade = await db.createTrade({
+  // A job that died after broadcasting still has attempts left, and BullMQ
+  // will replay it. Without this check the replay wrote a second Trade row and
+  // sent a second swap — the user paid twice for one intent. The job id is the
+  // caller's idempotency key, so a prior attempt's row is findable by it.
+  //
+  // Only a recorded `txId` blocks the retry. A row with no txId means the
+  // previous attempt died before broadcasting, so the retry is the point: it
+  // reuses that row rather than orphaning it.
+  const idempotencyKey = typeof job.id === "string" ? job.id : undefined;
+  const prior = idempotencyKey ? await db.findTradeByIdempotencyKey(idempotencyKey) : null;
+
+  if (prior?.txId) {
+    logger.warn("Trade job replayed after broadcast; refusing to broadcast again", {
+      jobId: job.id, tradeId: prior.id, txId: prior.txId,
+    });
+    return;
+  }
+
+  const trade = prior ?? await db.createTrade({
     walletId, userId, direction, tokenIn, tokenOut,
     amountIn, amountOut: est.amountOut,
     feeAmount: est.feeAmount, feeBps: est.feeBps,
+    idempotencyKey,
   });
 
   const result = await executeSwapPayload(payload, {

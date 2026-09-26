@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { apiFetch, getAccessToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { classNames, formatNumber } from "../lib/utils";
+import { classNames, formatDate, formatNumber } from "../lib/utils";
 import { ChainDexBadge } from "../components/ChainDexBadge";
 import { TradingViewChart, CandleData } from "../components/TradingViewChart";
 import { useAppRoutes } from "../lib/appRoutes";
@@ -57,29 +57,41 @@ interface TokenDetailData {
   } | null;
 }
 
+/**
+ * A row as `/tokens/:chainId/:contractId/swaps` actually answers it.
+ *
+ * `tokenAmount` and `nativeAmount` are optional because nothing sends them —
+ * they were declared required and the only rows that ever carried them were
+ * the mock swaps this file used to invent. `txHash` is the display-shortened
+ * form (`0x1234...abcd`) and resolves nowhere; `fullTxHash` is the hash.
+ */
 interface SwapTx {
   txHash: string;
+  fullTxHash?: string;
+  /** ISO timestamp of the swap's bucket, not of when we indexed it. */
   timestamp: string;
   type: "BUY" | "SELL";
   amountUsd: number;
-  tokenAmount: number;
-  nativeAmount: number;
+  tokenAmount?: number | null;
+  nativeAmount?: number | null;
   priceUsd: number;
   traderAddress: string;
   fullAddress?: string;
 }
 
+/**
+ * `/traders` is a volume leaderboard aggregated from indexed swaps and nothing
+ * else. PnL, win rate and buy/sell counts were rendered here against a shape
+ * the route has never returned, so every row read `+$NaN (undefined%)` — a
+ * number that looked like a measurement.
+ */
 interface TraderItem {
   rank: number;
   address: string;
   fullAddress?: string;
   tag: string;
-  pnlUsd: number;
-  pnlPercent: number;
-  winRate: number;
   volumeUsd: number;
-  buys: number;
-  sells: number;
+  trades: number;
 }
 
 interface KolItem {
@@ -107,50 +119,30 @@ interface HolderItem {
 
 const TIMEFRAMES = ["1s", "1m", "5m", "15m", "1h", "4h", "D"] as const;
 
-function getExplorerTxUrl(chain: TokenDetailData["chain"], txHash: string, paramChainId?: string) {
-  if (!txHash) return "#";
-  const chainId = (chain?.chainId ?? paramChainId ?? "").toLowerCase();
-  if (chainId.includes("stacks")) {
-    const isTestnet = chainId.includes("testnet");
-    return `https://explorer.hiro.so/txid/${txHash}${isTestnet ? "?chain=testnet" : "?chain=mainnet"}`;
-  }
-  if (chainId.includes("solana")) {
-    const isDevnet = chainId.includes("devnet");
-    return `https://solscan.io/tx/${txHash}${isDevnet ? "?cluster=devnet" : ""}`;
-  }
-  if (chainId.includes("base")) {
-    return `https://basescan.org/tx/${txHash}`;
-  }
-  if (chainId.includes("celo")) {
-    return `https://celoscan.io/tx/${txHash}`;
-  }
-  if (chainId.includes("ethereum") || chainId.includes("eth")) {
-    return `https://etherscan.io/tx/${txHash}`;
-  }
-  return `https://blockscan.com/tx/${txHash}`;
-}
-
-function getExplorerAddressUrl(chain: TokenDetailData["chain"], address: string, paramChainId?: string) {
-  if (!address) return "#";
-  const chainId = (chain?.chainId ?? paramChainId ?? "").toLowerCase();
-  if (chainId.includes("stacks")) {
-    const isTestnet = chainId.includes("testnet");
-    return `https://explorer.hiro.so/address/${address}${isTestnet ? "?chain=testnet" : "?chain=mainnet"}`;
-  }
-  if (chainId.includes("solana")) {
-    const isDevnet = chainId.includes("devnet");
-    return `https://solscan.io/account/${address}${isDevnet ? "?cluster=devnet" : ""}`;
-  }
-  if (chainId.includes("base")) {
-    return `https://basescan.org/address/${address}`;
-  }
-  if (chainId.includes("celo")) {
-    return `https://celoscan.io/address/${address}`;
-  }
-  if (chainId.includes("ethereum") || chainId.includes("eth")) {
-    return `https://etherscan.io/address/${address}`;
-  }
-  return `https://blockscan.com/address/${address}`;
+/**
+ * An explorer link for `address` on this token's chain, or null when we cannot
+ * build one honestly.
+ *
+ * The API resolves exactly one explorer URL for us — the chain descriptor's
+ * address URL for the contract being viewed — so the link for any *other*
+ * address on the same chain is that URL with the address swapped in. Doing it
+ * this way keeps every explorer hostname and path shape on the server, where
+ * the descriptor already holds them.
+ *
+ * What was here before was a six-branch substring ladder over the ChainId that
+ * fell through to blockscan.com for anything it had not been taught, so every
+ * Robinhood Chain link on this page was a 404 — the same class of bug that put
+ * a Hiro URL on Base trades in four other components.
+ */
+function explorerAddressUrl(
+  chain: TokenDetailData["chain"],
+  contractId: string,
+  address: string
+): string | null {
+  if (!chain?.explorerUrl || !address) return null;
+  if (address === contractId) return chain.explorerUrl;
+  if (!chain.explorerUrl.includes(contractId)) return null;
+  return chain.explorerUrl.replace(contractId, encodeURIComponent(address));
 }
 
 export function TokenDetail() {
@@ -206,15 +198,23 @@ export function TokenDetail() {
           const msg = JSON.parse(event.data);
           if (msg.type === "swap_update" && msg.payload?.symbol === token.symbol) {
             const s = msg.payload.swap;
+            // Only what the event carries. A random hex string stood in for a
+            // missing tx hash and `volumeUsd / 2` stood in for the native leg —
+            // two values that render exactly like measured ones.
+            const fullTxHash = typeof s.txKey === "string" ? s.txKey.split(":")[0] : undefined;
             const newSwap: SwapTx = {
-              txHash: s.txKey || `0x${Math.random().toString(16).slice(2, 10)}`,
-              timestamp: "Just now",
+              txHash: fullTxHash
+                ? `${fullTxHash.slice(0, 6)}...${fullTxHash.slice(-4)}`
+                : "—",
+              fullTxHash,
+              timestamp: new Date().toISOString(),
               type: s.isBuy ? "BUY" : "SELL",
               amountUsd: s.volumeUsd || 0,
-              tokenAmount: s.volumeUsd && s.priceUsd ? Math.round(s.volumeUsd / s.priceUsd) : 0,
-              nativeAmount: s.volumeUsd ? s.volumeUsd / 2.0 : 0,
+              tokenAmount: s.volumeUsd && s.priceUsd ? s.volumeUsd / s.priceUsd : null,
+              nativeAmount: null,
               priceUsd: s.priceUsd || 0,
-              traderAddress: s.trader ? `${s.trader.slice(0, 4)}...${s.trader.slice(-2)}` : "LiveWS",
+              traderAddress: s.trader ? `${s.trader.slice(0, 6)}...${s.trader.slice(-4)}` : "Unknown",
+              fullAddress: typeof s.trader === "string" ? s.trader : undefined,
             };
             setLiveSwaps((prev) => [newSwap, ...prev.slice(0, 20)]);
           }
@@ -237,7 +237,7 @@ export function TokenDetail() {
     refetchInterval: 15_000,
   });
 
-  const { data: swapData } = useQuery<{ swaps: SwapTx[] }>({
+  const { data: swapData } = useQuery<{ swaps: SwapTx[]; message?: string }>({
     queryKey: ["token-swaps", chainId, contractId],
     queryFn: () =>
       apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/swaps`),
@@ -245,7 +245,7 @@ export function TokenDetail() {
     refetchInterval: 10_000,
   });
 
-  const { data: tradersData } = useQuery<{ traders: TraderItem[] }>({
+  const { data: tradersData } = useQuery<{ traders: TraderItem[]; message?: string }>({
     queryKey: ["token-traders", chainId, contractId],
     queryFn: () =>
       apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/traders`),
@@ -253,7 +253,7 @@ export function TokenDetail() {
     refetchInterval: 15_000,
   });
 
-  const { data: kolsData } = useQuery<{ kols: KolItem[] }>({
+  const { data: kolsData } = useQuery<{ kols: KolItem[]; message?: string }>({
     queryKey: ["token-kols", chainId, contractId],
     queryFn: () =>
       apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/kols`),
@@ -261,7 +261,7 @@ export function TokenDetail() {
     refetchInterval: 15_000,
   });
 
-  const { data: holdersData } = useQuery<{ holders: HolderItem[] }>({
+  const { data: holdersData } = useQuery<{ holders: HolderItem[]; message?: string }>({
     queryKey: ["token-holders", chainId, contractId],
     queryFn: () =>
       apiFetch(`/tokens/${encodeURIComponent(chainId)}/${encodeURIComponent(contractId)}/holders`),
@@ -275,17 +275,21 @@ export function TokenDetail() {
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  const candles = useMemo(() => {
-    if (candleData?.candles && candleData.candles.length >= 2) {
-      return candleData.candles;
-    }
-    return generateSyntheticCandles(token?.priceUsd ?? 0.0003179);
-  }, [candleData, token]);
+  // Whatever the API returned, and nothing else.
+  //
+  // Both of these used to fall back to generated data — a `Math.random()`
+  // random walk for the chart and two invented trades for the table — so a
+  // token nobody has traded rendered as a token with a price history. The
+  // backend deleted exactly this fabrication from `candleService` and wrote
+  // down why: an empty chart is a true statement about such a token, and an
+  // invented one is not. This layer put it back.
+  const candles = candleData?.candles ?? [];
+  const swaps = useMemo(() => [...liveSwaps, ...(swapData?.swaps ?? [])], [swapData, liveSwaps]);
 
-  const swaps = useMemo(() => {
-    const fetched = swapData?.swaps ?? generateMockSwaps(token);
-    return [...liveSwaps, ...fetched];
-  }, [swapData, liveSwaps, token]);
+  // The last candle is the only honest source for the OHLC header. High and
+  // Low were `price * 1.02` and `price * 0.98`, which is a fixed 4% band drawn
+  // in green and red as though it were the session's range.
+  const latestCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
 
   if (isLoading) {
     return (
@@ -309,8 +313,11 @@ export function TokenDetail() {
     );
   }
 
-  const nativeSymbol = token.chain?.nativeSymbol ?? "SOL";
-  const dexName = token.dexId ?? "DexScreener";
+  // Both of these defaulted to a specific answer — "SOL" and "DexScreener" —
+  // for the case where we do not have one, which reads as a fact about the
+  // token rather than as a gap. An unlabelled pair is the honest render.
+  const nativeSymbol = token.chain?.nativeSymbol ?? "";
+  const dexName = token.dexId ?? null;
   const totalTxns = (token.txns24h?.buys ?? 0) + (token.txns24h?.sells ?? 0);
 
   return (
@@ -326,11 +333,13 @@ export function TokenDetail() {
           </Link>
           <span className="text-muted-text/50">/</span>
           <div className="flex items-center space-x-2">
-            <ChainDexBadge chainId={token.chainId} dexId={dexName} />
+            <ChainDexBadge chainId={token.chainId} dexId={dexName ?? undefined} />
             <h1 className="text-sm font-bold text-title-text">
-              {token.symbol}/{nativeSymbol}
+              {nativeSymbol ? `${token.symbol}/${nativeSymbol}` : token.symbol}
             </h1>
-            <span className="text-xs text-muted-text font-mono">on {dexName}</span>
+            {dexName && (
+              <span className="text-xs text-muted-text font-mono">on {dexName}</span>
+            )}
           </div>
         </div>
 
@@ -348,16 +357,18 @@ export function TokenDetail() {
               {token.contractId.slice(0, 6)}...{token.contractId.slice(-4)}
             </span>
           </button>
-          <a
-            href={getExplorerAddressUrl(token.chain, token.contractId, chainId)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-input-bg border border-card-border hover:bg-bg-hover text-brand-400 font-semibold transition-colors cursor-pointer"
-            title="View on Explorer"
-          >
-            <span>Explorer</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
+          {token.chain?.explorerUrl && (
+            <a
+              href={token.chain.explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-input-bg border border-card-border hover:bg-bg-hover text-brand-400 font-semibold transition-colors cursor-pointer"
+              title="View on Explorer"
+            >
+              <span>Explorer</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
         </div>
       </div>
 
@@ -387,22 +398,34 @@ export function TokenDetail() {
 
               <div className="flex items-center space-x-4 text-xs font-mono">
                 <span className="text-muted-text">
-                  O <span className="text-title-text">${formatNumber(token.priceUsd ?? 0)}</span>
+                  O <span className="text-title-text">{ohlc(latestCandle?.open)}</span>
                 </span>
                 <span className="text-muted-text">
-                  H <span className="text-emerald-400">${formatNumber((token.priceUsd ?? 0) * 1.02)}</span>
+                  H <span className="text-emerald-400">{ohlc(latestCandle?.high)}</span>
                 </span>
                 <span className="text-muted-text">
-                  L <span className="text-red-400">${formatNumber((token.priceUsd ?? 0) * 0.98)}</span>
+                  L <span className="text-red-400">{ohlc(latestCandle?.low)}</span>
                 </span>
                 <span className="text-muted-text">
-                  Vol <span className="text-brand-400">${formatNumber(token.volume24h ?? 0)}</span>
+                  Vol <span className="text-brand-400">{ohlc(token.volume24h)}</span>
                 </span>
               </div>
             </div>
 
             <div className="h-[400px] w-full relative">
-              <TradingViewChart candles={candles} timeframe={selectedTimeframe} />
+              {candles.length > 0 ? (
+                <TradingViewChart candles={candles} timeframe={selectedTimeframe} />
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center space-y-1 text-center">
+                  <span className="text-sm font-semibold text-muted-text">
+                    No price history for this token yet
+                  </span>
+                  <span className="text-xs text-muted-text/70">
+                    Nothing has been indexed on {token.chain?.displayName ?? token.chainId} at the{" "}
+                    {selectedTimeframe} interval.
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -464,7 +487,7 @@ export function TokenDetail() {
                       <th className="py-2 px-3">Type</th>
                       <th className="py-2 px-3 text-right">USD</th>
                       <th className="py-2 px-3 text-right">{token.symbol}</th>
-                      <th className="py-2 px-3 text-right">{nativeSymbol}</th>
+                      <th className="py-2 px-3 text-right">{nativeSymbol || "Native"}</th>
                       <th className="py-2 px-3 text-right">Price</th>
                       <th className="py-2 px-3 text-right">Trader</th>
                       <th className="py-2 px-3 text-center">Txn</th>
@@ -473,7 +496,7 @@ export function TokenDetail() {
                   <tbody className="divide-y divide-card-border/50">
                     {swaps.map((swap, idx) => (
                       <tr key={idx} className="hover:bg-bg-hover transition-colors">
-                        <td className="py-2 px-3 text-muted-text">{swap.timestamp}</td>
+                        <td className="py-2 px-3 text-muted-text">{formatDate(swap.timestamp)}</td>
                         <td className="py-2 px-3">
                           <span
                             className={classNames(
@@ -496,9 +519,9 @@ export function TokenDetail() {
                         </td>
                         <td className="py-2 px-3 text-right text-muted-text">
                           {swap.tokenAmount != null
-                            ? swap.tokenAmount.toLocaleString()
+                            ? formatNumber(swap.tokenAmount, 4)
                             : swap.amountUsd && swap.priceUsd
-                            ? Math.round(swap.amountUsd / swap.priceUsd).toLocaleString()
+                            ? formatNumber(swap.amountUsd / swap.priceUsd, 4)
                             : "—"}
                         </td>
                         <td className="py-2 px-3 text-right text-muted-text">
@@ -515,27 +538,45 @@ export function TokenDetail() {
                           ${formatNumber(swap.priceUsd)}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          <a
-                            href={getExplorerAddressUrl(token.chain, swap.fullAddress || swap.traderAddress, chainId)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-brand-400 hover:underline cursor-pointer"
-                          >
-                            {swap.traderAddress}
-                          </a>
+                          <ExplorerAddress
+                            chain={token.chain}
+                            contractId={contractId}
+                            address={swap.fullAddress}
+                            label={swap.traderAddress}
+                            className="text-brand-400"
+                          />
                         </td>
+                        {/* A copy, not a link. The link here was built from
+                          * `txHash`, which is the shortened display form the
+                          * API produces for the table — "0xabc123...def4" is
+                          * not a hash any explorer can look up. `fullTxHash`
+                          * is, and the API does not resolve a per-swap
+                          * explorer URL for us the way the trade routes do. */}
                         <td className="py-2 px-3 text-center">
-                          <a
-                            href={getExplorerTxUrl(token.chain, swap.txHash, chainId)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-muted-text hover:text-title-text"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5 inline" />
-                          </a>
+                          {swap.fullTxHash ? (
+                            <button
+                              onClick={() => copyToClipboard(swap.fullTxHash!, `tx:${swap.fullTxHash}`)}
+                              title={`Copy ${swap.fullTxHash}`}
+                              className="text-muted-text hover:text-title-text cursor-pointer"
+                            >
+                              {copiedField === `tx:${swap.fullTxHash}` ? (
+                                <Check className="w-3.5 h-3.5 inline text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5 inline" />
+                              )}
+                            </button>
+                          ) : (
+                            <span className="text-muted-text/50">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
+                    {swaps.length === 0 && (
+                      <TabEmpty
+                        colSpan={8}
+                        message={swapData?.message ?? "No indexed swaps for this token yet."}
+                      />
+                    )}
                   </tbody>
                 </table>
               )}
@@ -547,10 +588,8 @@ export function TokenDetail() {
                       <th className="py-2 px-3">#</th>
                       <th className="py-2 px-3">Trader Address</th>
                       <th className="py-2 px-3">Category</th>
-                      <th className="py-2 px-3 text-right">24h PnL</th>
-                      <th className="py-2 px-3 text-right">Win Rate</th>
                       <th className="py-2 px-3 text-right">Volume</th>
-                      <th className="py-2 px-3 text-right">Buys / Sells</th>
+                      <th className="py-2 px-3 text-right">Swaps</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-card-border/50">
@@ -558,34 +597,33 @@ export function TokenDetail() {
                       <tr key={trader.rank} className="hover:bg-bg-hover transition-colors">
                         <td className="py-2 px-3 text-muted-text font-bold">#{trader.rank}</td>
                         <td className="py-2 px-3 font-semibold">
-                          <a
-                            href={getExplorerAddressUrl(token.chain, trader.fullAddress || trader.address, chainId)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-brand-400 hover:underline"
-                          >
-                            {trader.address}
-                          </a>
+                          <ExplorerAddress
+                            chain={token.chain}
+                            contractId={contractId}
+                            address={trader.fullAddress}
+                            label={trader.address}
+                            className="text-brand-400"
+                          />
                         </td>
                         <td className="py-2 px-3">
                           <span className="bg-brand-500/10 border border-brand-500/20 text-brand-400 px-1.5 py-0.5 rounded text-[10px] font-bold">
                             {trader.tag}
                           </span>
                         </td>
-                        <td className="py-2 px-3 text-right font-bold text-emerald-400">
-                          +${formatNumber(trader.pnlUsd)} ({trader.pnlPercent}%)
-                        </td>
                         <td className="py-2 px-3 text-right font-semibold text-title-text">
-                          {trader.winRate}%
-                        </td>
-                        <td className="py-2 px-3 text-right text-muted-text">
                           ${formatNumber(trader.volumeUsd)}
                         </td>
                         <td className="py-2 px-3 text-right text-muted-text">
-                          <span className="text-emerald-400">{trader.buys}B</span> / <span className="text-red-400">{trader.sells}S</span>
+                          {trader.trades.toLocaleString()}
                         </td>
                       </tr>
                     ))}
+                    {(tradersData?.traders ?? []).length === 0 && (
+                      <TabEmpty
+                        colSpan={5}
+                        message={tradersData?.message ?? "No indexed swaps to rank traders by yet."}
+                      />
+                    )}
                   </tbody>
                 </table>
               )}
@@ -608,14 +646,13 @@ export function TokenDetail() {
                       <tr key={kol.rank} className="hover:bg-bg-hover transition-colors">
                         <td className="py-2 px-3 text-muted-text font-bold">#{kol.rank}</td>
                         <td className="py-2 px-3">
-                          <a
-                            href={getExplorerAddressUrl(token.chain, kol.fullAddress || kol.handle, chainId)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-bold text-brand-400 hover:underline"
-                          >
-                            {kol.handle}
-                          </a>
+                          <ExplorerAddress
+                            chain={token.chain}
+                            contractId={contractId}
+                            address={kol.fullAddress}
+                            label={kol.handle}
+                            className="font-bold text-brand-400"
+                          />
                           <div className="text-[10px] text-muted-text">{kol.name}</div>
                         </td>
                         <td className="py-2 px-3">
@@ -639,6 +676,9 @@ export function TokenDetail() {
                         </td>
                       </tr>
                     ))}
+                    {(kolsData?.kols ?? []).length === 0 && (
+                      <TabEmpty colSpan={7} message={kolsData?.message} />
+                    )}
                   </tbody>
                 </table>
               )}
@@ -660,14 +700,13 @@ export function TokenDetail() {
                       <tr key={h.rank} className="hover:bg-bg-hover transition-colors">
                         <td className="py-2 px-3 text-muted-text font-bold">#{h.rank}</td>
                         <td className="py-2 px-3 font-semibold">
-                          <a
-                            href={getExplorerAddressUrl(token.chain, h.fullAddress || h.address, chainId)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-brand-400 hover:underline"
-                          >
-                            {h.address}
-                          </a>
+                          <ExplorerAddress
+                            chain={token.chain}
+                            contractId={contractId}
+                            address={h.fullAddress}
+                            label={h.address}
+                            className="text-brand-400"
+                          />
                           <span className="block text-[10px] text-muted-text">{h.label}</span>
                         </td>
                         <td className="py-2 px-3">
@@ -686,6 +725,9 @@ export function TokenDetail() {
                         </td>
                       </tr>
                     ))}
+                    {(holdersData?.holders ?? []).length === 0 && (
+                      <TabEmpty colSpan={6} message={holdersData?.message} />
+                    )}
                   </tbody>
                 </table>
               )}
@@ -704,7 +746,9 @@ export function TokenDetail() {
               <div>
                 <h2 className="text-base font-bold text-title-text flex items-center space-x-1.5">
                   <span>{token.symbol}</span>
-                  <span className="text-xs font-normal text-muted-text">/ {nativeSymbol}</span>
+                  {nativeSymbol && (
+                    <span className="text-xs font-normal text-muted-text">/ {nativeSymbol}</span>
+                  )}
                 </h2>
                 <p className="text-xs text-muted-text">{token.name}</p>
               </div>
@@ -741,7 +785,7 @@ export function TokenDetail() {
               {token.priceUsd != null ? `$${formatNumber(token.priceUsd)}` : "N/A"}
             </div>
             <div className="text-xs font-mono text-muted-text mt-1">
-              PRICE: <span className="text-title-text">{token.priceNative != null ? `${token.priceNative.toFixed(6)} ${nativeSymbol}` : "—"}</span>
+              PRICE: <span className="text-title-text">{token.priceNative != null && nativeSymbol ? `${token.priceNative.toFixed(6)} ${nativeSymbol}` : "—"}</span>
             </div>
           </div>
 
@@ -773,10 +817,10 @@ export function TokenDetail() {
               Performance
             </div>
             <div className="grid grid-cols-4 gap-2 text-center font-mono text-xs">
-              <PerfPill label="5M" value={token.priceChange5m ?? 0} />
-              <PerfPill label="1H" value={token.priceChange1h ?? 0} />
-              <PerfPill label="6H" value={token.priceChange6h ?? 0} />
-              <PerfPill label="24H" value={token.priceChange24h ?? 0} />
+              <PerfPill label="5M" value={token.priceChange5m} />
+              <PerfPill label="1H" value={token.priceChange1h} />
+              <PerfPill label="6H" value={token.priceChange6h} />
+              <PerfPill label="24H" value={token.priceChange24h} />
             </div>
           </div>
 
@@ -806,7 +850,23 @@ export function TokenDetail() {
   );
 }
 
-function PerfPill({ label, value }: { label: string; value: number }) {
+/**
+ * One price-change cell.
+ *
+ * A missing change is not a flat one. The call sites coerced every null with
+ * `?? 0`, so a token we have no 5-minute window for rendered a green +0.0% —
+ * a claim that it traded and did not move.
+ */
+function PerfPill({ label, value }: { label: string; value?: number | null }) {
+  if (value == null) {
+    return (
+      <div className="bg-input-bg p-2 rounded-lg">
+        <div className="text-[10px] text-muted-text">{label}</div>
+        <div className="font-bold mt-0.5 text-muted-text/60">—</div>
+      </div>
+    );
+  }
+
   const isPos = value >= 0;
   return (
     <div className="bg-input-bg p-2 rounded-lg">
@@ -818,47 +878,55 @@ function PerfPill({ label, value }: { label: string; value: number }) {
   );
 }
 
-function generateSyntheticCandles(currentPrice: number): CandleData[] {
-  const count = 50;
-  const now = Math.floor(Date.now() / 1000);
-  const result: CandleData[] = [];
-  let price = currentPrice * 0.85;
-
-  for (let i = count; i >= 0; i--) {
-    const timestamp = now - i * 300;
-    const change = (Math.random() - 0.48) * 0.04 * price;
-    const open = price;
-    const close = price + change;
-    const high = Math.max(open, close) + Math.random() * 0.01 * price;
-    const low = Math.min(open, close) - Math.random() * 0.01 * price;
-    const volume = Math.floor(Math.random() * 10000 + 1000);
-    price = close;
-    result.push({ timestamp, open, high, low, close, volume });
-  }
-  return result;
+/** A USD figure, or an em dash when we do not have one. */
+function ohlc(value: number | null | undefined): string {
+  return value != null ? `$${formatNumber(value)}` : "—";
 }
 
-function generateMockSwaps(token: TokenDetailData | undefined): SwapTx[] {
-  return [
-    {
-      txHash: "0x9a8f4c2e",
-      timestamp: "Just now",
-      type: "BUY",
-      amountUsd: 1250.00,
-      tokenAmount: 41250,
-      nativeAmount: 2.45,
-      priceUsd: token?.priceUsd ?? 0.0303,
-      traderAddress: "7FEApn...3b9a",
-    },
-    {
-      txHash: "0x3e4f5a6b",
-      timestamp: "2m ago",
-      type: "SELL",
-      amountUsd: 450.50,
-      tokenAmount: 14860,
-      nativeAmount: 0.88,
-      priceUsd: token?.priceUsd ?? 0.0303,
-      traderAddress: "TJY2Pu...e81c",
-    },
-  ];
+/**
+ * An address as an explorer link when `explorerAddressUrl` can build one for
+ * this chain, and as plain text when it cannot. A guessed link is worse than
+ * no link: it looks like a way to verify the row and goes to a 404.
+ */
+function ExplorerAddress({
+  chain,
+  contractId,
+  address,
+  label,
+  className,
+}: {
+  chain: TokenDetailData["chain"];
+  contractId: string;
+  address?: string;
+  label: string;
+  className?: string;
+}) {
+  const href = address ? explorerAddressUrl(chain, contractId, address) : null;
+  if (!href) return <span className={className}>{label}</span>;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={classNames(className, "hover:underline cursor-pointer")}
+    >
+      {label}
+    </a>
+  );
+}
+
+/**
+ * The row a tab shows when it has nothing to show, carrying the API's own
+ * explanation. The KOL and holder routes answer `[]` plus a `message` saying
+ * why — "On-chain holder indexer pending for this network" — and the UI threw
+ * the message away, leaving a table of headers over blank space.
+ */
+function TabEmpty({ colSpan, message }: { colSpan: number; message?: string }) {
+  return (
+    <tr>
+      <td colSpan={colSpan} className="py-10 px-3 text-center text-muted-text text-[11px]">
+        {message ?? "Nothing recorded for this token yet."}
+      </td>
+    </tr>
+  );
 }

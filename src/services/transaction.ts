@@ -87,6 +87,10 @@ export class TransactionService {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
 
+    // Held for as long as the signing and broadcast actually take, rather than
+    // for a fixed 30 seconds and no longer.
+    const stopRenewal = redis.renewLockUntilDone(lockKey, lockToken, 30_000);
+
     try {
       const hasPending = await db.hasPendingTradesForWallet(walletId);
       if (hasPending) {
@@ -272,6 +276,7 @@ export class TransactionService {
       logger.error("Transaction failed", { error: message, action });
       return { error: message };
     } finally {
+      stopRenewal();
       await redis.releaseLock(lockKey, lockToken);
     }
   }
@@ -305,6 +310,10 @@ export class TransactionService {
     if (!lockToken) {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
+
+    // Held for as long as the signing and broadcast actually take, rather than
+    // for a fixed 30 seconds and no longer.
+    const stopRenewal = redis.renewLockUntilDone(lockKey, lockToken, 30_000);
 
     try {
       const hasPending = await db.hasPendingTradesForWallet(walletId);
@@ -484,6 +493,7 @@ export class TransactionService {
       logger.error("Transfer failed", { error: message, token, amount, toAddress });
       return { error: message };
     } finally {
+      stopRenewal();
       await redis.releaseLock(lockKey, lockToken);
     }
   }

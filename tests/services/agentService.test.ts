@@ -6,6 +6,11 @@ const mockDbInstance = {
   findWalletsByUserId: vi.fn(),
   updateWalletBalance: vi.fn(),
   findTradeSettings: vi.fn(),
+  // RiskManager reads this to compute the day's realised PnL. It is stubbed
+  // rather than omitted because an omitted method now *blocks* the trade:
+  // the daily-loss check fails closed, so "could not determine" is a
+  // rejection rather than a silent zero.
+  getDailyTradesSince: vi.fn().mockResolvedValue([]),
   prisma: {
     tradeAgent: {
       findUnique: vi.fn(),

@@ -55,6 +55,8 @@ vi.mock("../../../src/services/db.js", () => ({
 
 const mockRedisInstance = {
   acquireLock: vi.fn().mockResolvedValue(LOCK_TOKEN),
+  // Keeps the lock alive for the duration of signing; returns its stopper.
+  renewLockUntilDone: vi.fn(() => () => undefined),
   releaseLock: vi.fn().mockResolvedValue(undefined),
 };
 
@@ -116,6 +118,45 @@ describe("BaseAdapter execution path (DRY_RUN disabled)", () => {
       ],
     });
     expect(mockRedisInstance.releaseLock).toHaveBeenCalledWith("wallet:1", LOCK_TOKEN);
+  });
+
+  it("keeps the wallet lock alive while signing, and stops renewing on the way out", async () => {
+    // The lock was taken for a fixed TTL and never renewed, so work that ran
+    // long — signing plus broadcast plus mempool re-admission — could outlive
+    // it. A second trade for the same wallet could then acquire the lock and
+    // reuse the nonce, which is the collision the lock exists to prevent.
+    const stopRenewal = vi.fn();
+    mockRedisInstance.renewLockUntilDone.mockReturnValue(stopRenewal);
+    mockDbInstance.findWalletById.mockResolvedValue({ id: 1, encryptedKey: "enc" });
+    mockSmartAccountClient.sendTransaction.mockResolvedValue("0xabc123");
+
+    await adapter.executeEvmCall({
+      calls: [{ to: "0x3333333333333333333333333333333333333333", data: "0xaaaa" }],
+      walletId: 1,
+      senderAddress: FAKE_SAFE_ADDRESS,
+    });
+
+    expect(mockRedisInstance.renewLockUntilDone).toHaveBeenCalledWith(
+      "wallet:1",
+      LOCK_TOKEN,
+      expect.any(Number)
+    );
+    expect(stopRenewal).toHaveBeenCalled();
+  });
+
+  it("stops renewing the lock even when the broadcast throws", async () => {
+    const stopRenewal = vi.fn();
+    mockRedisInstance.renewLockUntilDone.mockReturnValue(stopRenewal);
+    mockDbInstance.findWalletById.mockResolvedValue({ id: 1, encryptedKey: "enc" });
+    mockSmartAccountClient.sendTransaction.mockRejectedValue(new Error("bundler rejected"));
+
+    await adapter.executeEvmCall({
+      calls: [{ to: "0x3333333333333333333333333333333333333333", data: "0xaaaa" }],
+      walletId: 1,
+      senderAddress: FAKE_SAFE_ADDRESS,
+    });
+
+    expect(stopRenewal).toHaveBeenCalled();
   });
 
   it("returns an error and still releases the lock when sendTransaction throws", async () => {

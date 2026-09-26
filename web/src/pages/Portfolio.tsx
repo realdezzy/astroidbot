@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Wallet, PieChart } from "lucide-react";
+import { Wallet, PieChart, AlertTriangle } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { formatUSD, formatNumber, classNames } from "../lib/utils";
 import { PortfolioChart } from "../components/PortfolioChart";
@@ -39,13 +39,21 @@ export function Portfolio() {
   const { isActive, toggle, timeLeft, interval } = useAutoRefresh("portfolio");
   const { chains } = useChains();
 
-  const { data: wallets } = useQuery<WalletType[]>({
+  const {
+    data: wallets,
+    isLoading: walletsLoading,
+    error: walletsError,
+  } = useQuery<WalletType[]>({
     queryKey: ["wallets"],
     queryFn: () => apiFetch("/me/wallets"),
     refetchInterval: interval,
   });
 
-  const { data: analytics } = useQuery<AnalyticsData>({
+  const {
+    data: analytics,
+    isLoading: analyticsLoading,
+    error: analyticsError,
+  } = useQuery<AnalyticsData>({
     queryKey: ["analytics", activeTab, timeframe],
     queryFn: () => {
       let url = activeTab === "all" ? "/me/analytics" : `/me/analytics?walletId=${activeTab}`;
@@ -55,6 +63,12 @@ export function Portfolio() {
     },
     refetchInterval: interval,
   });
+
+  // A failed fetch is not an empty portfolio. Neither query surfaced
+  // `isLoading` or `error`, so an API that was down rendered a confident
+  // $0.00 across every panel on this page — indistinguishable from a user who
+  // genuinely holds nothing.
+  const loadError = walletsError ?? analyticsError;
 
   const allWallets = wallets ?? [];
   const selectedWallet = activeTab === "all" ? null : allWallets.find((w) => w.id === activeTab);
@@ -137,6 +151,19 @@ export function Portfolio() {
         </div>
       </div>
 
+      {loadError && (
+        <div className="mb-6 flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 p-3">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-400" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-400">Portfolio data could not be loaded</p>
+            <p className="text-xs text-muted-text mt-0.5">
+              {loadError.message || "The API did not respond."} Balances, allocation and PnL
+              below are incomplete.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Wallet Tabs */}
       {allWallets.length > 1 && (
         <div className="flex flex-wrap items-center gap-2 mb-6">
@@ -159,13 +186,34 @@ export function Portfolio() {
           <Wallet className="w-5 h-5 text-brand-400" />
           <span className="text-sm text-muted-text uppercase tracking-wider font-semibold">Portfolio Value</span>
         </div>
-        <span className="text-4xl font-bold text-title-text">{formatUSD(totalBalance)}</span>
+        {walletsLoading ? (
+          <span className="inline-block h-10 w-52 rounded-lg bg-input-bg animate-pulse" />
+        ) : walletsError ? (
+          <span className="text-4xl font-bold text-muted-text/60" title={walletsError.message}>
+            Unavailable
+          </span>
+        ) : (
+          <span className="text-4xl font-bold text-title-text">{formatUSD(totalBalance)}</span>
+        )}
         <div className="mt-3 flex flex-wrap gap-4 text-sm text-muted-text">
-          <span>{filteredWallets.length} wallet{filteredWallets.length !== 1 ? "s" : ""}</span>
+          <span>
+            {walletsLoading || walletsError
+              ? "—"
+              : `${filteredWallets.length} wallet${filteredWallets.length !== 1 ? "s" : ""}`}
+          </span>
           <span>·</span>
-          <span>{analytics?.summary.totalTrades ?? 0} trades</span>
+          <span>
+            {analyticsLoading || analyticsError
+              ? "— trades"
+              : `${analytics?.summary.totalTrades ?? 0} trades`}
+          </span>
           <span>·</span>
-          <span>Vol: {formatUSD(analytics?.summary.totalVolume ?? 0)}</span>
+          <span>
+            Vol:{" "}
+            {analyticsLoading || analyticsError
+              ? "—"
+              : formatUSD(analytics?.summary.totalVolume ?? 0)}
+          </span>
         </div>
       </div>
 

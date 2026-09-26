@@ -33,6 +33,15 @@ export class ExitPlanner {
       return { shouldExit: false, reason: "Invalid prices" };
     }
 
+    // Both stops here are ATR multiples, and an unmeasured ATR is zero — which
+    // would put the stop exactly at the entry price and liquidate the position
+    // on the first tick below it. Said explicitly rather than relying on the
+    // `atr <= 0` guard below, because the two mean different things and only
+    // one of them is a property of the market.
+    if (!features.available) {
+      return { shouldExit: false, reason: "No technical features available" };
+    }
+
     const atr = features.atr;
     if (atr <= 0) {
       return { shouldExit: false, reason: "No volatility data" };

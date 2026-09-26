@@ -260,6 +260,8 @@ export class DatabaseService {
     feeBps?: number;
     amountInUsd?: number;
     amountOutUsd?: number;
+    /** The executing job's idempotency key, if the caller had a stable one. */
+    idempotencyKey?: string;
   }) {
     let amountInUsd = data.amountInUsd;
     let amountOutUsd = data.amountOutUsd;
@@ -327,8 +329,19 @@ export class DatabaseService {
         status: "PENDING",
         amountInUsd,
         amountOutUsd,
+        idempotencyKey: data.idempotencyKey,
       },
     });
+  }
+
+  /**
+   * The trade a previous attempt of this job already created, if there was one.
+   *
+   * Used by the trade worker to tell a first attempt from a replay. A replay
+   * whose row already carries a `txId` must not broadcast again.
+   */
+  async findTradeByIdempotencyKey(idempotencyKey: string) {
+    return this.prisma.trade.findUnique({ where: { idempotencyKey } });
   }
 
   async updateTradeStatus(

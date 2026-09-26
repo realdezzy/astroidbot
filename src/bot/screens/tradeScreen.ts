@@ -133,7 +133,17 @@ export async function tradeScreen(ctx: BotContext, stage?: string): Promise<void
     const waitMsg = await ctx.reply("🔍 Resolving quote and routes from DEX providers...");
 
     try {
-      const bestQuoteResult = await DEXRegistry.getInstance().getBestQuote(tokenIn, tokenOut, amount);
+      // Scoped to the wallet's own chain. Unscoped, `getBestQuote` polls every
+      // registered provider on every chain, so the quote a user is shown — and
+      // then confirms — could come from a pool on a network this wallet cannot
+      // trade on. `walletChain` is resolved a dozen lines above for exactly
+      // this purpose and was simply not passed.
+      const bestQuoteResult = await DEXRegistry.getInstance().getBestQuote(
+        tokenIn,
+        tokenOut,
+        amount,
+        walletChain.chainId
+      );
       if (ctx.chat) {
         try { await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id); } catch { }
       }

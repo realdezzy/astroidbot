@@ -102,6 +102,10 @@ export abstract class BaseChainAdapter implements ChainAdapter {
       return { error: `Wallet ${walletId} is busy executing another transaction` };
     }
 
+    // Held for as long as the signing and broadcast actually take. A fixed TTL
+    // expired mid-broadcast and let a second trade reuse the nonce.
+    const stopRenewal = redis.renewLockUntilDone(lockKey, lockToken, this.lockTtlMs());
+
     try {
       const wallet = await this.db.findWalletById(walletId);
       if (!wallet) {
@@ -119,6 +123,7 @@ export abstract class BaseChainAdapter implements ChainAdapter {
       });
       return { error: message };
     } finally {
+      stopRenewal();
       await redis.releaseLock(lockKey, lockToken);
     }
   }

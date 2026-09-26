@@ -107,6 +107,21 @@ export class IndexerService {
 
     const settings = indexerSettings();
 
+    // `off` builds nothing at all rather than building indexers that decline
+    // to do anything: an indexer that exists reports health, holds a lock and
+    // appears in `indexedChains()`, and a chain nothing is indexing should not
+    // look like a chain being indexed successfully.
+    if (settings.mode === "off") {
+      logger.info("[indexer] INDEXER_MODE=off — no chain will be indexed");
+      return;
+    }
+
+    if (settings.mode === "discovery") {
+      logger.info("[indexer] INDEXER_MODE=discovery — pools and liquidity only, no swap ingestion", {
+        hint: "Price, volume and candles come from MARKET_DATA_PROVIDER. Set INDEXER_MODE=full to restore swap ingestion.",
+      });
+    }
+
     for (const descriptor of ChainAdapterRegistry.getInstance().list()) {
       const build = INDEXERS.find((candidate) => candidate.canIndex(descriptor));
 

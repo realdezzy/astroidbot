@@ -143,6 +143,22 @@ export class StacksIndexer implements ChainIndexer {
     return (await response.json()) as T;
   }
 
+  /**
+   * One Stacks pass.
+   *
+   * **`INDEXER_MODE=discovery` does not skip the forward pass here, and that is
+   * not an oversight.** Stacks has no pool factory and no per-pair contract: an
+   * AMM holds every pool in one contract and names the pair in each swap
+   * `print`, so a pool is only ever announced *by a trade*. Reading the trades
+   * is how pools are discovered, how their tokens are catalogued, and — since
+   * pool depth here comes from reserves carried in the print itself — how
+   * liquidity is measured. There is no cheaper half to keep.
+   *
+   * What discovery mode does drop on this chain is the downward backfill walk,
+   * which `backfillEnabled` gates on ingestion for every family. That is the
+   * expensive half of a Stacks pass: the forward pass costs one request on a
+   * quiet hour, while the walk pages a busy contract's whole history.
+   */
   async run(): Promise<IndexRunResult> {
     const db = DatabaseService.getInstance();
 

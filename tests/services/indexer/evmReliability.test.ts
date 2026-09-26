@@ -21,7 +21,7 @@ vi.mock("../../../src/services/chains/evm/evmClient.js", () => ({ batchingPublic
 import { UniswapV3Indexer } from "../../../src/services/indexer/evm/uniswapV3Indexer.js";
 import { ETHEREUM_MAINNET } from "../../../src/services/chains/descriptors/ethereum.js";
 
-const settings: IndexerSettings = { confirmations: 0, confirmationSeconds: 0, blockChunkSize: 100, maxBlocksPerRun: 100, initialLookbackBlocks: 10, initialLookbackHours: 0, maxPools: 1, maxTxPerRun: 50, maxAddressesPerFilter: 100, maxSplitDepth: 12, retryBackoffMs: 0, backfillWindowHours: 0, maxBackfillBlocksPerRun: 100, maxBackfillSourcesPerRun: 1, backfillFullHistory: false };
+const settings: IndexerSettings = { mode: "full", confirmations: 0, confirmationSeconds: 0, blockChunkSize: 100, maxBlocksPerRun: 100, initialLookbackBlocks: 10, initialLookbackHours: 0, maxPools: 1, maxTxPerRun: 50, maxAddressesPerFilter: 100, maxSplitDepth: 12, retryBackoffMs: 0, backfillWindowHours: 0, maxBackfillBlocksPerRun: 100, maxBackfillSourcesPerRun: 1, backfillFullHistory: false };
 type Seam = {
   getLogsAdaptive(fetch: (from: bigint, to: bigint) => Promise<unknown[]>, from: bigint, to: bigint): Promise<unknown[] | null>;
   readSwapLogs(addresses: string[], from: bigint, to: bigint): Promise<unknown[]>;

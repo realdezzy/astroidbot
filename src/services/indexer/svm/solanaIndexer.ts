@@ -12,7 +12,7 @@ import {
   type SolanaTransactionMeta,
 } from "./balanceDeltas.js";
 import type { BackfillRun, ChainIndexer, IndexRunResult } from "../types.js";
-import { backfillCutoffMs, backfillEnabled, type IndexerSettings } from "../settings.js";
+import { backfillCutoffMs, backfillEnabled, ingestionEnabled, type IndexerSettings } from "../settings.js";
 import { resolveNativeUsd } from "../nativePricing.js";
 import type { ChainDescriptor, ChainId } from "../../../types/chain.js";
 import { requireSvmConfig } from "../../../types/chain.js";
@@ -264,6 +264,27 @@ export class SolanaIndexer implements ChainIndexer {
     if (pools.length === 0) {
       await this.saveCursor(BigInt(slot));
       return this.result(poolsDiscovered, 0, 0, cursor?.lastBlock ?? BigInt(slot), BigInt(slot));
+    }
+
+    // Discovery mode. Solana's pools come from the router's `routePlan` rather
+    // than from the swaps themselves, so discovery genuinely stands alone here
+    // — unlike Stacks, where a pool is only ever announced by a trade.
+    //
+    // Liquidity still has to be measured, because nothing else writes it and
+    // it is what decides whether a token's price is trusted at all. The pool
+    // cursor is deliberately left where it is: it is a per-pool *signature*,
+    // and advancing it without reading those signatures would tell a later
+    // `INDEXER_MODE=full` that they had been ingested.
+    if (!ingestionEnabled(this.settings)) {
+      const usd = await this.usdPrices(pools);
+      await this.refreshLiquidity(pools, usd, new Map()).catch((error) => {
+        logger.warn("[indexer] solana discovery liquidity refresh failed", {
+          chainId: this.chainId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return { ...this.result(poolsDiscovered, 0, 0, cursor?.lastBlock ?? BigInt(slot), BigInt(slot)),
+        targetBlock: BigInt(slot), sourcesProcessed: pools.length };
     }
 
     const { swapsIngested, bucketsWritten } = await this.ingest(pools, BigInt(slot));

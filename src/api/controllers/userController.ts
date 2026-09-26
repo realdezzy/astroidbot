@@ -18,7 +18,6 @@ import { resolveChainId } from "../../services/chains/executeSwap.js";
 import { executeSwapPayload } from "../../services/chains/executeSwap.js";
 import { logger } from "../../utils/logger.js";
 import { encrypt } from "../../utils/crypto.js";
-import { QueueManager } from "../../services/queue.js";
 import {
   PortfolioAnalyticsService,
   type Timeframe,
@@ -27,6 +26,7 @@ import { sponsorshipAvailability } from "../../services/chains/gasSponsorship.js
 import { resolveTradeSettings, DEFAULT_TRADE_SETTINGS } from "../../services/tradeSettings.js";
 import { SocialVerificationService } from "../../services/social/verification.js";
 import { SocialRegistry } from "../../services/social/socialRegistry.js";
+import { SocialCommandProcessor } from "../../services/social/commandProcessor.js";
 import { ConfigManager } from "../../config.js";
 import {
   NotFoundError,
@@ -1156,60 +1156,24 @@ export class UserController {
       const { token } = req.body as { token: string };
       if (!token) return next(new ValidationError("Token is required"));
 
-      const db = DatabaseService.getInstance();
-      const command = await db.prisma.socialCommand.findUnique({
-        where: { confirmToken: token },
-        include: { socialAccount: true },
-      });
+      // Delegated rather than reimplemented. This handler used to build the
+      // trade itself, and every difference from the processor's version was a
+      // bug: a default wallet picked with no chain filter, a hardcoded "USDC"
+      // as the stable on every chain, and no denomination conversion, so
+      // "sell $50 of TOKEN" sold 50 tokens. One confirmation path, one set of
+      // rules, and the caps re-checked at redemption rather than at issue.
+      const decision = await SocialCommandProcessor.getInstance().confirmAndExecute(
+        token,
+        req.userId!
+      );
 
-      if (!command || command.status !== "AWAITING_CONFIRMATION") {
-        return next(new NotFoundError("Pending social command not found or already processed"));
+      if (!decision.ok) {
+        if (decision.reason === "not_found") return next(new NotFoundError("Pending social command"));
+        if (decision.reason === "not_authorized") return next(new ForbiddenError(decision.message));
+        return next(new ValidationError(decision.message));
       }
 
-      if (command.confirmExpiresAt && command.confirmExpiresAt < new Date()) {
-        return next(new ValidationError("Confirmation link has expired"));
-      }
-
-      if (!command.socialAccount || command.socialAccount.userId !== req.userId!) {
-        return next(new ForbiddenError("You are not authorized to confirm this trade"));
-      }
-
-      if (!command.parsedIntent) {
-        return next(new ValidationError("Command has no valid parsed intent"));
-      }
-
-      const intent = JSON.parse(command.parsedIntent) as {
-        action: "buy" | "sell";
-        amount: number;
-        denomination: "usd" | "token";
-        token: string;
-        chainHint?: string;
-      };
-
-      const wallets = await db.findWalletsByUserId(req.userId!);
-      if (wallets.length === 0) {
-        return next(new ValidationError("No wallet found to execute trade"));
-      }
-
-      const defaultWallet = await db.findDefaultWalletByUserId(req.userId!) ?? wallets[0]!;
-
-      await QueueManager.getInstance().enqueueTrade({
-        walletId: defaultWallet.id,
-        userId: req.userId!,
-        senderAddress: defaultWallet.address,
-        tokenIn: intent.action === "buy" ? "USDC" : intent.token,
-        tokenOut: intent.action === "buy" ? intent.token : "USDC",
-        amountIn: intent.amount,
-        direction: intent.action === "buy" ? "BUY" : "SELL",
-        reason: `Social command confirmed via web (${command.platform})`,
-      });
-
-      await db.prisma.socialCommand.update({
-        where: { id: command.id },
-        data: { status: "EXECUTED" },
-      });
-
-      res.json({ ok: true, message: "Social trade confirmed and enqueued successfully" });
+      res.json({ ok: true, message: decision.message });
     } catch (error) {
       logger.error("Failed to confirm social command", { error });
       next(new InternalError());

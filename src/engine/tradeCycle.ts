@@ -4,7 +4,7 @@ import { AIOrchestrator } from "../services/ai.js";
 import { PortfolioManager } from "../services/portfolio.js";
 import { RiskManager } from "../services/riskManager.js";
 import { MarketMakerService } from "../services/marketMaker.js";
-import { QueueManager } from "../services/queue.js";
+import { QueueManager, timeBucket } from "../services/queue.js";
 import type { SwappableToken } from "../types.js";
 
 
@@ -118,7 +118,10 @@ export async function executeTradeCycle(
       reason: action.reason,
     });
 
-    // Enqueue trade for async execution via BullMQ
+    // Enqueue trade for async execution via BullMQ. Keyed so that a replayed
+    // cycle within the same tick re-enqueues the same job rather than a second
+    // one — the actions a rebalance computes are a function of the portfolio,
+    // so a retry recomputes them identically.
     await QueueManager.getInstance().enqueueTrade({
       walletId: wallet.id,
       userId: wallet.userId,
@@ -128,7 +131,7 @@ export async function executeTradeCycle(
       amountIn: action.amountIn,
       direction: action.direction,
       reason: action.reason,
-    });
+    }, `cycle:${wallet.id}:${action.direction}:${action.tokenIn}:${action.tokenOut}:${action.amountIn}:${timeBucket()}`);
     actionsExecuted++;
   }
 

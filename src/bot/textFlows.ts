@@ -78,7 +78,32 @@ async function resolveTypedToken(
   return { token: chosen.source === "provider" ? chosen.symbol : chosen.contractId };
 }
 
+/**
+ * Text and flow handling, wrapped so a throw reaches the user.
+ *
+ * The body below is ~240 lines with no error handling of its own, and
+ * `bot.catch` only logs — so a database hiccup or a failed AI call mid-flow
+ * left the user staring at silence with `waitingFor` still set, in a flow they
+ * could neither complete nor escape. Clearing the flow on failure is the
+ * important half: an error the user can back out of is recoverable, and a
+ * wedged session is not.
+ */
 export async function handleText(ctx: BotContext, suppliedText?: string): Promise<unknown> {
+  try {
+    return await handleTextInner(ctx, suppliedText);
+  } catch (error) {
+    logger.error("[bot] text handler failed", {
+      telegramId: ctx.from?.id,
+      waitingFor: ctx.session.waitingFor,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    ctx.session.waitingFor = null;
+    return ctx.reply("❌ Something went wrong handling that. Try again, or /cancel to start over.")
+      .catch(() => undefined);
+  }
+}
+
+async function handleTextInner(ctx: BotContext, suppliedText?: string): Promise<unknown> {
     const tid = BigInt(ctx.from?.id ?? 0);
     if (!tid) return;
     const wf = ctx.session.waitingFor;

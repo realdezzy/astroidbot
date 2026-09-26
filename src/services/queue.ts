@@ -41,6 +41,21 @@ const DEFAULT_OPTS: JobsOptions = {
   removeOnFail: { age: 86400 },
 };
 
+/**
+ * A coarse time bucket, for callers that have no natural idempotency key.
+ *
+ * A confirm button double-tapped, or a handler re-entered, happens within
+ * seconds; a user legitimately repeating the same trade at the same size
+ * almost never does within the same window. Bucketing the clock gives those
+ * callers a key that collapses the first case without suppressing the second.
+ *
+ * Callers with a real identifier — a pending action, a social command — should
+ * use that instead. This is the fallback, not the pattern.
+ */
+export function timeBucket(windowMs = 60_000): number {
+  return Math.floor(Date.now() / windowMs);
+}
+
 export class QueueManager {
   private static instance: QueueManager;
   private queues: Map<string, Queue> = new Map();

@@ -1,7 +1,19 @@
 import { CandleService, type CandleData } from "./candleService.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
+import { isQuantEnabled } from "./quantMode.js";
 
 export interface Features {
+  /**
+   * Whether these readings were measured at all.
+   *
+   * False means the technical fields below are placeholders, not measurements
+   * — either the quant layer is switched off, or there were fewer than thirty
+   * candles to compute from. Every consumer must check it: an RSI of 50 and a
+   * MACD of 0 are perfectly ordinary readings, so the absence is invisible in
+   * the values themselves, and treating it as real produces a confident
+   * signal derived from nothing.
+   */
+  available: boolean;
   // Multi-timeframe returns (fraction, not %)
   return1h: number;
   return4h: number;
@@ -36,6 +48,11 @@ export class FeatureEngine {
   }
 
   async compute(token: string): Promise<Features> {
+    // No candle read, no price read: with the layer off, every field below
+    // would be a placeholder anyway, and the read costs a database round trip
+    // per token per strategy per tick.
+    if (!isQuantEnabled()) return this.emptyFeatures(0);
+
     const registry = DEXRegistry.getInstance();
     const [candles, currentPrice] = await Promise.all([
       CandleService.getInstance().getCandles(token.toUpperCase(), "5m", 200),
@@ -49,6 +66,7 @@ export class FeatureEngine {
     const closePrices = candles.map((c) => c.close);
 
     return {
+      available: true,
       currentPrice,
       return1h: this.periodReturn(closePrices, 12), // 12 * 5m = 1h
       return4h: this.periodReturn(closePrices, 48), // 48 * 5m = 4h
@@ -199,6 +217,11 @@ export class FeatureEngine {
 
   private emptyFeatures(currentPrice: number): Features {
     return {
+      // The one field that distinguishes this from a measurement. The rest are
+      // kept at their neutral values so a consumer that forgets to check does
+      // something inert rather than something erratic — but forgetting to
+      // check is still a bug, not a supported mode.
+      available: false,
       currentPrice,
       return1h: 0,
       return4h: 0,

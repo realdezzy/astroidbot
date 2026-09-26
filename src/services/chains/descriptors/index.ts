@@ -5,7 +5,7 @@ import { CELO_MAINNET } from "./celo.js";
 import { SOLANA_MAINNET, SOLANA_DEVNET } from "./solana.js";
 import { ETHEREUM_MAINNET } from "./ethereum.js";
 import { ROBINHOOD_MAINNET } from "./robinhood.js";
-import { ARC_TESTNET } from "./arc.js";
+import { ARC_MAINNET, ARC_TESTNET } from "./arc.js";
 
 export { defineEvmChain, parseCustomEvmChains } from "./defineEvmChain.js";
 export type { EvmChainSpec } from "./defineEvmChain.js";
@@ -27,6 +27,7 @@ export const BUILT_IN_DESCRIPTORS: ChainDescriptor[] = [
   SOLANA_MAINNET,
   SOLANA_DEVNET,
   ROBINHOOD_MAINNET,
+  ARC_MAINNET,
   ARC_TESTNET,
 ];
 
@@ -57,6 +58,7 @@ export {
   SOLANA_MAINNET,
   SOLANA_DEVNET,
   ROBINHOOD_MAINNET,
+  ARC_MAINNET,
   ARC_TESTNET,
 };
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { loadTestConfig } from "../../helpers/config.js";
 import { RegimeDetectionService, STRATEGY_REGIME_GATES } from "../../../src/services/quant/regimeDetection.js";
 
 const mockCompute = vi.fn();
@@ -14,6 +15,7 @@ function makeFeatures(overrides: Partial<{
   historicalVolatility: number; bollingerWidth: number; currentPrice: number;
 }> = {}) {
   return {
+    available: true,
     currentPrice: 2.0,
     return1h: 0, return4h: 0, return24h: 0, return7d: 0,
     rsi14: 50, macdHistogram: 0, vwapDistance: 0,
@@ -28,6 +30,7 @@ describe("RegimeDetectionService", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    loadTestConfig({ QUANT_ENABLED: "true" });
     // Reset the singleton's cache between tests.
     (RegimeDetectionService as unknown as { instance?: unknown }).instance = undefined;
     service = RegimeDetectionService.getInstance();

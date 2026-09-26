@@ -85,13 +85,16 @@ describe("RiskManager unit tests", () => {
   });
 
   it("should block validation when daily loss limit has been breached", async () => {
-    // Mock daily trades representing a total loss larger than dailyLossLimit settings
+    // The portfolio below is worth $2,500, so a $500 loss is -20% — past the
+    // 10% limit set here. This used to assert on a $100 loss, which is only
+    // -4% and breached nothing: it passed because the limit was also compared
+    // against raw dollars, so any loss over $10 tripped a 10 *percent* limit.
     mockGetDailyTradesSince.mockResolvedValue([
       {
         id: 1,
         status: "CONFIRMED",
         direction: "BUY",
-        amountIn: 100, // buying STX, counted as -100 PnL
+        amountIn: 500, // buying STX, counted as -500 PnL
         amountOut: 0,
       },
     ]);
@@ -139,4 +142,50 @@ describe("RiskManager unit tests", () => {
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]!.reason).toContain("Insufficient STX balance for sell");
   });
+
+  it("does not treat a small dollar loss as a breach of a percentage limit", async () => {
+    // $100 of a $2,500 portfolio is -4%, comfortably inside a 10% limit. The
+    // old comparison tested `dailyPnlUsd < -dailyLossLimit` as well, so with
+    // the product default of 5.0 any user down $5.01 was frozen out of trading
+    // no matter how large their portfolio was.
+    mockGetDailyTradesSince.mockResolvedValue([
+      { id: 1, status: "CONFIRMED", direction: "BUY", amountIn: 100, amountOut: 0 },
+    ]);
+
+    const action: RebalanceAction = {
+      tokenIn: "STX",
+      tokenOut: "sUSDT",
+      amountIn: 10,
+      direction: "BUY",
+      reason: "test",
+    };
+
+    const result = await manager.evaluateTrade(1, action, balances, {
+      slippageBps: 100,
+      maxPositionPct: 25.0,
+      dailyLossLimit: 10.0,
+    });
+
+    expect(result.approved).toBe(true);
+  });
+
+  it("fails closed when the daily PnL cannot be determined", async () => {
+    // Returning 0 here read as "flat" rather than "unknown", so a database
+    // blip switched the daily loss limit off for as long as it lasted.
+    mockGetDailyTradesSince.mockRejectedValue(new Error("database unavailable"));
+
+    const action: RebalanceAction = {
+      tokenIn: "STX",
+      tokenOut: "sUSDT",
+      amountIn: 10,
+      direction: "BUY",
+      reason: "test",
+    };
+
+    const result = await manager.evaluateTrade(1, action, balances, settings);
+
+    expect(result.approved).toBe(false);
+    expect(result.reason).toContain("Unable to verify");
+  });
+
 });

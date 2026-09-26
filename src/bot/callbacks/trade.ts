@@ -1,7 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import { DatabaseService } from "../../services/db.js";
 import { LimitOrderService } from "../../services/limitOrder.js";
-import { walletDescriptor } from "../../services/chains/walletChain.js";
+import { walletDescriptor, walletChainId } from "../../services/chains/walletChain.js";
 import { mainMenu } from "../screens/mainMenu.js";
 import { tradeScreen } from "../screens/tradeScreen.js";
 import { tradesScreen } from "../screens/tradesScreen.js";
@@ -14,6 +14,25 @@ import type { CallbackRoutes } from "./registry.js";
 import { numericArg } from "./registry.js";
 import { QUOTE_TTL_MS, type BotContext } from "../../types/bot.js";
 import { PendingActionService } from "../../services/actions/pendingActionService.js";
+
+/**
+ * The wallet to spend from on the chain the user is currently looking at.
+ *
+ * Both legacy confirm paths used `wallets.find(isDefault) ?? wallets[0]` with
+ * no chain filter at all, so a user whose default wallet is on Stacks could
+ * confirm a Base trade and have it submitted from the Stacks wallet — where
+ * the token pair cannot route. `ordersScreen` already scoped its wallet this
+ * way and *displayed* that wallet's name, so the name on the confirm screen
+ * and the wallet actually charged could differ.
+ */
+async function walletOnActiveChain<
+  W extends { isDefault: boolean; chain: string | null; chainFamily: string },
+>(ctx: BotContext, wallets: W[]): Promise<{ wallet: W; chainName: string } | null> {
+  const chain = await activeChain(ctx);
+  const onChain = wallets.filter((w) => walletChainId(w) === chain.chainId);
+  const wallet = onChain.find((w) => w.isDefault) ?? onChain[0];
+  return wallet ? { wallet, chainName: chain.displayName } : null;
+}
 
 /** Trade wizard, quick-trade flow, and limit orders. */
 
@@ -117,7 +136,12 @@ export const tradeRoutes: CallbackRoutes = {
       const db = DatabaseService.getInstance();
       const wallets = await db.findWalletsByUserId(user.id);
       if (wallets.length === 0) return ctx.reply("No wallet found.");
-      const wallet = wallets.find((w) => w.isDefault) ?? wallets[0]!;
+      const picked = await walletOnActiveChain(ctx, wallets);
+      if (!picked) {
+        await ctx.answerCallbackQuery({ text: "No wallet on this network.", show_alert: true });
+        return mainMenu(ctx);
+      }
+      const wallet = picked.wallet;
 
       const { tokenIn, tokenOut, direction } = resolvePair(
         (ctx.session.tradePair as string) ?? "",
@@ -130,7 +154,11 @@ export const tradeRoutes: CallbackRoutes = {
         return mainMenu(ctx);
       }
 
-      const { QueueManager } = await import("../../services/queue.js");
+      const { QueueManager, timeBucket } = await import("../../services/queue.js");
+      // This flow has no pending-action row to key on, so the key is the trade
+      // parameters plus a coarse clock bucket: a double-tapped confirm button
+      // collapses to one job instead of two swaps.
+      const key = `tg:${user.id}:${wallet.id}:${direction}:${tokenIn}:${tokenOut}:${amount}:${timeBucket()}`;
       await QueueManager.getInstance().enqueueTrade({
         walletId: wallet.id,
         userId: user.id,
@@ -140,7 +168,7 @@ export const tradeRoutes: CallbackRoutes = {
         amountIn: amount,
         direction,
         reason: `Telegram trade: ${direction} ${amount} ${tokenIn} → ${tokenOut}`,
-      });
+      }, key);
 
       delete ctx.session.tradePair;
       delete ctx.session.tradeDir;
@@ -185,7 +213,12 @@ export const tradeRoutes: CallbackRoutes = {
       const db = DatabaseService.getInstance();
       const wallets = await db.findWalletsByUserId(user.id);
       if (wallets.length === 0) return ctx.reply("No wallet found.");
-      const wallet = wallets.find((w) => w.isDefault) ?? wallets[0]!;
+      const picked = await walletOnActiveChain(ctx, wallets);
+      if (!picked) {
+        await ctx.answerCallbackQuery({ text: "No wallet on this network.", show_alert: true });
+        return mainMenu(ctx);
+      }
+      const wallet = picked.wallet;
 
       const { tokenIn, tokenOut, direction } = resolvePair(
         (ctx.session.limitPair as string) ?? "",

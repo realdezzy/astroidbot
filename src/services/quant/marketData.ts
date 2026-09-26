@@ -1,6 +1,7 @@
 import type { TokenMarketSnapshot, MarketContext } from "../../types/market.js";
 import { FeatureEngine } from "./featureEngine.js";
 import { RegimeDetectionService } from "./regimeDetection.js";
+import { isQuantEnabled } from "./quantMode.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
 import { logger } from "../../utils/logger.js";
 
@@ -27,6 +28,22 @@ export class MarketDataService {
   async getContext(tokens: string[]): Promise<MarketContext> {
     if (this.contextCache && this.contextCache.expiresAt > Date.now()) {
       return this.contextCache.context;
+    }
+
+    // With the quant layer off, a snapshot would be a full TokenMarketSnapshot
+    // of placeholders — a $0 price, zero volatility, a zero ATR — handed to
+    // strategies that have no way to tell it from a measurement. An absent
+    // snapshot they do handle: every consumer reads the map with `.get()` and
+    // already copes with a token that isn't in it.
+    if (!isQuantEnabled()) {
+      const context: MarketContext = {
+        timestamp: Date.now(),
+        snapshots: new Map<string, TokenMarketSnapshot>(),
+        macroRegime: "UNKNOWN",
+        correlationMatrix: new Map<string, Map<string, number>>(),
+      };
+      this.contextCache = { context, expiresAt: Date.now() + this.cacheTtlMs };
+      return context;
     }
 
     const snapshots = new Map<string, TokenMarketSnapshot>();

@@ -10,6 +10,21 @@ import type { ChainDescriptor } from "../../types/chain.js";
  */
 export interface IndexerSettings {
   /**
+   * How much of the indexer runs.
+   *
+   * `full` is every pass: discovery, swap ingestion, candles, rollups and the
+   * downward backfill. `discovery` is pool discovery, token identity and
+   * liquidity only — the half that sees a new pool before an aggregator lists
+   * it, without the half that recomputes prices an aggregator already
+   * publishes. `off` indexes nothing.
+   *
+   * The split exists because those two halves have completely different
+   * economics: discovery is one `eth_getLogs` per factory per range, while
+   * ingestion is every `Swap` log on the chain and the overwhelming majority
+   * of the RPC bill.
+   */
+  mode: "full" | "discovery" | "off";
+  /**
    * Blocks to stay behind the head, so the cursor never enters a reorg.
    * A floor — `settingsForChain` raises it to cover `confirmationSeconds` on
    * chains that state their block time.
@@ -57,6 +72,16 @@ export interface IndexerSettings {
 }
 
 /**
+ * Whether this pass reads swaps at all.
+ *
+ * The single predicate every indexer branches on, so "discovery mode" cannot
+ * come to mean slightly different things in three implementations.
+ */
+export function ingestionEnabled(settings: IndexerSettings): boolean {
+  return settings.mode === "full";
+}
+
+/**
  * Whether the downward walk should run at all.
  *
  * Full history overrides the window rather than adding to it, so
@@ -64,6 +89,11 @@ export interface IndexerSettings {
  * rather than "nothing" — the explicit switch beats the tuning knob.
  */
 export function backfillEnabled(settings: IndexerSettings): boolean {
+  // A backfill is a walk through *history's swaps*, so it is ingestion by
+  // another name and stops with it. Without this, discovery mode would skip
+  // the forward swap pass and then immediately spend the same budget walking
+  // backwards through the swaps it just declined to read.
+  if (!ingestionEnabled(settings)) return false;
   return settings.backfillFullHistory || settings.backfillWindowHours > 0;
 }
 
@@ -121,6 +151,7 @@ export function settingsForChain(
 export function indexerSettings(): IndexerSettings {
   const config = ConfigManager.getInstance().config;
   return {
+    mode: config.INDEXER_MODE,
     confirmations: config.INDEXER_CONFIRMATIONS,
     confirmationSeconds: config.INDEXER_CONFIRMATION_SECONDS,
     blockChunkSize: config.INDEXER_BLOCK_CHUNK_SIZE,

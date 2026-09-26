@@ -122,7 +122,7 @@ export async function tokenScreen(ctx: BotContext, query: string): Promise<void>
     keyboard
       .text(
         `${token.symbol} · ${descriptor?.displayName ?? token.chainId} · ${usd(token.liquidityUsd)}`,
-        `token_show:${index}`
+        `action:token_show:${index}`
       )
       .row();
   }
@@ -136,7 +136,7 @@ export async function tokenScreen(ctx: BotContext, query: string): Promise<void>
 
 async function showToken(ctx: BotContext, token: ResolvedToken, index: number): Promise<void> {
   const keyboard = new InlineKeyboard()
-    .text("💱 Trade this", `token_trade:${index}`)
+    .text("💱 Trade this", `action:token_trade:${index}`)
     .row()
     .text("🏠 Home", "home");
 

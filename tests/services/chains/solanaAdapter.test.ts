@@ -10,6 +10,8 @@ const mockDb = {
 };
 const mockRedis = {
   acquireLock: vi.fn(),
+  // Keeps the lock alive for the duration of signing; returns its stopper.
+  renewLockUntilDone: vi.fn(() => () => undefined),
   releaseLock: vi.fn(),
 };
 const mockKms = { decryptPrivateKey: vi.fn() };

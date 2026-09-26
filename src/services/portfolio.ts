@@ -247,7 +247,18 @@ export class PortfolioManager {
       return family === "evm";
     });
 
+    // A chain whose native asset is also an ERC-20 would otherwise report the
+    // same holding twice: once from eth_getBalance above, once from the
+    // balanceOf below. Arc is that chain — its gas token is USDC and
+    // 0x3600…0000 is the same balance at 6 decimals rather than 18, not a
+    // second position. Doubling it would not just look wrong: portfolio value
+    // is what RiskManager sizes positions against, so every cap on the chain
+    // would be twice what the user set. The native row wins because it is the
+    // authoritative one for gas.
+    const nativeAlias = descriptor.evm?.nativeErc20?.address.toLowerCase();
+
     const wanted = chainTokens.filter((token) => {
+      if (nativeAlias && token.contractId.toLowerCase() === nativeAlias) return false;
       if (allowedTokens.length > 0 && !allowedTokens.includes(token.contractId)) return false;
       if (blockedTokens.length > 0 && blockedTokens.includes(token.contractId)) return false;
       return !userBlockedSet.has(token.contractId);

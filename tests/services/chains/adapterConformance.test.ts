@@ -190,16 +190,23 @@ describe("ChainAdapter conformance", { timeout: 60_000 }, () => {
       });
 
       it("prices against something other than itself, if it trades at all", () => {
-        // limitOrder.ts quotes nativeSymbol against stableSymbol. Where the
-        // two are equal every price reads 1 and no price trigger can ever
-        // fire — the shape of the bug that made stableSymbol
-        // descriptor-driven in the first place.
+        // limitOrder.ts quotes a token against stableSymbol. Where a chain's
+        // native and stable symbols are equal *by accident* every native price
+        // reads 1 and no price trigger on it can ever fire — the shape of the
+        // bug that made stableSymbol descriptor-driven in the first place.
         //
-        // Scoped to tradable chains because equality is legitimate elsewhere:
-        // Arc's gas token *is* USDC, so its native and stable symbols are
-        // genuinely the same asset. It carries no DEX, so nothing ever asks
-        // it for a price. A tradable chain in that position would be a bug.
+        // Untradable chains are exempt because nothing ever asks them for a
+        // price. So is a chain that declares `nativeErc20`, which is a
+        // narrower claim than it looks: it says the gas token is an ERC-20
+        // the chain quotes in, so native == stable is the design rather than a
+        // copied field. Arc is that chain — gas is USDC. The identity is then
+        // short-circuited rather than routed, in getTokenPrice and in
+        // limitOrder's priceInUsd alike, and `tests/services/dex/
+        // arcNativeErc20.test.ts` pins that it resolves to a dollar.
+        //
+        // A tradable chain with neither exemption is still a bug.
         if (!descriptor.tradable) return;
+        if (descriptor.evm?.nativeErc20) return;
         expect(descriptor.stableSymbol).not.toBe(descriptor.nativeSymbol);
       });
     }

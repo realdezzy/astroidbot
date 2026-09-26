@@ -168,6 +168,19 @@ model Trade {
   relayerFeeToken  String?
   amountInUsd      Float?
   amountOutUsd     Float?
+  // The enqueueing caller's idempotency key, which is also the BullMQ job id.
+  //
+  // BullMQ dedupes on job id, so a deterministic key stops the same intent
+  // being queued twice. That alone is not enough: a job that dies *after*
+  // broadcasting still has attempts left, and replaying it wrote a second
+  // Trade row and sent a second swap. The unique constraint here is what makes
+  // the worker able to recognise its own prior attempt and refuse to broadcast
+  // again.
+  //
+  // Nullable because trades predating the column have no key, and because a
+  // caller that cannot construct a stable one is better off without a
+  // fabricated key than with one that collides.
+  idempotencyKey   String?   @unique
   createdAt        DateTime  @default(now())
   confirmedAt      DateTime?
 

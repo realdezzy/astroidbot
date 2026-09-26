@@ -32,6 +32,8 @@ vi.mock("../../src/services/db.js", () => {
 vi.mock("../../src/services/redis.js", () => {
   const mockRedisInstance = {
     acquireLock: vi.fn().mockResolvedValue(true),
+    // Keeps the lock alive for the duration of signing; returns its stopper.
+    renewLockUntilDone: vi.fn(() => () => undefined),
     releaseLock: vi.fn().mockResolvedValue(true),
   };
   return {

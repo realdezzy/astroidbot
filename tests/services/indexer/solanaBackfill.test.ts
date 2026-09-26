@@ -87,6 +87,9 @@ function loadConfig(extra: Record<string, string> = {}) {
   if (process.env.VELUMX_RELAYER_URL === "") delete process.env.VELUMX_RELAYER_URL;
   delete process.env.INDEXER_BACKFILL_FULL_HISTORY;
   delete process.env.INDEXER_BACKFILL_WINDOW_HOURS;
+  // Swap ingestion and the walk through history it implies run in full mode
+  // only; the deployment default is `discovery`, which reads no swaps at all.
+  process.env.INDEXER_MODE = "full";
   Object.assign(process.env, extra);
   ConfigManager.reset();
   ConfigManager.load();

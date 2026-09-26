@@ -1,12 +1,15 @@
 import type { ChainId } from "../../types/chain.js";
 
-/** Bucket width for the stored candles. Every UI window derives from these. */
-export const BUCKET_MS = 5 * 60 * 1000;
-
-/** Floors a timestamp to its 5-minute bucket boundary. */
-export function bucketStartOf(timestamp: number): Date {
-  return new Date(Math.floor(timestamp / BUCKET_MS) * BUCKET_MS);
-}
+/**
+ * Bucket width and its flooring helper, re-exported from where they now live.
+ *
+ * They moved to `marketData/candles/interval.ts` because the chart service had
+ * to import them from here, and "the chart reads a constant out of the
+ * indexer" stopped describing anything true once candles could come from an
+ * external API instead. Re-exported rather than relocated outright so every
+ * ingestion file that imports them from this module keeps working.
+ */
+export { BUCKET_MS, bucketStartOf } from "../marketData/candles/interval.js";
 
 /** A pool we ingest swaps from, as the indexer needs it in memory. */
 export interface TrackedPool {

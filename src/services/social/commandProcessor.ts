@@ -200,6 +200,86 @@ export class SocialCommandProcessor {
     return this.execute(commandId, account.userId, wallet, intent, resolution, usdValue);
   }
 
+  /**
+   * Execute a command a user has confirmed out of band, via the web link.
+   *
+   * This exists so the confirm-link surface and the auto-execute surface run
+   * the same code. They did not: the controller built its own trade, picked
+   * `findDefaultWalletByUserId()` with no chain filter, hardcoded `"USDC"` as
+   * the stable on every chain, and passed `intent.amount` through without
+   * converting the denomination. A confirmed command could therefore route to
+   * a wallet on the wrong chain, quote a stable that chain has never heard of,
+   * and trade the wrong quantity — none of which the auto-execute path did.
+   *
+   * The caps are re-checked rather than trusted from issue time: a
+   * confirmation link lives for minutes, and the daily total it was measured
+   * against may have been spent since.
+   */
+  async confirmAndExecute(confirmToken: string, userId: number): Promise<SocialDecision> {
+    const db = DatabaseService.getInstance();
+
+    const command = await db.prisma.socialCommand.findUnique({
+      where: { confirmToken },
+      include: { socialAccount: true },
+    });
+
+    if (!command || command.status !== "AWAITING_CONFIRMATION") {
+      return this.reject("not_found", "Pending social command not found or already processed.");
+    }
+    if (command.confirmExpiresAt && command.confirmExpiresAt < new Date()) {
+      return this.reject("expired", "That confirmation link has expired.");
+    }
+
+    const account = command.socialAccount;
+    if (!account || account.userId !== userId) {
+      return this.reject("not_authorized", "You are not authorized to confirm this trade.");
+    }
+    if (!account.enabled) {
+      return this.reject("disabled", "Social trading is turned off for this account.");
+    }
+    if (!command.parsedIntent) {
+      return this.reject("unparseable", "That command has no valid parsed intent.");
+    }
+
+    const intent = JSON.parse(command.parsedIntent) as SocialIntent;
+    if (!validateIntent(intent)) {
+      return this.reject("unparseable", "That command's intent is no longer valid.");
+    }
+
+    const resolution = await this.resolveToken(intent);
+    if ("error" in resolution) {
+      return this.reject(resolution.reason, resolution.error);
+    }
+
+    // The wallet on the token's chain, not whichever wallet happens to be
+    // flagged default. A trade submitted from the wrong chain cannot route.
+    const wallets = await db.prisma.wallet.findMany({ where: { userId } });
+    const wallet = wallets.find((w) => walletChainId(w) === resolution.chainId);
+    if (!wallet) {
+      return this.reject(
+        "no_wallet",
+        `You have no wallet on ${resolution.chainId}. Create one to trade this token.`
+      );
+    }
+
+    const usdValue = await this.estimateUsd(intent, resolution.chainId);
+    if (usdValue > account.perTradeLimitUsd) {
+      return this.reject(
+        "over_per_trade_limit",
+        `That's ~$${usdValue.toFixed(2)}, over your $${account.perTradeLimitUsd} per-trade limit.`
+      );
+    }
+    const spentToday = await this.spentLast24h(account.id);
+    if (spentToday + usdValue > account.dailyLimitUsd) {
+      return this.reject(
+        "over_daily_limit",
+        `That would exceed your $${account.dailyLimitUsd} daily social limit.`
+      );
+    }
+
+    return this.execute(command.id, userId, wallet, intent, resolution, usdValue);
+  }
+
   private async resolveToken(
     intent: SocialIntent
   ): Promise<
@@ -321,9 +401,36 @@ export class SocialCommandProcessor {
       const descriptor = ChainAdapterRegistry.getInstance().get(resolution.chainId).descriptor;
       const stable = descriptor.stableSymbol;
 
-      const tokenIn = intent.action === "buy" ? stable : resolution.symbol;
-      const tokenOut = intent.action === "buy" ? resolution.symbol : stable;
-      const amountIn = intent.denomination === "usd" ? intent.amount : intent.amount;
+      const isBuy = intent.action === "buy";
+      const tokenIn = isBuy ? stable : resolution.symbol;
+      const tokenOut = isBuy ? resolution.symbol : stable;
+
+      // `amountIn` is denominated in `tokenIn` — the stable on a buy, the token
+      // itself on a sell — while `intent.amount` is denominated in whatever
+      // unit the post happened to use. The two coincide only when those units
+      // agree, and this line used to assume they always did: it read
+      // `denomination === "usd" ? intent.amount : intent.amount`, both branches
+      // identical, so half the combinations were silently wrong.
+      //
+      // "sell $50 of TOKEN" enqueued 50 *tokens*, and "buy 100 TOKEN" spent
+      // 100 *dollars*. `usdValue` is already the trade's dollar value under
+      // either denomination, which makes the buy side a direct substitution;
+      // the sell side needs the price to go back the other way.
+      let amountIn: number;
+      if (isBuy) {
+        amountIn = usdValue;
+      } else if (intent.denomination === "token") {
+        amountIn = intent.amount;
+      } else {
+        const price = await DEXRegistry.getInstance()
+          .getTokenPrice(resolution.symbol, resolution.chainId)
+          .catch(() => null);
+        if (price === null || !(price > 0)) {
+          // Fail closed. Guessing a quantity here spends a real balance.
+          throw new Error(`No USD price for ${resolution.symbol} on ${resolution.chainId}`);
+        }
+        amountIn = intent.amount / price;
+      }
 
       // Straight onto the existing queue — the same path the web and Telegram
       // interfaces use, so RiskManager and the single dispatch point still
@@ -337,7 +444,7 @@ export class SocialCommandProcessor {
         amountIn,
         direction: intent.action === "buy" ? "BUY" : "SELL",
         reason: `Social command (${resolution.chainId})`,
-      });
+      }, `social:${commandId}`);
 
       await db.prisma.socialCommand.update({
         where: { id: commandId },

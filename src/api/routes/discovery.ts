@@ -4,7 +4,7 @@ import rateLimit from "express-rate-limit";
 import { TokenDiscoveryService } from "../../services/tokenDiscovery.js";
 import { CandleService } from "../../services/quant/candleService.js";
 import { ChainAdapterRegistry } from "../../services/chains/chainAdapterRegistry.js";
-import { DatabaseService } from "../../services/db.js";
+import { resolveTradesSource } from "../../services/marketData/trades/index.js";
 import { RedisService } from "../../services/redis.js";
 import { logger } from "../../utils/logger.js";
 import { serialiseToken } from "../controllers/tokenController.js";
@@ -25,18 +25,19 @@ const VALID_SORTS = new Set(["volume", "change", "liquidity", "symbol"]);
 const VALID_TIMEFRAMES = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
 const VALID_ASSET_CLASSES = new Set(["CRYPTO", "EQUITY"]);
 
-/**
- * How far back the per-token activity panels look.
- *
- * These render "recent trades" and "top traders", so a window is what they
- * actually mean — and without one the queries behind them scan every swap
- * retained for the token's pools, which grows with the product's success
- * rather than with the size of the answer.
- */
-const ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Rows in the recent-trades panel, and entries in the leaderboard. */
+const SWAP_FEED_LIMIT = 50;
+const TRADER_LEADERBOARD_LIMIT = 20;
 
-function recentWindow(): Date {
-  return new Date(Date.now() - ACTIVITY_WINDOW_MS);
+/**
+ * Shortens an address or hash for display, keeping the full value beside it.
+ *
+ * Presentation stays in the route rather than in the source: a `TradesSource`
+ * reports what traded, and how much of a hash fits in a column is a decision
+ * about a table.
+ */
+function shorten(value: string): string {
+  return value.length > 10 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
 }
 
 /** How long an aggregate is reused. Short enough to feel live, long enough to matter. */
@@ -160,11 +161,14 @@ router.get("/tokens/:chainId/:contractId/candles", async (req: Request, res: Res
     }
 
     const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? "100"), 10)));
-    const candles = await CandleService.getInstance().getCandles(
-      token.symbol,
+    // Addressed by contract, not by symbol. Going back through the symbol
+    // re-resolves a token that was already resolved, and on a chain listing two
+    // tokens with one ticker it can resolve to the other one.
+    const candles = await CandleService.getInstance().getCandlesForContract(
+      chainId,
+      contractId,
       timeframe,
-      limit,
-      chainId
+      limit
     );
 
     res.json({ symbol: token.symbol, chainId, timeframe, candles });
@@ -174,143 +178,72 @@ router.get("/tokens/:chainId/:contractId/candles", async (req: Request, res: Res
   }
 });
 
-/** GET /api/tokens/:chainId/:contractId/swaps — recent transactions from indexer. */
+/** GET /api/tokens/:chainId/:contractId/swaps — recent transactions. */
 router.get("/tokens/:chainId/:contractId/swaps", async (req: Request, res: Response) => {
   try {
     const chainId = String(req.params.chainId);
     const contractId = String(req.params.contractId).toLowerCase();
     const token = await TokenDiscoveryService.getInstance().getToken(chainId, contractId);
-    const db = DatabaseService.getInstance();
 
-    const pools = await db.prisma.indexedPool.findMany({
-      where: {
-        chainId,
-        OR: [
-          { baseToken: contractId },
-          { quoteToken: contractId },
-          { poolAddress: contractId },
-        ],
-      },
-      select: { id: true },
-    });
+    // Through the source rather than a query in the handler. These two routes
+    // were the last places that read the indexer's tables inline, which meant
+    // the two most swap-shaped surfaces in the product were the only ones that
+    // could not follow the configured market-data source anywhere.
+    const source = resolveTradesSource();
+    const feed = await source.recentSwaps(chainId, contractId, SWAP_FEED_LIMIT);
 
-    if (pools.length === 0) {
-      return res.json({
-        symbol: token?.symbol ?? "TOKEN",
-        chainId,
-        swaps: [],
-        message: "No indexed pools found for this token.",
-      });
-    }
-
-    const poolIds = pools.map((p) => p.id);
-    const rawSwaps = await db.prisma.indexedSwap.findMany({
-      where: { poolId: { in: poolIds }, bucketStart: { gte: recentWindow() } },
-      orderBy: [{ blockNumber: "desc" }, { logIndex: "desc" }],
-      take: 50,
-    });
-
-    const swaps = rawSwaps.map((s) => {
-      const fullTx = s.txKey.split(":")[0] ?? s.txKey;
-      const txHashShort = fullTx.length > 10
-        ? `${fullTx.slice(0, 6)}...${fullTx.slice(-4)}`
-        : fullTx;
-
-      const traderAddr = s.traderAddress;
-      const traderShort = traderAddr && traderAddr.length > 10
-        ? `${traderAddr.slice(0, 6)}...${traderAddr.slice(-4)}`
-        : traderAddr ?? "Unknown";
-
-      return {
-        txHash: txHashShort,
-        fullTxHash: fullTx,
-        // When the swap happened, not when we wrote the row down. `createdAt`
-        // was being sent here, which is the ingestion time — so during a
-        // backfill walk every trade in this list, however old, was stamped
-        // "just now". Bucket resolution is five minutes, which is the
-        // resolution the swap was recorded at.
-        timestamp: s.bucketStart,
+    res.json({
+      symbol: token?.symbol ?? "TOKEN",
+      chainId,
+      source: source.name,
+      swaps: feed.swaps.map((s) => ({
+        txHash: shorten(s.txHash),
+        fullTxHash: s.txHash,
+        timestamp: s.timestamp,
         type: s.isBuy ? "BUY" : "SELL",
         amountUsd: s.volumeUsd,
         priceUsd: s.priceUsd,
-        traderAddress: traderShort,
-        fullAddress: traderAddr ?? undefined,
-      };
+        traderAddress: s.traderAddress ? shorten(s.traderAddress) : "Unknown",
+        fullAddress: s.traderAddress ?? undefined,
+      })),
+      ...(feed.note ? { message: feed.note } : {}),
     });
-
-    res.json({ symbol: token?.symbol ?? "TOKEN", chainId, swaps });
   } catch (error) {
     logger.error("Token swaps failed", { error });
     res.status(500).json({ error: "Failed to load swaps" });
   }
 });
 
-/** GET /api/tokens/:chainId/:contractId/traders — top traders from indexer. */
+/** GET /api/tokens/:chainId/:contractId/traders — top traders. */
 router.get("/tokens/:chainId/:contractId/traders", async (req: Request, res: Response) => {
   try {
     const chainId = String(req.params.chainId);
     const contractId = String(req.params.contractId).toLowerCase();
     const token = await TokenDiscoveryService.getInstance().getToken(chainId, contractId);
-    const db = DatabaseService.getInstance();
 
-    const pools = await db.prisma.indexedPool.findMany({
-      where: {
-        chainId,
-        OR: [
-          { baseToken: contractId },
-          { quoteToken: contractId },
-          { poolAddress: contractId },
-        ],
-      },
-      select: { id: true },
-    });
-
-    if (pools.length === 0) {
-      return res.json({
-        symbol: token?.symbol ?? "TOKEN",
-        chainId,
-        traders: [],
-        message: "No indexed pools found for this token.",
-      });
-    }
-
-    const poolIds = pools.map((p) => p.id);
-
-    // Bounded and cached. This is a public, unauthenticated route, and the
-    // aggregate behind it used to scan every swap ever retained for the
-    // token's pools — a hash aggregate over millions of rows, recomputed on
-    // every request, for a leaderboard that is about recent activity anyway.
-    const aggregated = await cached(`traders:${chainId}:${contractId}`, async () =>
-      db.prisma.indexedSwap.groupBy({
-        by: ["traderAddress"],
-        where: {
-          poolId: { in: poolIds },
-          traderAddress: { not: null },
-          bucketStart: { gte: recentWindow() },
-        },
-        _sum: { volumeUsd: true },
-        _count: { _all: true },
-        orderBy: { _sum: { volumeUsd: "desc" } },
-        take: 20,
-      })
+    const source = resolveTradesSource();
+    // Cached: a public, unauthenticated route whose answer is an aggregate
+    // over a 24-hour window, which does not change meaningfully between two
+    // requests a second apart — and against the external source it is also a
+    // call from a per-minute budget.
+    const feed = await cached(`traders:${source.name}:${chainId}:${contractId}`, () =>
+      source.topTraders(chainId, contractId, TRADER_LEADERBOARD_LIMIT)
     );
 
-    const traders = aggregated
-      .filter((row) => Boolean(row.traderAddress))
-      .map((row, idx) => {
-        const addr = row.traderAddress!;
-        const shortAddr = addr.length > 10 ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : addr;
-        return {
-          rank: idx + 1,
-          address: shortAddr,
-          fullAddress: addr,
-          tag: idx === 0 ? "Top Trader" : "Active Trader",
-          volumeUsd: row._sum.volumeUsd ?? 0,
-          trades: row._count._all,
-        };
-      });
-
-    res.json({ symbol: token?.symbol ?? "TOKEN", chainId, traders });
+    res.json({
+      symbol: token?.symbol ?? "TOKEN",
+      chainId,
+      source: source.name,
+      traders: feed.traders.map((t, idx) => ({
+        rank: idx + 1,
+        address: shorten(t.address),
+        fullAddress: t.address,
+        tag: idx === 0 ? "Top Trader" : "Active Trader",
+        volumeUsd: t.volumeUsd,
+        trades: t.trades,
+      })),
+      ...(feed.note ? { message: feed.note } : {}),
+    });
   } catch (error) {
     logger.error("Token traders failed", { error });
     res.status(500).json({ error: "Failed to load traders" });

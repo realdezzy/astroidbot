@@ -5,6 +5,7 @@ import type { SignalForecast } from "../../../src/types/market.js";
 
 function makeFeatures(overrides: Partial<Features> = {}): Features {
   return {
+    available: true,
     currentPrice: 2.0,
     return1h: 0,
     return4h: 0,

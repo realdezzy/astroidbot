@@ -1,5 +1,6 @@
 import type { MarketRegime } from "../../types/market.js";
 import { FeatureEngine } from "./featureEngine.js";
+import { isQuantEnabled } from "./quantMode.js";
 import { logger } from "../../utils/logger.js";
 
 // Market regime determines which strategies are allowed to execute.
@@ -44,8 +45,10 @@ export class RegimeDetectionService {
     try {
       const features = await this.featureEngine.compute(token);
 
-      // No data — cannot classify.
-      if (features.currentPrice === 0) {
+      // No data — cannot classify. `available` covers the case the price check
+      // cannot see: a token we can price perfectly well but have no candle
+      // history for, whose zeroed returns would classify as a calm range.
+      if (!features.available || features.currentPrice === 0) {
         return this.cache_(token, "UNKNOWN");
       }
 
@@ -59,6 +62,13 @@ export class RegimeDetectionService {
 
   // Returns true if the given strategy type is allowed to execute in the current token's regime.
   async isStrategyAllowed(strategyType: string, token: string): Promise<boolean> {
+    // With the quant layer off there is no regime to gate on, and this must
+    // fail *open*. Returning UNKNOWN instead would silently retire every
+    // strategy whose gate omits it — grid, breakout, momentum and mean
+    // reversion — which is not "stop consulting technical signals", it is
+    // "stop trading", and it would look exactly like a strategy bug.
+    if (!isQuantEnabled()) return true;
+
     const allowed = STRATEGY_REGIME_GATES[strategyType];
     // Unknown strategy types are always allowed (fail-open for custom strategies).
     if (!allowed) return true;

@@ -120,7 +120,10 @@ describe("SocialCommandProcessor", () => {
     const result = await processor.process("x", post);
     expect(result.ok).toBe(true);
     expect(enqueueTrade).toHaveBeenCalledWith(
-      expect.objectContaining({ walletId: 3, userId: 7, tokenOut: "DEGEN" })
+      expect.objectContaining({ walletId: 3, userId: 7, tokenOut: "DEGEN" }),
+      // Keyed on the command, so one social command executes once no matter
+      // how many times the job is retried or the post is re-delivered.
+      expect.stringMatching(/^social:/)
     );
   });
 
@@ -293,4 +296,123 @@ describe("SocialCommandProcessor", () => {
       })
     );
   });
+
+  /**
+   * The confirm-link surface.
+   *
+   * The web controller used to build this trade itself, and every way it
+   * differed from the auto-execute path above was a bug: it picked
+   * `findDefaultWalletByUserId()` with no chain filter, hardcoded `"USDC"` as
+   * the stable on every chain, and passed `intent.amount` straight through
+   * without converting the denomination. These pin the corrected behaviour.
+   */
+  describe("confirmAndExecute", () => {
+    function pending(intent: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+      return {
+        id: 11,
+        platform: "x",
+        parsedIntent: JSON.stringify(intent),
+        status: "AWAITING_CONFIRMATION",
+        confirmExpiresAt: new Date(Date.now() + 300_000),
+        socialAccount: linkedAccount,
+        ...overrides,
+      };
+    }
+
+    it("converts a USD-denominated sell into a token quantity", async () => {
+      // "sell $50 of DEGEN" at $2 a token is 25 tokens. The old code enqueued
+      // `amountIn: 50` — fifty *tokens*, a 2x overspend of the position.
+      mockDex.getTokenPrice.mockResolvedValue(2);
+      mockPrisma.socialCommand.findUnique.mockResolvedValue(
+        pending({ action: "sell", amount: 50, denomination: "usd", token: "DEGEN" })
+      );
+
+      const result = await processor.confirmAndExecute("tok", 7);
+
+      expect(result.ok).toBe(true);
+      expect(enqueueTrade).toHaveBeenCalledWith(
+        expect.objectContaining({ tokenIn: "DEGEN", tokenOut: "USDC", amountIn: 25 }),
+        "social:11"
+      );
+    });
+
+    it("spends the chain's own stable symbol rather than a hardcoded USDC", async () => {
+      tradableChains.length = 0;
+      tradableChains.push({ chainId: "celo:mainnet" });
+      mockPrisma.wallet.findMany.mockResolvedValue([
+        { id: 9, address: "0xcelo", chain: "celo:mainnet", chainFamily: "evm" },
+      ]);
+      mockPrisma.socialCommand.findUnique.mockResolvedValue(
+        pending({ action: "buy", amount: 20, denomination: "usd", token: "DEGEN" })
+      );
+
+      const result = await processor.confirmAndExecute("tok", 7);
+
+      expect(result.ok).toBe(true);
+      expect(enqueueTrade).toHaveBeenCalledWith(
+        expect.objectContaining({ tokenIn: "cUSD", tokenOut: "DEGEN" }),
+        "social:11"
+      );
+    });
+
+    it("picks the wallet on the token's chain, not whichever is default", async () => {
+      mockPrisma.wallet.findMany.mockResolvedValue([
+        { id: 1, address: "0xstacks", chain: "stacks:mainnet", chainFamily: "stacks", isDefault: true },
+        { id: 3, address: "0xbase", chain: "base:mainnet", chainFamily: "evm", isDefault: false },
+      ]);
+      mockPrisma.socialCommand.findUnique.mockResolvedValue(
+        pending({ action: "buy", amount: 20, denomination: "usd", token: "DEGEN" })
+      );
+
+      const result = await processor.confirmAndExecute("tok", 7);
+
+      expect(result.ok).toBe(true);
+      expect(enqueueTrade).toHaveBeenCalledWith(
+        expect.objectContaining({ walletId: 3, senderAddress: "0xbase" }),
+        "social:11"
+      );
+    });
+
+    it("refuses a confirmation link that has expired", async () => {
+      mockPrisma.socialCommand.findUnique.mockResolvedValue(
+        pending(
+          { action: "buy", amount: 20, denomination: "usd", token: "DEGEN" },
+          { confirmExpiresAt: new Date(Date.now() - 1000) }
+        )
+      );
+
+      const result = await processor.confirmAndExecute("tok", 7);
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("expired");
+      expect(enqueueTrade).not.toHaveBeenCalled();
+    });
+
+    it("refuses a link redeemed by someone other than its owner", async () => {
+      mockPrisma.socialCommand.findUnique.mockResolvedValue(
+        pending({ action: "buy", amount: 20, denomination: "usd", token: "DEGEN" })
+      );
+
+      const result = await processor.confirmAndExecute("tok", 999);
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("not_authorized");
+      expect(enqueueTrade).not.toHaveBeenCalled();
+    });
+
+    it("re-checks the per-trade cap at redemption, not only at issue", async () => {
+      // A link lives for minutes. The cap it was measured against can change,
+      // and the daily total certainly can.
+      mockPrisma.socialCommand.findUnique.mockResolvedValue(
+        pending({ action: "buy", amount: 5000, denomination: "usd", token: "DEGEN" })
+      );
+
+      const result = await processor.confirmAndExecute("tok", 7);
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("over_per_trade_limit");
+      expect(enqueueTrade).not.toHaveBeenCalled();
+    });
+  });
+
 });

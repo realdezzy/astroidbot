@@ -17,6 +17,22 @@ export class SignalFusionService {
    * Fuses multiple technical and statistical features into a single consensus SignalForecast.
    */
   fuse(strategyId: number, token: string, features: Features): SignalForecast {
+    // Placeholders are not a market view. An unmeasured feature set has
+    // EMA12 === EMA26, which scores as a bearish crossover, and RSI 50, which
+    // scores as neutral — so fusing it yields a confident mild SELL derived
+    // from the absence of data. Zero confidence is the honest reading.
+    if (!features.available) {
+      return {
+        strategyId,
+        token,
+        direction: "HOLD",
+        confidence: 0,
+        expectedReturn: 0,
+        expectedRisk: 0,
+        rationale: ["No technical features available (quant layer disabled or insufficient candles)"],
+      };
+    }
+
     const rationale: string[] = [];
     let trendScore = 0; // -50 to +50
     let reversionScore = 0; // -50 to +50

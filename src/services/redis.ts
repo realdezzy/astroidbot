@@ -131,6 +131,46 @@ export class RedisService {
   }
 
   /**
+   * Keep a held lock alive until the returned function is called.
+   *
+   * Wallet locks were taken for a fixed 30 seconds and never renewed, but the
+   * work they guard — decrypt, sign, broadcast, and on Stacks a mempool
+   * re-admission loop — can outlast that. When it did, the lock expired while
+   * the holder was still signing and a second trade for the same wallet could
+   * acquire it and reuse the nonce, which is the exact collision the lock
+   * exists to prevent.
+   *
+   * Renews at a third of the TTL, so two consecutive failures still leave a
+   * full interval of margin. A failed renewal means the key is gone or is now
+   * someone else's: that is logged loudly and renewal stops, because
+   * re-acquiring it here would paper over a lock that has already been handed
+   * to another holder.
+   *
+   * The timer is `unref`'d — a process should never stay alive for it.
+   */
+  renewLockUntilDone(key: string, token: string, ttlMs: number): () => void {
+    const interval = Math.max(1, Math.floor(ttlMs / 3));
+    const timer = setInterval(() => {
+      void this.renewLock(key, token, ttlMs)
+        .then((renewed) => {
+          if (!renewed) {
+            logger.error("Lock lost while the work it guards was still running", { key });
+            clearInterval(timer);
+          }
+        })
+        .catch((error) => {
+          logger.error("Lock renewal failed", {
+            key,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }, interval);
+    timer.unref();
+
+    return () => clearInterval(timer);
+  }
+
+  /**
    * `acquireLock`, but treating an unreachable Redis as "held".
    *
    * For callers whose work is genuinely optional and who would rather skip a

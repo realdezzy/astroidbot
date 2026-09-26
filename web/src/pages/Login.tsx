@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { Bot, Mail, MessageCircle } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
+import { apiFetch } from "../lib/api";
 import { AstroidMark } from "../components/Brand/AstroidMark";
+import { TelegramLoginWidget } from "../components/TelegramLoginWidget";
 
 export function Login() {
   const { user, login, loginWithEmail, loading, error } = useAuth();
@@ -25,6 +28,16 @@ export function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Which bot the Login Widget authenticates against. There is no sensible
+  // default here: the widget is bound to one bot, and a wrong username renders
+  // a button that authenticates into somebody else's deployment.
+  const { data: health } = useQuery<{ telegramBotUsername: string | null }>({
+    queryKey: ["health"],
+    queryFn: () => apiFetch("/health"),
+    staleTime: 5 * 60_000,
+  });
+  const botUsername = health?.telegramBotUsername;
 
   useEffect(() => {
     if (user) navigate(redirectTo, { replace: true });
@@ -146,24 +159,19 @@ export function Login() {
                 <p className="text-sm text-gray-400 text-center">
                   Sign in securely with your Telegram account
                 </p>
-                <button
-                  onClick={() =>
-                    handleTelegramAuth({
-                      id: 1,
-                      first_name: "DemoUser",
-                      username: "demouser",
-                      auth_date: Math.floor(Date.now() / 1000),
-                      hash: "demo-hash-for-development",
-                    })
-                  }
-                  disabled={loading}
-                  className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-lg bg-[#2AABEE] hover:bg-[#229ED9] text-white font-medium transition-colors disabled:opacity-50"
-                >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.161c-.18.717-.962 4.084-1.362 5.411-.168.56-.35.748-.574.767-.488.045-.858-.322-1.33-.63-.738-.484-1.156-.785-1.873-1.257-.829-.546-.292-1.022.181-1.614.124-.155 2.275-2.084 2.316-2.262.005-.022.01-.105-.039-.148-.05-.044-.123-.029-.175-.017-.074.017-1.259.8-3.554 2.35-.336.23-.64.342-.912.336-.3-.007-.878-.17-1.307-.31-.527-.171-.947-.262-.91-.554.02-.152.229-.307.63-.466 2.475-1.078 4.126-1.789 4.952-2.134 2.358-.98 2.848-1.15 3.168-1.156.07-.001.228.016.33.1.103.084.131.197.144.278.012.08.028.263-.016.41z" />
-                  </svg>
-                  {loading ? "Connecting..." : "Sign in with Telegram"}
-                </button>
+                {botUsername ? (
+                  <>
+                    <TelegramLoginWidget botUsername={botUsername} onAuth={handleTelegramAuth} />
+                    {loading && (
+                      <p className="text-xs text-gray-500 text-center">Connecting...</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-gray-500 text-center italic">
+                    Telegram sign-in is unavailable — this deployment has no bot username
+                    configured.
+                  </p>
+                )}
                 <p className="text-xs text-gray-600 text-center">
                   Don't have Telegram?{" "}
                   <button onClick={() => setTab("email")} className="text-brand-400 hover:underline">

@@ -15,7 +15,7 @@ import { persistSwaps, type RawSwap } from "../swapStore.js";
 import { BlockTimeOracle } from "../blockTimeOracle.js";
 import { resolveNativeUsd } from "../nativePricing.js";
 import { bucketStartOf, type ChainIndexer, type IndexRunResult, type TrackedPool } from "../types.js";
-import { backfillEnabled, type IndexerSettings } from "../settings.js";
+import { backfillEnabled, ingestionEnabled, type IndexerSettings } from "../settings.js";
 
 /**
  * The two events that define V3 ingestion. Declared as ABI items rather than
@@ -213,6 +213,8 @@ export class UniswapV3Indexer implements ChainIndexer {
   }
 
   async run(): Promise<IndexRunResult> {
+    if (!ingestionEnabled(this.settings)) return this.runDiscoveryOnly();
+
     const db = DatabaseService.getInstance();
     await reconcileEvmHistory(this.chainId, this.rpc);
     await this.retryPoolMetadata();
@@ -243,6 +245,129 @@ export class UniswapV3Indexer implements ChainIndexer {
     return { chainId: this.chainId, poolsDiscovered, fromBlock, toBlock: actual, targetBlock: safeHead,
       swapsIngested: result.swapsIngested + backfilled.swapsIngested,
       bucketsWritten: result.bucketsWritten + backfilled.bucketsWritten };
+  }
+
+  /**
+   * The cheap half of a pass: find pools, learn what they hold, stop there.
+   *
+   * Written as its own method rather than as branches through `run()` so that
+   * `INDEXER_MODE=full` executes the original code path byte for byte. That
+   * path is the rollback target for the whole market-data migration, and a
+   * rollback that has been quietly refactored on the way past is not one.
+   *
+   * Three differences from a full pass are deliberate:
+   *
+   * **The swap cursor is not advanced.** `lastBlock` means "swaps are ingested
+   * up to here", and nothing ingested any. Moving it would make a later
+   * rollback to `full` step over every block this mode ran for and call the
+   * hole ingested.
+   *
+   * **The discovery range is computed from the head, not from the swap
+   * cursor.** In a full pass discovery is clamped to the range swaps are about
+   * to be read for, which is correct — a swap must never be claimed from a
+   * range whose pool set isn't known. With the swap cursor frozen, that clamp
+   * would pin discovery to wherever ingestion stopped and it would never
+   * advance again.
+   *
+   * **Liquidity is refreshed on its own.** In a full pass it rides along with
+   * ingestion, for pools that actually traded. With no ingestion nothing would
+   * ever call it, and `IndexedPool.liquidityUsd` is load-bearing well beyond
+   * the liquidity column: it decides which pool sets a token's price, it gates
+   * whether that price is trusted, and it is the floor `promoteIndexedTokens`
+   * applies before listing a token at all.
+   */
+  private async runDiscoveryOnly(): Promise<IndexRunResult> {
+    const db = DatabaseService.getInstance();
+    await this.retryPoolMetadata();
+
+    const head = await this.rpc.getBlockNumber();
+    const safeHead = head > BigInt(this.settings.confirmations)
+      ? head - BigInt(this.settings.confirmations) : 0n;
+
+    const cursor = await db.prisma.indexerCursor.findUnique({ where: { chainId: this.chainId } });
+    const defaultStart = safeHead > BigInt(this.settings.initialLookbackBlocks)
+      ? safeHead - BigInt(this.settings.initialLookbackBlocks) : 1n;
+
+    // A cursor is still created on a fresh chain. Switching to `full` later
+    // must not be a first run: without this the swap pass would start from
+    // today's lookback window and the pools discovered in the meantime would
+    // have no history behind them.
+    if (!cursor) {
+      const fromBlock = defaultStart;
+      await db.prisma.indexerCursor.create({ data: {
+        chainId: this.chainId, lastBlock: fromBlock - 1n, lastPoolBlock: null, backfillBlock: fromBlock,
+      } });
+    }
+
+    const firstFactoryBlock = this.factories.reduce(
+      (min, f) => ((f.deploymentBlock ?? 0n) < min ? (f.deploymentBlock ?? 0n) : min), safeHead);
+    const poolFrom = cursor?.lastPoolBlock != null ? cursor.lastPoolBlock + 1n : firstFactoryBlock;
+    const budget = BigInt(this.settings.maxBlocksPerRun);
+    const discoveryTo = poolFrom + budget - 1n < safeHead ? poolFrom + budget - 1n : safeHead;
+
+    const poolsDiscovered = poolFrom <= discoveryTo
+      ? await this.discoverPools(poolFrom, discoveryTo) : 0;
+
+    await this.refreshDiscoveredLiquidity(safeHead);
+
+    // `toBlock` is the discovery cursor here, not the swap cursor, because in
+    // this mode discovery *is* the progress. The stall detector compares
+    // successive `toBlock`s, and reporting a frozen swap cursor would have it
+    // declare every chain stalled five ticks after this mode was enabled.
+    return { chainId: this.chainId, poolsDiscovered, swapsIngested: 0, bucketsWritten: 0,
+      fromBlock: poolFrom, toBlock: discoveryTo > poolFrom ? discoveryTo : poolFrom,
+      targetBlock: safeHead, discoveryBlock: discoveryTo };
+  }
+
+  /**
+   * Measures pool depth when no swap pass is running.
+   *
+   * Two choices worth naming. **The set rotates**: never-measured pools first,
+   * since those are the ones just discovered and the whole point of this mode,
+   * then least-recently-written, so the balance reads spread across the table
+   * instead of re-reading the same head of it every tick. It is capped at
+   * `maxPools` because this is the only per-tick cost that scales with the
+   * size of the pool table rather than with what happened on the chain.
+   *
+   * **The pool's current price is written from `slot0`.** In a full pass
+   * `lastPrice0` means "the price at the last swap we decoded", and mixing a
+   * spot reading into that would interleave two different clocks on one
+   * column. Here there are no swaps to decode, so `slot0` is the only price
+   * reading that exists — and without it `usdPrices` has no edges, the price
+   * graph never expands past the stables, and every pool on the chain reports
+   * unknown liquidity rather than a number.
+   */
+  private async refreshDiscoveredLiquidity(blockNumber: bigint): Promise<void> {
+    const pools = await this.trackedPools();
+    if (pools.length === 0) return;
+
+    const byAddress = new Map(pools.map((p) => [p.poolAddress.toLowerCase(), p]));
+    const usd = await this.usdPrices(pools);
+
+    const db = DatabaseService.getInstance();
+    const unmeasured = await db.prisma.indexedPool.findMany({
+      where: { chainId: this.chainId, indexingError: null, liquidityUsd: null },
+      orderBy: { createdBlock: "desc" },
+      take: this.settings.maxPools,
+      select: { id: true },
+    });
+
+    const targets = new Set(unmeasured.map((p) => p.id));
+
+    if (targets.size < this.settings.maxPools) {
+      const stale = await db.prisma.indexedPool.findMany({
+        where: { chainId: this.chainId, indexingError: null, liquidityUsd: { not: null } },
+        orderBy: { updatedAt: "asc" },
+        take: this.settings.maxPools - targets.size,
+        select: { id: true },
+      });
+      for (const pool of stale) targets.add(pool.id);
+    }
+
+    const poolIds = pools.map((p) => p.id).filter((id) => targets.has(id));
+    if (poolIds.length === 0) return;
+
+    await this.refreshLiquidity(poolIds, byAddress, usd, blockNumber, { persistSpotPrice: true });
   }
 
   // ─── Backfill ──────────────────────────────────────────────────────────────
@@ -729,7 +854,8 @@ export class UniswapV3Indexer implements ChainIndexer {
     poolIds: number[],
     byAddress: Map<string, TrackedPool>,
     usd: Map<string, number>,
-    blockNumber: bigint
+    blockNumber: bigint,
+    options: { persistSpotPrice?: boolean } = {}
   ): Promise<void> {
     if (poolIds.length === 0) return;
 
@@ -760,7 +886,12 @@ export class UniswapV3Indexer implements ChainIndexer {
       if (price0 == null || price1 == null) continue;
       const liquidityUsd = toHuman(balance0, pool.decimals0) * price0 + toHuman(balance1, pool.decimals1) * price1;
       if (!Number.isFinite(liquidityUsd) || liquidityUsd < 0) continue;
-      await db.prisma.indexedPool.update({ where: { id: pool.id }, data: { liquidityUsd } });
+      // `lastPrice0` is written here only in discovery mode, where nothing
+      // else can write it. `lastSwapAt` is deliberately left alone either way:
+      // a spot reading says what the pool is priced at, not that it traded.
+      const spot = options.persistSpotPrice && ratio != null && Number.isFinite(ratio) && ratio > 0
+        ? { lastPrice0: ratio } : {};
+      await db.prisma.indexedPool.update({ where: { id: pool.id }, data: { liquidityUsd, ...spot } });
     }
   }
 
