@@ -105,7 +105,7 @@ export class UserController {
           const family = w.chainFamily ?? "stacks";
           const { tokens, nativeSymbol, nativePrice } = perChain.get(chainId)!;
           try {
-            const balances = await pm.fetchBalances(w.address, tokens, req.userId!);
+            const balances = await pm.fetchBalances(w.address, tokens, req.userId!, false, chainId);
             const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
             const totalWalletUsd = balances.reduce((sum, b) => sum + (b.usdValue ?? 0), 0);
             await db.updateWalletBalance(w.id, nativeBal);
@@ -452,7 +452,7 @@ export class UserController {
 
       const registry = DEXRegistry.getInstance();
       const tokens = await registry.getSwappableTokens(false, targetChain);
-      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!);
+      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, false, targetChain);
       const nativeBal = balances.find((b) => b.symbol === adapter.nativeSymbol)?.balance ?? 0;
 
       // The Stacks branch of this used to substitute 2.0 for an unavailable
@@ -595,7 +595,7 @@ export class UserController {
 
       const registry = DEXRegistry.getInstance();
       const tokens = await registry.getSwappableTokens(false, walletChainId(wallet));
-      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
+      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true, walletChainId(wallet));
 
       res.json(balances);
     } catch (error) {
@@ -681,7 +681,7 @@ export class UserController {
 
       const registry = DEXRegistry.getInstance();
       const tokens = await registry.getSwappableTokens(false, chainId);
-      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true);
+      const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, req.userId!, true, chainId);
 
       const tokenBalanceObj = balances.find(b => b.symbol.toUpperCase() === tokenIn.toUpperCase() || b.token === tokenIn);
       const tokenBalance = tokenBalanceObj ? tokenBalanceObj.balance : 0;

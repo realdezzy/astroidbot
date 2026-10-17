@@ -47,7 +47,14 @@ export class FeatureEngine {
     return FeatureEngine.instance;
   }
 
-  async compute(token: string): Promise<Features> {
+  /**
+   * Features for a token on one chain. The chain is required: candles and
+   * price are per market, and this used to read candles with no chain — which
+   * defaulted to Stacks — so a Base token had no history, every Base strategy
+   * saw `available: false`, and the regime gate suppressed the ones that need
+   * a classified regime.
+   */
+  async compute(token: string, chainId: string): Promise<Features> {
     // No candle read, no price read: with the layer off, every field below
     // would be a placeholder anyway, and the read costs a database round trip
     // per token per strategy per tick.
@@ -55,8 +62,8 @@ export class FeatureEngine {
 
     const registry = DEXRegistry.getInstance();
     const [candles, currentPrice] = await Promise.all([
-      CandleService.getInstance().getCandles(token.toUpperCase(), "5m", 200),
-      registry.getTokenPrice(token).catch(() => null),
+      CandleService.getInstance().getCandles(token.toUpperCase(), "5m", 200, chainId),
+      registry.getTokenPrice(token, chainId).catch(() => null),
     ]);
 
     if (candles.length < 30 || currentPrice === null || currentPrice === 0) {

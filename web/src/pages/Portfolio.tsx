@@ -24,6 +24,7 @@ interface WalletType {
     symbol: string;
     balance: number;
     usdValue: number;
+    unpriced?: boolean;
   }>;
 }
 
@@ -203,8 +204,8 @@ export function Portfolio() {
                     <span className="text-muted-text font-medium">{a.symbol}</span>
                     {multiChain && a.chain && <ChainBadge chainId={a.chain} />}
                   </div>
-                  <span className="text-title-text font-bold">
-                    {formatUSD(a.usdValue)} ({allocationPct.toFixed(1)}%)
+                  <span className="text-title-text font-bold" title={a.unpriced ? "No price available" : undefined}>
+                    {a.unpriced ? "—" : `${formatUSD(a.usdValue)} (${allocationPct.toFixed(1)}%)`}
                   </span>
                 </div>
               );
@@ -320,11 +321,14 @@ export function Portfolio() {
                           </div>
                         </div>
                       </td>
-                      <td className="py-4 px-4 font-mono">{formatUSD(tokenPrice)}</td>
+                      {/* An unpriced row shows dashes: "$0.00" would read as worthless. */}
+                      <td className="py-4 px-4 font-mono" title={a.unpriced ? "No price available" : undefined}>
+                        {a.unpriced ? "—" : formatUSD(tokenPrice)}
+                      </td>
                       <td className="py-4 px-4 font-mono">{formatNumber(a.balance, 4)}</td>
-                      <td className="py-4 px-4 font-semibold font-mono">{formatUSD(a.usdValue)}</td>
+                      <td className="py-4 px-4 font-semibold font-mono">{a.unpriced ? "—" : formatUSD(a.usdValue)}</td>
                       <td className="py-4 pl-4 text-right font-semibold text-brand-400 font-mono">
-                        {allocationPct.toFixed(2)}%
+                        {a.unpriced ? "—" : `${allocationPct.toFixed(2)}%`}
                       </td>
                     </tr>
                   );

@@ -4,16 +4,19 @@ import { RegimeDetectionService } from "./regimeDetection.js";
 import { isQuantEnabled } from "./quantMode.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
 import { logger } from "../../utils/logger.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 
-// MarketDataService builds a single MarketContext per cycle.
+// MarketDataService builds one MarketContext per chain per cycle.
 // All strategies receive this context rather than fetching data independently.
 export class MarketDataService {
   private static instance: MarketDataService;
   private featureEngine = FeatureEngine.getInstance();
   private regimeService = RegimeDetectionService.getInstance();
 
-  // Full context is refreshed once per cycle and cached.
-  private contextCache: { context: MarketContext; expiresAt: number } | null = null;
+  // Refreshed once per cycle and cached per chain. This was a single slot, so
+  // the first wallet of a cycle decided the context every other wallet got —
+  // a Base strategy read the snapshots and regime built for Stacks tokens.
+  private contextCache = new Map<string, { context: MarketContext; expiresAt: number }>();
   private readonly cacheTtlMs = 55_000; // Just under 60s poll interval.
 
   private constructor() {}
@@ -25,9 +28,10 @@ export class MarketDataService {
     return MarketDataService.instance;
   }
 
-  async getContext(tokens: string[]): Promise<MarketContext> {
-    if (this.contextCache && this.contextCache.expiresAt > Date.now()) {
-      return this.contextCache.context;
+  async getContext(tokens: string[], chainId: string): Promise<MarketContext> {
+    const cached = this.contextCache.get(chainId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.context;
     }
 
     // With the quant layer off, a snapshot would be a full TokenMarketSnapshot
@@ -42,21 +46,23 @@ export class MarketDataService {
         macroRegime: "UNKNOWN",
         correlationMatrix: new Map<string, Map<string, number>>(),
       };
-      this.contextCache = { context, expiresAt: Date.now() + this.cacheTtlMs };
+      this.contextCache.set(chainId, { context, expiresAt: Date.now() + this.cacheTtlMs });
       return context;
     }
 
     const snapshots = new Map<string, TokenMarketSnapshot>();
     const registry = DEXRegistry.getInstance();
+    const { nativeSymbol } = chainDescriptor(chainId);
 
     await Promise.all(
       tokens.map(async (token) => {
         try {
-          const features = await this.featureEngine.compute(token);
-          // Compute price impact as a proxy for pool depth.
-          const depthQuote = await registry.getBestQuote("STX", token, 100).catch(() => null);
+          const features = await this.featureEngine.compute(token, chainId);
+          // Compute price impact as a proxy for pool depth, probing with the
+          // chain's own native asset on the chain's own DEXs.
+          const depthQuote = await registry.getBestQuote(nativeSymbol, token, 100, chainId).catch(() => null);
           const impactProxy = depthQuote?.quote.priceImpact ?? 0;
-          // Safe trade size = 100 STX / impact% gives a rough depth estimate.
+          // Safe trade size = 100 native / impact% gives a rough depth estimate.
           const poolDepth1PctUsd = impactProxy > 0 ? (100 / impactProxy) * features.currentPrice : 0;
 
           const snapshot: TokenMarketSnapshot = {
@@ -96,12 +102,12 @@ export class MarketDataService {
       })
     );
 
-    // Detect the macro regime using STX as the primary reference token.
-    const macroToken = snapshots.has("STX") ? "STX" : tokens[0] ?? "STX";
-    const macroRegime = await this.regimeService.detectRegime(macroToken);
+    // Detect the macro regime using the chain's native asset as the reference.
+    const macroToken = snapshots.has(nativeSymbol) ? nativeSymbol : tokens[0] ?? nativeSymbol;
+    const macroRegime = await this.regimeService.detectRegime(macroToken, chainId);
 
     // Correlation matrix: computed as rolling Pearson correlation between token pairs.
-    const correlationMatrix = await this.buildCorrelationMatrix(tokens);
+    const correlationMatrix = await this.buildCorrelationMatrix(tokens, chainId);
 
     const context: MarketContext = {
       timestamp: Date.now(),
@@ -110,18 +116,18 @@ export class MarketDataService {
       correlationMatrix,
     };
 
-    this.contextCache = { context, expiresAt: Date.now() + this.cacheTtlMs };
+    this.contextCache.set(chainId, { context, expiresAt: Date.now() + this.cacheTtlMs });
     return context;
   }
 
   // Builds a pairwise Pearson correlation matrix over the last 60 price periods.
-  private async buildCorrelationMatrix(tokens: string[]): Promise<Map<string, Map<string, number>>> {
+  private async buildCorrelationMatrix(tokens: string[], chainId: string): Promise<Map<string, Map<string, number>>> {
     const matrix = new Map<string, Map<string, number>>();
     const { PriceHistoryService } = await import("../priceHistory.js");
     const ph = PriceHistoryService.getInstance();
 
     const histories = await Promise.all(
-      tokens.map(async (t) => ({ token: t, prices: await ph.getHistory(t, 60) }))
+      tokens.map(async (t) => ({ token: t, prices: await ph.getHistory(chainId, t, 60) }))
     );
 
     for (const a of histories) {

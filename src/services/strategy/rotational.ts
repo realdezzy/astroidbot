@@ -1,10 +1,12 @@
 import { PriceHistoryService } from "../priceHistory.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class RotationalStrategy implements Strategy {
   async execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]> {
-    const { config, settings, tokens, balances } = ctx;
+    const { chainId, config, settings, tokens, balances } = ctx;
+    const { nativeSymbol } = chainDescriptor(chainId);
     const topK = (config.topK as number) ?? 3;
     const rebalanceHours = (config.rebalancePeriodHours as number) ?? 24;
     const positionSize = (config.positionSizeUsd as number) ?? 10;
@@ -27,7 +29,7 @@ export class RotationalStrategy implements Strategy {
     const scored: Array<{ symbol: string; momentum: number }> = [];
 
     for (const t of universe) {
-      const momentum = await ph.computeMomentum(t.symbol, 50); // Increased periods to 50
+      const momentum = await ph.computeMomentum(chainId, t.symbol, 50); // Increased periods to 50
       // A token we cannot score is not a token scoring zero. While
       // computeMomentum returned 0 for "no history", an unknown token
       // outranked every token with genuinely negative momentum — so this
@@ -48,7 +50,7 @@ export class RotationalStrategy implements Strategy {
       if (bal && bal.balance > 0.0001) {
         actions.push({
           tokenIn: item.symbol,
-          tokenOut: "STX",
+          tokenOut: nativeSymbol,
           amountIn: bal.balance, // Sell the entire position
           direction: "SELL",
           slippageBps,
@@ -63,7 +65,7 @@ export class RotationalStrategy implements Strategy {
       const hasPosition = bal !== undefined && bal.balance > 0.0001;
       if (!hasPosition) {
         actions.push({
-          tokenIn: "STX",
+          tokenIn: nativeSymbol,
           tokenOut: item.symbol,
           amountIn: positionSize,
           direction: "BUY",

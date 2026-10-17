@@ -1,12 +1,13 @@
 import { DatabaseService } from "../db.js";
 import { PriceHistoryService } from "../priceHistory.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class StopLossTpStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, config, settings, balances } = ctx;
+    const { userId, walletId, chainId, config, settings, balances } = ctx;
     const token = ((config.token as string) ?? "").toUpperCase();
     const tpPct = (config.takeProfitPct as number) ?? 10;
     const slPct = (config.stopLossPct as number) ?? 5;
@@ -19,8 +20,10 @@ export class StopLossTpStrategy implements Strategy {
     const balance = balances.find(b => b.symbol.toUpperCase() === token);
     if (!balance || balance.balance <= 0) return [];
 
+    // Exits settle into the wallet's native asset, priced on its own chain.
+    const { nativeSymbol } = chainDescriptor(chainId);
     const registry = DEXRegistry.getInstance();
-    const quoted = await registry.getTokenPrice(token).catch(() => null);
+    const quoted = await registry.getTokenPrice(token, chainId).catch(() => null);
     // The portfolio's own valuation is a real observation, not an invented
     // one, so it remains the fallback when the router cannot quote.
     const currentPrice =
@@ -44,7 +47,7 @@ export class StopLossTpStrategy implements Strategy {
 
     // Apply Quantitative Adaptive Stop (ATR & Chandelier Exit)
     const ph = PriceHistoryService.getInstance();
-    const high = await ph.computeHigh(token, trailingLookback).catch(() => null);
+    const high = await ph.computeHigh(chainId, token, trailingLookback).catch(() => null);
     const f = ctx.features?.get(token);
 
     if (f) {
@@ -57,7 +60,7 @@ export class StopLossTpStrategy implements Strategy {
       if (decision.shouldExit) {
         actions.push({
           tokenIn: token,
-          tokenOut: "STX",
+          tokenOut: nativeSymbol,
           amountIn: balance.balance,
           direction: "SELL",
           slippageBps,
@@ -70,7 +73,7 @@ export class StopLossTpStrategy implements Strategy {
     if (changePct >= tpPct || changePct <= -slPct) {
       actions.push({
         tokenIn: token,
-        tokenOut: "STX",
+        tokenOut: nativeSymbol,
         amountIn: balance.balance,
         direction: "SELL",
         slippageBps,
@@ -87,7 +90,7 @@ export class StopLossTpStrategy implements Strategy {
         if (highChange <= -trailingSl) {
           actions.push({
             tokenIn: token,
-            tokenOut: "STX",
+            tokenOut: nativeSymbol,
             amountIn: balance.balance,
             direction: "SELL",
             slippageBps,

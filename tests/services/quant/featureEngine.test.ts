@@ -39,7 +39,7 @@ describe("FeatureEngine", () => {
 
   it("returns zero-confidence empty features when no history exists", async () => {
     mockGetCandles.mockResolvedValue([]);
-    const features = await engine.compute("STX");
+    const features = await engine.compute("STX", "stacks:mainnet");
     expect(features.currentPrice).toBe(2.0);
     expect(features.return1h).toBe(0);
     expect(features.rsi14).toBe(50);
@@ -49,21 +49,21 @@ describe("FeatureEngine", () => {
   it("computes positive return1h when price trended up over last 60 periods", async () => {
     const prices = linearPrices(300, 1.0, 0.01);
     mockGetCandles.mockResolvedValue(candlesFromPrices(prices));
-    const features = await engine.compute("STX");
+    const features = await engine.compute("STX", "stacks:mainnet");
     expect(features.return1h).toBeGreaterThan(0);
   });
 
   it("computes RSI above 50 in an uptrend", async () => {
     const prices = linearPrices(50, 1.0, 0.01);
     mockGetCandles.mockResolvedValue(candlesFromPrices(prices));
-    const features = await engine.compute("STX");
+    const features = await engine.compute("STX", "stacks:mainnet");
     expect(features.rsi14).toBeGreaterThan(50);
   });
 
   it("computes RSI below 50 in a downtrend", async () => {
     const prices = linearPrices(50, 2.0, -0.01);
     mockGetCandles.mockResolvedValue(candlesFromPrices(prices));
-    const features = await engine.compute("STX");
+    const features = await engine.compute("STX", "stacks:mainnet");
     expect(features.rsi14).toBeLessThan(50);
   });
 
@@ -72,7 +72,7 @@ describe("FeatureEngine", () => {
     // Pad to 30+ candles (minimum required)
     const prices = [...volatile, ...Array(23).fill(1.0)];
     mockGetCandles.mockResolvedValue(candlesFromPrices(prices));
-    const features = await engine.compute("STX");
+    const features = await engine.compute("STX", "stacks:mainnet");
     expect(features.atr).toBeGreaterThan(0);
   });
 
@@ -81,14 +81,14 @@ describe("FeatureEngine", () => {
     // Pad to 30+ candles
     const prices = [...deviating, ...Array(10).fill(1.0)];
     mockGetCandles.mockResolvedValue(candlesFromPrices(prices));
-    const features = await engine.compute("STX");
+    const features = await engine.compute("STX", "stacks:mainnet");
     expect(features.bollingerWidth).toBeGreaterThan(0);
   });
 
   it("returns emptyFeatures when getTokenPrice returns 0", async () => {
     mockGetTokenPrice.mockResolvedValue(0);
     mockGetCandles.mockResolvedValue([]);
-    const features = await engine.compute("UNKNOWN");
+    const features = await engine.compute("UNKNOWN", "stacks:mainnet");
     expect(features.currentPrice).toBe(0);
     expect(features.return24h).toBe(0);
   });

@@ -1,13 +1,15 @@
 import { DatabaseService } from "../db.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class TwapStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, config, settings } = ctx;
-    const tokenIn = (config.tokenIn as string) ?? "STX";
-    const tokenOut = (config.tokenOut as string) ?? "USDCx";
+    const { userId, walletId, chainId, config, settings } = ctx;
+    const { nativeSymbol, stableSymbol } = chainDescriptor(chainId);
+    const tokenIn = (config.tokenIn as string) ?? nativeSymbol;
+    const tokenOut = (config.tokenOut as string) ?? stableSymbol;
     const totalAmount = (config.totalAmount as number) ?? 1;
     const slices = (config.slices as number) ?? 10;
     const windowMinutes = (config.windowMinutes as number) ?? 60;
@@ -31,7 +33,7 @@ export class TwapStrategy implements Strategy {
     // Abort condition check: if price deviates too much from the first slice
     if (maxPriceDeviationPct > 0 && completed.length > 0) {
       const firstTrade = completed[0]!;
-      const currentPrice = await registry.getTokenPrice(tokenOut).catch(() => null);
+      const currentPrice = await registry.getTokenPrice(tokenOut, chainId).catch(() => null);
       const initialPrice = firstTrade.amountIn / (firstTrade.amountOut || 1); // approximate entry price
       // The deviation guard is the reason this branch exists. Unable to
       // evaluate it, the strategy holds rather than sending the next slice

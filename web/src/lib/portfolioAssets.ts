@@ -11,6 +11,8 @@ export interface WalletBalances {
     symbol: string;
     balance: number;
     usdValue?: number;
+    /** No price was available; `usdValue` is 0 by absence, not measurement. */
+    unpriced?: boolean;
   }[];
 }
 
@@ -19,6 +21,11 @@ export interface AssetRow {
   symbol: string;
   balance: number;
   usdValue: number;
+  /**
+   * True when any part of this row could not be priced, so `usdValue` is at
+   * best a floor. Rendered as a dash rather than a dollar figure.
+   */
+  unpriced?: boolean;
   chain?: string | null;
 }
 
@@ -62,6 +69,7 @@ export function aggregateAssets(wallets: WalletBalances[], chains: ChainInfo[]):
         // so the balance stays and the value reads zero rather than inventing a
         // price or hiding the row.
         existing.usdValue += balance.usdValue ?? 0;
+        if (balance.unpriced) existing.unpriced = true;
         continue;
       }
 
@@ -70,6 +78,7 @@ export function aggregateAssets(wallets: WalletBalances[], chains: ChainInfo[]):
         symbol: balance.symbol,
         balance: balance.balance,
         usdValue: balance.usdValue ?? 0,
+        ...(balance.unpriced ? { unpriced: true } : {}),
         chain: wallet.chain,
       });
     }

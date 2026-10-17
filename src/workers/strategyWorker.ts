@@ -14,7 +14,7 @@ import { AIOrchestrator } from "../services/ai.js";
 import { ConfigManager } from "../config.js";
 import type { StrategyContext, StrategyState } from "../types/strategy.js";
 import type { StrategyRunJob } from "../services/queue.js";
-import { walletChainId } from "../services/chains/walletChain.js";
+import { walletChainId, walletDescriptor } from "../services/chains/walletChain.js";
 import { executeApprovedActions } from "../services/strategyEngine.js";
 import { logger } from "../utils/logger.js";
 import { safeValidateStrategyConfig } from "../services/strategy/configValidation.js";
@@ -62,13 +62,13 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
 
   const tokens = await registry.getSwappableTokens(false, chainId);
   const tokenSymbols = tokens.map(t => t.symbol);
-  const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
+  const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId, false, chainId);
   if (balances.length === 0) return;
 
   // Record price history (needed by momentum/mean-reversion/etc.)
   for (const b of balances) {
     if (b.usdValue > 0 && b.balance > 0) {
-      PriceHistoryService.getInstance().record(b.symbol, b.usdValue / b.balance);
+      PriceHistoryService.getInstance().record(chainId, b.symbol, b.usdValue / b.balance);
     }
   }
 
@@ -82,21 +82,25 @@ export async function processStrategyJob(job: Job<StrategyRunJob>): Promise<void
   const config = validation.data as Record<string, unknown>;
 
   // Build quantitative market context for this cycle.
-  const marketContext = await MarketDataService.getInstance().getContext(tokenSymbols).catch(() => undefined);
+  const marketContext = await MarketDataService.getInstance().getContext(tokenSymbols, chainId).catch(() => undefined);
   const featureEngine = FeatureEngine.getInstance();
   const featuresMap = new Map<string, import("../services/quant/featureEngine.js").Features>();
   for (const symbol of tokenSymbols) {
     try {
-      featuresMap.set(symbol, await featureEngine.compute(symbol));
+      featuresMap.set(symbol, await featureEngine.compute(symbol, chainId));
     } catch { }
   }
 
   // Regime gate: determine the primary token for this strategy and suppress if incompatible.
-  const primaryToken = (config.tokenOut ?? config.token ?? tokenSymbols[0] ?? "STX") as string;
+  // DCA and TWAP buy into the chain's stablecoin when tokenOut is unset — the
+  // default the strategies apply themselves — so the gate judges that token.
+  const { nativeSymbol, stableSymbol } = walletDescriptor(wallet);
+  const defaultTokenOut = strategy.type === "dca" || strategy.type === "twap" ? stableSymbol : undefined;
+  const primaryToken = (config.tokenOut ?? config.token ?? defaultTokenOut ?? tokenSymbols[0] ?? nativeSymbol) as string;
   const regimeService = RegimeDetectionService.getInstance();
-  const regimeAllowed = await regimeService.isStrategyAllowed(strategy.type, primaryToken);
+  const regimeAllowed = await regimeService.isStrategyAllowed(strategy.type, primaryToken, chainId);
   if (!regimeAllowed) {
-    const regime = await regimeService.detectRegime(primaryToken);
+    const regime = await regimeService.detectRegime(primaryToken, chainId);
     logger.info("Strategy suppressed by regime gate", { strategyId, strategyType: strategy.type, regime, token: primaryToken });
     await AgentDecisionService.getInstance().record({
       userId,

@@ -1,10 +1,12 @@
 import { PriceHistoryService } from "../priceHistory.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class MomentumStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { config, settings, tokens, balances } = ctx;
+    const { chainId, config, settings, tokens, balances } = ctx;
+    const { nativeSymbol } = chainDescriptor(chainId);
     const lookback = (config.lookbackPeriods as number) ?? 50; // Increased default to 50
     const threshold = (config.momentumThresholdPct as number) ?? 2;
     const positionSize = (config.positionSizeUsd as number) ?? 10;
@@ -24,7 +26,7 @@ export class MomentumStrategy implements Strategy {
 
     // First, compute momentum score and check existing positions for all available tokens
     for (const token of available) {
-      const momentum = await ph.computeMomentum(token.symbol, lookback);
+      const momentum = await ph.computeMomentum(chainId, token.symbol, lookback);
       // Unknown momentum is not a signal in either direction: it is no reason
       // to open a position, and no reason to close one that is already open.
       // Skipping leaves an existing position exactly as it was.
@@ -47,7 +49,7 @@ export class MomentumStrategy implements Strategy {
       if (sig.momentum < exitThreshold) {
         actions.push({
           tokenIn: sig.symbol,
-          tokenOut: "STX",
+          tokenOut: nativeSymbol,
           amountIn: sig.balance,
           direction: "SELL",
           slippageBps,
@@ -67,7 +69,7 @@ export class MomentumStrategy implements Strategy {
         break; // Reached portfolio slot limit
       }
       actions.push({
-        tokenIn: "STX",
+        tokenIn: nativeSymbol,
         tokenOut: candidate.symbol,
         amountIn: positionSize,
         direction: "BUY",

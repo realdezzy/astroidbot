@@ -83,6 +83,30 @@ describe("aggregateAssets", () => {
     expect(assets[0]!.balance).toBe(15);
   });
 
+  // An unpriced token is held but has no valuation. The row keeps its balance
+  // and carries the flag so the page can show a dash rather than "$0.00".
+  it("flags a row unpriced when any wallet's part of it could not be priced", () => {
+    const assets = aggregateAssets(
+      [
+        {
+          id: 1, chain: "base:mainnet", balance: 0, balanceUsd: 0,
+          balances: [{ token: "0xmyst", symbol: "MYST", balance: 1000, usdValue: 0, unpriced: true }],
+        },
+        {
+          id: 2, chain: "base:mainnet", balance: 0, balanceUsd: 0,
+          balances: [
+            { token: "0xmyst", symbol: "MYST", balance: 500, usdValue: 0, unpriced: true },
+            { token: "0xbase", symbol: "USDC", balance: 5, usdValue: 5 },
+          ],
+        },
+      ],
+      chains
+    );
+
+    expect(assets.find((a) => a.symbol === "MYST")).toMatchObject({ balance: 1500, unpriced: true });
+    expect(assets.find((a) => a.symbol === "USDC")).not.toHaveProperty("unpriced");
+  });
+
   it("falls back to the chain's native symbol for a wallet with no balance list", () => {
     // A wallet whose per-token balances have not loaded still has a native
     // balance worth showing, and the symbol has to come from the descriptor —

@@ -162,16 +162,27 @@ export class StrategyController {
         include: { wallet: { select: { chain: true, chainFamily: true } } },
       });
 
-      // No invented STX price. This was `getTokenPrice("STX") || 2.0` with a
-      // 2.0 initialiser behind it, so a failed lookup — or a genuine zero —
-      // valued every STX leg at two dollars and reported the result as P&L.
-      // STX has not been worth $2 for most of this repository's history.
-      let stxPrice: number | null = null;
-      try {
-        stxPrice = await DEXRegistry.getInstance().getTokenPrice("STX");
-      } catch {
-        // Leave it null: unpriced, not two dollars.
+      // Legs without a USD value recorded at execution are priced live, on
+      // the trade's own chain. This used to look up STX alone, unscoped, and
+      // count every other unrecorded leg's raw token amount as dollars — one
+      // ETH booked as one dollar. An unpriceable leg stays null, never a guess:
+      // the old `getTokenPrice("STX") || 2.0` reported a made-up STX price as P&L.
+      const registry = DEXRegistry.getInstance();
+      const legKey = (chain: string, symbol: string): string => `${chain}:${symbol}`;
+      const unrecordedLegs = new Map<string, { chain: string; symbol: string }>();
+      for (const t of trades) {
+        if (t.status !== "CONFIRMED") continue;
+        const chain = t.chain ?? walletChainId(t.wallet);
+        if (t.amountInUsd === null) unrecordedLegs.set(legKey(chain, t.tokenIn), { chain, symbol: t.tokenIn });
+        if (t.amountOutUsd === null) unrecordedLegs.set(legKey(chain, t.tokenOut), { chain, symbol: t.tokenOut });
       }
+      const livePrices = new Map<string, number | null>();
+      await Promise.all(
+        [...unrecordedLegs].map(async ([key, { chain, symbol }]) => {
+          const price = await registry.getTokenPrice(symbol, chain).catch(() => null);
+          livePrices.set(key, price !== null && price > 0 ? price : null);
+        }),
+      );
 
       // Trades whose USD value was recorded at execution are exact. The rest
       // need a live price, and where that price is a guess the trade is
@@ -183,10 +194,11 @@ export class StrategyController {
       trades.forEach((t) => {
         if (t.status !== "CONFIRMED") return;
 
+        const chain = t.chain ?? walletChainId(t.wallet);
         const legUsd = (recorded: number | null, symbol: string, amount: number): number | null => {
           if (recorded !== null) return recorded;
-          if (symbol !== "STX") return amount;
-          return stxPrice !== null ? amount * stxPrice : null;
+          const price = livePrices.get(legKey(chain, symbol)) ?? null;
+          return price !== null ? amount * price : null;
         };
 
         const amountInUsd = legUsd(t.amountInUsd, t.tokenIn, t.amountIn);
@@ -202,7 +214,7 @@ export class StrategyController {
       });
 
       if (unpricedTrades > 0) {
-        logger.warn("[strategy] P&L excludes trades with no priceable STX leg", {
+        logger.warn("[strategy] P&L excludes trades with an unpriceable leg", {
           strategyId: strategy.id,
           unpricedTrades,
         });

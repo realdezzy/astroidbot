@@ -9,34 +9,45 @@ const boundedSlippageBps = z.coerce.number().int().min(1).max(10_000);
 const token = z.string().trim().min(1).max(128);
 const tokenPair = z.string().trim().regex(/^[^/\s]+\/[^/\s]+$/, "Expected TOKEN/TOKEN pair");
 const csv = z.string().max(2_000).default("");
+// Not z.coerce.boolean(): Boolean("false") is true, so a form or chat client
+// sending the string "false" switched AI *on*. JSON booleans still pass.
+const flag = z.union([
+  z.boolean(),
+  z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1"),
+]);
 
 const baseSchema = z.object({
   walletIds: z.array(z.number().int().positive()).optional(),
 }).passthrough();
 
+// Token legs (tokenIn/tokenOut/tokenPair) are optional with no default. A
+// schema default is persisted when the strategy is created and can only name
+// one chain — these said STX/USDCx, so every Base or Solana strategy saved
+// without explicit tokens was saved unroutable. Strategies fill unset legs
+// from the wallet's chain descriptor at run time instead.
 const schemas: Record<string, z.ZodTypeAny> = {
   portfolio_rebalance: baseSchema.extend({
     rebalanceThreshold: percentage.default(2),
     maxPositionPct: percentage.default(25),
-    useAI: z.coerce.boolean().default(true),
+    useAI: flag.default(true),
     aiRefreshMinutes: positiveInt.max(24 * 60).default(15),
     maxSlippageBps: boundedSlippageBps.default(100),
     tokenUniverse: csv,
     minTradeUsd: positiveNumber.max(1_000_000).default(5),
   }),
   grid: baseSchema.extend({
-    tokenPair: tokenPair.default("STX/USDCx"),
+    tokenPair: tokenPair.optional(),
     levels: positiveInt.min(3).max(50).default(5),
     spreadBps: boundedSlippageBps.default(30),
     maxPositionPct: percentage.default(25),
-    useAI: z.coerce.boolean().default(true),
+    useAI: flag.default(true),
     aiRefreshMinutes: positiveInt.max(24 * 60).default(30),
     gridRangePct: positiveNumber.max(100).default(5),
     totalCapitalUsd: positiveNumber.max(1_000_000).default(50),
   }),
   dca: baseSchema.extend({
-    tokenIn: token.default("STX"),
-    tokenOut: token.default("USDCx"),
+    tokenIn: token.optional(),
+    tokenOut: token.optional(),
     amount: positiveNumber.max(1_000_000).default(1),
     intervalMinutes: positiveInt.max(365 * 24 * 60).default(60),
     priceCondition: z.enum(["always", "below", "above"]).default("always"),
@@ -71,12 +82,12 @@ const schemas: Record<string, z.ZodTypeAny> = {
     maPeriods: positiveInt.max(10_000).default(20),
     entryDeviationPct: positiveNumber.max(10_000).default(5),
     exitDeviationPct: nonNegativeNumber.max(10_000).default(1),
-    tokenPair: tokenPair.default("STX/USDCx"),
+    tokenPair: tokenPair.optional(),
     positionSizeUsd: positiveNumber.max(1_000_000).default(10),
   }),
   twap: baseSchema.extend({
-    tokenIn: token.default("STX"),
-    tokenOut: token.default("USDCx"),
+    tokenIn: token.optional(),
+    tokenOut: token.optional(),
     totalAmount: positiveNumber.max(1_000_000).default(10),
     slices: positiveInt.max(1_000).default(10),
     windowMinutes: positiveInt.max(365 * 24 * 60).default(60),
@@ -97,7 +108,7 @@ const schemas: Record<string, z.ZodTypeAny> = {
   breakout: baseSchema.extend({
     lookbackPeriods: positiveInt.max(10_000).default(20),
     breakoutPct: positiveNumber.max(10_000).default(3),
-    tokenPair: tokenPair.default("STX/USDCx"),
+    tokenPair: tokenPair.optional(),
     positionSizeUsd: positiveNumber.max(1_000_000).default(10),
   }),
 };

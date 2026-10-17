@@ -50,7 +50,7 @@ describe("quant layer disabled", () => {
   });
 
   it("marks features unavailable rather than returning zeroed readings", async () => {
-    const features = await FeatureEngine.getInstance().compute("STX");
+    const features = await FeatureEngine.getInstance().compute("STX", "stacks:mainnet");
 
     expect(features.available).toBe(false);
     // And costs nothing: no candle read, no price read, per token per tick.
@@ -67,11 +67,11 @@ describe("quant layer disabled", () => {
       }))
     );
 
-    expect((await FeatureEngine.getInstance().compute("STX")).available).toBe(true);
+    expect((await FeatureEngine.getInstance().compute("STX", "stacks:mainnet")).available).toBe(true);
   });
 
   it("fuses unavailable features to a zero-confidence HOLD, not a SELL", async () => {
-    const features = await FeatureEngine.getInstance().compute("STX");
+    const features = await FeatureEngine.getInstance().compute("STX", "stacks:mainnet");
     const forecast = SignalFusionService.getInstance().fuse(1, "STX", features);
 
     // EMA12 === EMA26 in a placeholder set, which the trend sub-system scores
@@ -81,7 +81,7 @@ describe("quant layer disabled", () => {
   });
 
   it("leaves a requested trade size untouched", async () => {
-    const features = await FeatureEngine.getInstance().compute("STX");
+    const features = await FeatureEngine.getInstance().compute("STX", "stacks:mainnet");
     const forecast = SignalFusionService.getInstance().fuse(1, "STX", features);
 
     const size = PortfolioOptimizer.getInstance().optimizeSizing("BUY", 100, features, forecast, 1000, 25);
@@ -90,7 +90,7 @@ describe("quant layer disabled", () => {
   });
 
   it("does not fire an ATR stop computed from a zero ATR", async () => {
-    const features = await FeatureEngine.getInstance().compute("STX");
+    const features = await FeatureEngine.getInstance().compute("STX", "stacks:mainnet");
 
     const decision = ExitPlanner.getInstance().computeAdaptiveStop("STX", 10, 9, 12, features);
 
@@ -108,17 +108,17 @@ describe("quant layer disabled", () => {
   it("lets every deterministic strategy through the regime gate", async () => {
     const regime = RegimeDetectionService.getInstance();
 
-    for (const type of ["grid", "dca", "breakout", "momentum", "meanReversion", "sniper"]) {
-      expect(await regime.isStrategyAllowed(type, "STX")).toBe(true);
+    for (const type of ["grid", "dca", "breakout", "momentum", "mean_reversion", "sniper"]) {
+      expect(await regime.isStrategyAllowed(type, "STX", "stacks:mainnet")).toBe(true);
     }
   });
 
   it("reports the regime as UNKNOWN rather than inventing one", async () => {
-    expect(await RegimeDetectionService.getInstance().detectRegime("STX")).toBe("UNKNOWN");
+    expect(await RegimeDetectionService.getInstance().detectRegime("STX", "stacks:mainnet")).toBe("UNKNOWN");
   });
 
   it("returns an empty market context instead of placeholder snapshots", async () => {
-    const context = await MarketDataService.getInstance().getContext(["STX", "WETH"]);
+    const context = await MarketDataService.getInstance().getContext(["STX", "WETH"], "stacks:mainnet");
 
     // Every consumer reads this map with .get() and already copes with a
     // missing token; none of them can tell a $0 snapshot from a measured one.

@@ -1,25 +1,27 @@
 import { PriceHistoryService } from "../priceHistory.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class BreakoutStrategy implements Strategy {
   async execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]> {
-    const { config, settings, balances } = ctx;
+    const { chainId, config, settings, balances } = ctx;
     const lookback = (config.lookbackPeriods as number) ?? 50; // Increased default to 50
     const breakoutPct = (config.breakoutPct as number) ?? 3;
-    const tokenPair = ((config.tokenPair as string) ?? "STX/USDCx").split("/");
-    const tokenIn = tokenPair[0] ?? "STX";
-    const tokenOut = tokenPair[1] ?? "USDCx";
+    const { nativeSymbol, stableSymbol } = chainDescriptor(chainId);
+    const tokenPair = ((config.tokenPair as string) ?? `${nativeSymbol}/${stableSymbol}`).split("/");
+    const tokenIn = tokenPair[0] ?? nativeSymbol;
+    const tokenOut = tokenPair[1] ?? stableSymbol;
     const positionSize = (config.positionSizeUsd as number) ?? 10;
     const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
 
     const ph = PriceHistoryService.getInstance();
-    const prices = await ph.getHistory(tokenOut, 1);
+    const prices = await ph.getHistory(chainId, tokenOut, 1);
     if (prices.length === 0) return [];
     const currentPrice = prices[0]!;
 
-    const high = await ph.computeHigh(tokenOut, lookback);
-    const low = await ph.computeLow(tokenOut, lookback);
+    const high = await ph.computeHigh(chainId, tokenOut, lookback);
+    const low = await ph.computeLow(chainId, tokenOut, lookback);
     // null is "no history", which is not a breakout in either direction.
     if (high === null || low === null) return [];
 

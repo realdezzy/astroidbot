@@ -279,36 +279,9 @@ export class DatabaseService {
 
     if (amountInUsd === undefined || amountOutUsd === undefined) {
       try {
-        const { DEXRegistry } = await import("./dex/dexRegistry.js");
-        const { findDescriptor } = await import("./chains/descriptors/index.js");
-        const registry = DEXRegistry.getInstance();
-
-        // Scoped to the trade's own chain. Unscoped, a USDC price could come
-        // from whichever provider answered first — a different network's pool
-        // for a same-ticker token, which is the mismatch chainId keys exist to
-        // prevent.
-        const priceIn = await registry.getTokenPrice(data.tokenIn, chain);
-        const priceOut = await registry.getTokenPrice(data.tokenOut, chain);
-
-        // A stablecoin with no quotable price is worth a dollar. Which symbol
-        // that is comes from the chain — "USDCx" on Stacks, "USDC" on Base —
-        // rather than the hardcoded Stacks pair this used to check, under
-        // which every other chain's stable leg was valued at zero.
-        const stable = chain ? findDescriptor(chain)?.stableSymbol : undefined;
-        const isStable = (symbol: string): boolean => {
-          const upper = symbol.toUpperCase();
-          return (
-            (stable !== undefined && upper === stable.toUpperCase()) ||
-            ["USDC", "USDT", "DAI", "USDCX", "USDA"].includes(upper)
-          );
-        };
-
-        if (amountInUsd === undefined) {
-          amountInUsd = data.amountIn * (priceIn || (isStable(data.tokenIn) ? 1 : 0));
-        }
-        if (amountOutUsd === undefined) {
-          amountOutUsd = data.amountOut * (priceOut || (isStable(data.tokenOut) ? 1 : 0));
-        }
+        const priced = await this.priceTradeLegsUsd(data, chain);
+        amountInUsd ??= priced.amountInUsd;
+        amountOutUsd ??= priced.amountOutUsd;
       } catch {
         // ignore errors
       }
@@ -344,6 +317,44 @@ export class DatabaseService {
     return this.prisma.trade.findUnique({ where: { idempotencyKey } });
   }
 
+  /**
+   * USD value of both legs of a trade, priced on the trade's own chain.
+   *
+   * Scoped because, unscoped, a USDC price could come from whichever provider
+   * answered first — a different network's pool for a same-ticker token,
+   * which is the mismatch chainId keys exist to prevent. Throws if pricing
+   * fails; callers treat that as "leave the figures unset".
+   */
+  private async priceTradeLegsUsd(
+    trade: { tokenIn: string; tokenOut: string; amountIn: number; amountOut: number },
+    chain: string | undefined,
+  ): Promise<{ amountInUsd: number; amountOutUsd: number }> {
+    const { DEXRegistry } = await import("./dex/dexRegistry.js");
+    const { findDescriptor } = await import("./chains/descriptors/index.js");
+    const registry = DEXRegistry.getInstance();
+
+    const priceIn = await registry.getTokenPrice(trade.tokenIn, chain);
+    const priceOut = await registry.getTokenPrice(trade.tokenOut, chain);
+
+    // A stablecoin with no quotable price is worth a dollar. Which symbol
+    // that is comes from the chain — "USDCx" on Stacks, "USDC" on Base —
+    // rather than a hardcoded Stacks pair, under which every other chain's
+    // stable leg was valued at zero.
+    const stable = chain ? findDescriptor(chain)?.stableSymbol : undefined;
+    const isStable = (symbol: string): boolean => {
+      const upper = symbol.toUpperCase();
+      return (
+        (stable !== undefined && upper === stable.toUpperCase()) ||
+        ["USDC", "USDT", "DAI", "USDCX", "USDA"].includes(upper)
+      );
+    };
+
+    return {
+      amountInUsd: trade.amountIn * (priceIn || (isStable(trade.tokenIn) ? 1 : 0)),
+      amountOutUsd: trade.amountOut * (priceOut || (isStable(trade.tokenOut) ? 1 : 0)),
+    };
+  }
+
   async updateTradeStatus(
     tradeId: number,
     status: string,
@@ -354,15 +365,20 @@ export class DatabaseService {
     if (status === "CONFIRMED") {
       extraData.confirmedAt = new Date();
       try {
-        const trade = await this.prisma.trade.findUnique({ where: { id: tradeId } });
+        const trade = await this.prisma.trade.findUnique({
+          where: { id: tradeId },
+          include: { wallet: { select: { chain: true, chainFamily: true } } },
+        });
         if (trade && (!trade.amountInUsd || !trade.amountOutUsd)) {
-          const { DEXRegistry } = await import("./dex/dexRegistry.js");
-          const registry = DEXRegistry.getInstance();
-          const priceIn = await registry.getTokenPrice(trade.tokenIn);
-          const priceOut = await registry.getTokenPrice(trade.tokenOut);
-
-          extraData.amountInUsd = trade.amountIn * (priceIn || (trade.tokenIn.toUpperCase() === "USDCX" || trade.tokenIn.toUpperCase() === "USDA" ? 1 : 0));
-          extraData.amountOutUsd = trade.amountOut * (priceOut || (trade.tokenOut.toUpperCase() === "USDCX" || trade.tokenOut.toUpperCase() === "USDA" ? 1 : 0));
+          // Priced on the trade's own chain, as at creation. This was unscoped
+          // and only knew Stacks stables, so an EVM or Solana trade could be
+          // valued off another network's same-ticker pool, or its USDC leg at
+          // zero — and these figures feed the daily-loss limit.
+          const { walletChainId } = await import("./chains/walletChain.js");
+          const chain = trade.chain ?? walletChainId(trade.wallet);
+          const priced = await this.priceTradeLegsUsd(trade, chain);
+          extraData.amountInUsd = priced.amountInUsd;
+          extraData.amountOutUsd = priced.amountOutUsd;
         }
       } catch {
         // ignore errors

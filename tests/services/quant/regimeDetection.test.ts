@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { loadTestConfig } from "../../helpers/config.js";
 import { RegimeDetectionService, STRATEGY_REGIME_GATES } from "../../../src/services/quant/regimeDetection.js";
+import { STRATEGY_TYPES } from "../../../shared/strategies.js";
 
 const mockCompute = vi.fn();
 
@@ -38,61 +39,61 @@ describe("RegimeDetectionService", () => {
 
   it("detects TRENDING_BULL when 7-day return is strongly positive", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.15, return24h: 0.04 }));
-    const regime = await service.detectRegime("STX");
+    const regime = await service.detectRegime("STX", "stacks:mainnet");
     expect(regime).toBe("TRENDING_BULL");
   });
 
   it("detects TRENDING_BEAR when 7-day return is strongly negative", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: -0.12, return24h: -0.05 }));
-    const regime = await service.detectRegime("STX");
+    const regime = await service.detectRegime("STX", "stacks:mainnet");
     expect(regime).toBe("TRENDING_BEAR");
   });
 
   it("detects CAPITULATION on extreme drop + oversold RSI + high volatility", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return24h: -0.15, rsi14: 20, historicalVolatility: 2.0 }));
-    const regime = await service.detectRegime("STX");
+    const regime = await service.detectRegime("STX", "stacks:mainnet");
     expect(regime).toBe("CAPITULATION");
   });
 
   it("detects RANGING_HIGH_VOL when not trending and Bollinger is wide", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.02, bollingerWidth: 0.06 }));
-    const regime = await service.detectRegime("STX");
+    const regime = await service.detectRegime("STX", "stacks:mainnet");
     expect(regime).toBe("RANGING_HIGH_VOL");
   });
 
   it("detects RANGING_LOW_VOL when not trending and Bollinger is narrow", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.01, bollingerWidth: 0.02 }));
-    const regime = await service.detectRegime("STX");
+    const regime = await service.detectRegime("STX", "stacks:mainnet");
     expect(regime).toBe("RANGING_LOW_VOL");
   });
 
   it("returns UNKNOWN when currentPrice is zero", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ currentPrice: 0 }));
-    const regime = await service.detectRegime("GHOST");
+    const regime = await service.detectRegime("GHOST", "stacks:mainnet");
     expect(regime).toBe("UNKNOWN");
   });
 
   it("allows grid strategy in RANGING_LOW_VOL", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.01, bollingerWidth: 0.02 }));
-    const allowed = await service.isStrategyAllowed("grid", "STX");
+    const allowed = await service.isStrategyAllowed("grid", "STX", "stacks:mainnet");
     expect(allowed).toBe(true);
   });
 
   it("suppresses grid strategy in TRENDING_BULL", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.15 }));
-    const allowed = await service.isStrategyAllowed("grid", "STX");
+    const allowed = await service.isStrategyAllowed("grid", "STX", "stacks:mainnet");
     expect(allowed).toBe(false);
   });
 
   it("allows momentum strategy in TRENDING_BULL", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.15 }));
-    const allowed = await service.isStrategyAllowed("momentum", "STX");
+    const allowed = await service.isStrategyAllowed("momentum", "STX", "stacks:mainnet");
     expect(allowed).toBe(true);
   });
 
   it("suppresses momentum strategy in RANGING_LOW_VOL", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.01, bollingerWidth: 0.02 }));
-    const allowed = await service.isStrategyAllowed("momentum", "STX");
+    const allowed = await service.isStrategyAllowed("momentum", "STX", "stacks:mainnet");
     expect(allowed).toBe(false);
   });
 
@@ -108,25 +109,30 @@ describe("RegimeDetectionService", () => {
       mockCompute.mockResolvedValueOnce(features);
       // Reset cache between iterations.
       (service as unknown as { cache: Map<string, unknown> }).cache = new Map();
-      const allowed = await service.isStrategyAllowed("dca", "STX");
+      const allowed = await service.isStrategyAllowed("dca", "STX", "stacks:mainnet");
       expect(allowed).toBe(true);
     }
   });
 
   it("allows unknown strategy types in all regimes (fail-open)", async () => {
     mockCompute.mockResolvedValue(makeFeatures({ return7d: -0.12 }));
-    const allowed = await service.isStrategyAllowed("custom_exotic_strategy", "STX");
+    const allowed = await service.isStrategyAllowed("custom_exotic_strategy", "STX", "stacks:mainnet");
     expect(allowed).toBe(true);
   });
 
-  it("covers all strategy types in STRATEGY_REGIME_GATES", () => {
-    const expectedStrategies = [
-      "dca", "twap", "stopLossTp", "sniper", "copy",
-      "breakout", "momentum", "meanReversion", "rotational",
-      "portfolioRebalance", "grid",
-    ];
-    for (const st of expectedStrategies) {
-      expect(STRATEGY_REGIME_GATES).toHaveProperty(st);
-    }
+  // Checked against the real strategy type list, not a hand-written copy: the
+  // copy used camelCase names, matching the table's keys and neither matching
+  // what strategies are actually typed as, so three gates never applied.
+  it("has a gate keyed by every real strategy type, and no others", () => {
+    expect(Object.keys(STRATEGY_REGIME_GATES).sort()).toEqual([...STRATEGY_TYPES].sort());
+  });
+
+  it("gates the snake_case strategy types it used to miss", async () => {
+    mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.15 })); // TRENDING_BULL
+    expect(await service.isStrategyAllowed("mean_reversion", "STX", "stacks:mainnet")).toBe(false);
+
+    (service as unknown as { cache: Map<string, unknown> }).cache = new Map();
+    mockCompute.mockResolvedValue(makeFeatures({ return7d: 0.01, bollingerWidth: 0.02 })); // RANGING_LOW_VOL
+    expect(await service.isStrategyAllowed("mean_reversion", "STX", "stacks:mainnet")).toBe(true);
   });
 });

@@ -90,7 +90,7 @@ describe("RotationalStrategy", () => {
    * about. Null has to be excluded from the ranking, not ranked at zero.
    */
   it("excludes tokens with no momentum history rather than ranking them at zero", async () => {
-    mockComputeMomentum.mockImplementation((symbol: string) => {
+    mockComputeMomentum.mockImplementation((_chainId: string, symbol: string) => {
       if (symbol === "ALEX") return null; // no recorded history
       if (symbol === "DIKO") return -5.0; // real, and negative
       if (symbol === "WELSH") return -2.0; // real, and less negative

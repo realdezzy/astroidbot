@@ -95,4 +95,19 @@ describe("DEXRegistry chain scoping", () => {
     // falling back to an unrelated chain's DEX.
     await expect(registry.getBestQuote("USDC", "WETH", 1, "solana")).resolves.toBeNull();
   });
+
+  it("scopes trading pairs, so a grid is never seeded with another chain's pair", () => {
+    (DEXRegistry as unknown as { instance?: DEXRegistry }).instance = undefined;
+    const scoped = DEXRegistry.getInstance();
+    const withPairs = (name: string, family: string | undefined, contractId: string) => ({
+      ...makeProvider(name, family, [], 1),
+      getTradingPairs: () => [{ contractId, tokenX: `${name}-X`, tokenY: `${name}-Y` }],
+    }) as unknown as DEXProvider;
+    scoped.registerProvider(withPairs("StacksDex", undefined, "SP123.pool"));
+    scoped.registerProvider(withPairs("EvmDex", "evm", "0xpool"));
+
+    expect(scoped.getTradingPairs().map((p) => p.contractId).sort()).toEqual(["0xpool", "SP123.pool"]);
+    expect(scoped.getTradingPairs("evm").map((p) => p.contractId)).toEqual(["0xpool"]);
+    expect(scoped.getTradingPairs("stacks:mainnet").map((p) => p.contractId)).toEqual(["SP123.pool"]);
+  });
 });

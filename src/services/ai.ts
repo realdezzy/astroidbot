@@ -260,7 +260,7 @@ export class AIOrchestrator {
             const chainId = walletChainId(wallet);
             const nativeSymbol = walletNativeSymbol(wallet);
             const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, chainId);
-            const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId);
+            const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, userId, false, chainId);
             const total = balances.reduce((s, b) => s + b.usdValue, 0);
             grandTotal += total;
 

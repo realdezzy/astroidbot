@@ -64,7 +64,14 @@ export interface TokenBalance {
   token: string;
   symbol: string;
   balance: number;
+  /** 0 when unpriced — check `unpriced` before reading it as a valuation. */
   usdValue: number;
+  /**
+   * True when no price could be found, so `usdValue` is 0 by absence rather
+   * than by measurement. Unpriced balances were valued at a flat $1 per unit,
+   * which fed position sizing as though it had been observed.
+   */
+  unpriced?: boolean;
 }
 
 export interface SwapRoute {

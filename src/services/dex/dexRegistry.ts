@@ -242,11 +242,13 @@ export class DEXRegistry {
   }
 
   /**
-   * Returns the union of LP trading pairs across all providers that expose them.
+   * Returns the union of LP trading pairs across all providers that expose them,
+   * narrowed to one chain when a scope is given.
    */
-  getTradingPairs(): TradingPair[] {
+  getTradingPairs(chainScope?: string): TradingPair[] {
     const seen = new Map<string, TradingPair>();
-    for (const provider of this.providers) {
+    const candidates = chainScope ? this.getProvidersForChain(chainScope) : this.providers;
+    for (const provider of candidates) {
       if (provider.getTradingPairs) {
         for (const p of provider.getTradingPairs()) {
           seen.set(p.contractId, p);

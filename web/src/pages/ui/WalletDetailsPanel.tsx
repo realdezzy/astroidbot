@@ -81,7 +81,7 @@ export function WalletDetailsPanel({
   const selectedToken = transferToken ?? nativeSymbol;
 
   const { data: balances = [], isLoading: isBalancesLoading } = useQuery<
-    Array<{ token: string; symbol: string; balance: number; usdValue: number }>
+    Array<{ token: string; symbol: string; balance: number; usdValue: number; unpriced?: boolean }>
   >({
     queryKey: ["wallet-balances", wallet.id],
     queryFn: () => apiFetch(`/me/wallets/${wallet.id}/balances`),
@@ -191,8 +191,10 @@ export function WalletDetailsPanel({
                     <p className="font-bold text-title-text text-sm">
                       {b.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}
                     </p>
-                    <p className="text-xs text-muted-text font-medium mt-0.5">
-                      ${b.usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <p className="text-xs text-muted-text font-medium mt-0.5" title={b.unpriced ? "No price available" : undefined}>
+                      {b.unpriced
+                        ? "—"
+                        : `$${b.usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                     </p>
                   </div>
                 </div>

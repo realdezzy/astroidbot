@@ -108,6 +108,16 @@ export class RiskManager {
       );
       const currentUsdValue = tokenOutBalance?.usdValue ?? 0;
       const tokenInPrice = this.usdPrice(tokenInBalance);
+
+      // Fail closed. With no price for what is being spent, the size of the
+      // buy is unknown and the position cap below would compare against zero
+      // and pass. That was masked while unpriced balances were valued at $1.
+      if (tokenInPrice <= 0) {
+        return {
+          approved: false,
+          reason: `Cannot value ${action.tokenIn} to check the position limit`,
+        };
+      }
       const newUsdValue = currentUsdValue + action.amountIn * tokenInPrice;
       const newPct = (newUsdValue / totalValue) * 100;
 

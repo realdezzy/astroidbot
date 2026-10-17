@@ -3,6 +3,7 @@ import { DatabaseService } from "../db.js";
 import { PortfolioManager } from "../portfolio.js";
 import { PriceHistoryService } from "../priceHistory.js";
 import { RiskManager } from "../riskManager.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import { logger } from "../../utils/logger.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
@@ -10,7 +11,7 @@ import { Prisma } from "@prisma/client";
 
 export class PortfolioRebalanceStrategy implements Strategy {
   async execute(ctx: StrategyContext, state: StrategyState): Promise<RebalanceAction[]> {
-    const { strategyId, userId, config, balances, settings } = ctx;
+    const { strategyId, userId, chainId, config, balances, settings } = ctx;
     const ai = AIOrchestrator.getInstance();
     const portfolio = PortfolioManager.getInstance();
     const risk = RiskManager.getInstance();
@@ -63,7 +64,7 @@ export class PortfolioRebalanceStrategy implements Strategy {
       const tokenSymbols = filtered.map(b => b.symbol);
       const priceData: Record<string, number[]> = {};
       for (const b of filtered) {
-        const history = await PriceHistoryService.getInstance().getHistory(b.symbol, 7);
+        const history = await PriceHistoryService.getInstance().getHistory(chainId, b.symbol, 7);
         priceData[b.symbol] = history.length >= 2 ? history : [b.usdValue / Math.max(b.balance, 0.001)];
       }
       try {
@@ -95,7 +96,7 @@ export class PortfolioRebalanceStrategy implements Strategy {
 
     if (!targets || targets.length === 0) return [];
 
-    const actions = portfolio.computeRebalanceActions(filtered, targets, threshold);
+    const actions = portfolio.computeRebalanceActions(filtered, targets, threshold, chainDescriptor(chainId).nativeSymbol);
     const { approved } = await risk.evaluateActions(userId, actions, filtered, {
       slippageBps: maxSlippage,
       maxPositionPct: settings.maxPositionPct,

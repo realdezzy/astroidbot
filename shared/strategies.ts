@@ -5,6 +5,11 @@ export const STRATEGY_TYPES = [
   "momentum", "mean_reversion", "twap", "stop_loss_tp", "rotational", "breakout",
 ] as const;
 
+// Token legs have no defaults here. These defaults pre-fill the create form
+// and are saved with the strategy, and one constant can only name one chain:
+// they said STX/sUSDT, so a Base or Solana strategy created from the form was
+// saved unroutable. Left blank, the strategy fills them from its wallet's
+// chain at run time.
 export const STRATEGY_REGISTRY: StrategyDef[] = [
   {
     type: "portfolio_rebalance",
@@ -25,9 +30,9 @@ export const STRATEGY_REGISTRY: StrategyDef[] = [
     type: "grid",
     label: "Grid Market Making",
     desc: "Buy/sell at fixed price intervals. AI configures spreads.",
-    defaults: { tokenPair: "STX/sUSDT", levels: 5, spreadBps: 30, maxPositionPct: 25, useAI: true, aiRefreshMinutes: 30, gridRangePct: 5, totalCapitalUsd: 50 },
+    defaults: { levels: 5, spreadBps: 30, maxPositionPct: 25, useAI: true, aiRefreshMinutes: 30, gridRangePct: 5, totalCapitalUsd: 50 },
     fields: [
-      { key: "tokenPair", label: "Token Pair (e.g. STX/sUSDT)", type: "text", placeholder: "STX/sUSDT" },
+      { key: "tokenPair", label: "Token Pair (blank = native/stablecoin)", type: "text", placeholder: "e.g. ETH/USDC" },
       { key: "levels", label: "Grid Levels (3-10)", type: "number", placeholder: "5" },
       { key: "spreadBps", label: "Spread (bps per level)", type: "number", placeholder: "30" },
       { key: "maxPositionPct", label: "Max Position (%)", type: "number", placeholder: "25" },
@@ -41,10 +46,10 @@ export const STRATEGY_REGISTRY: StrategyDef[] = [
     type: "dca",
     label: "Dollar Cost Average",
     desc: "Auto-buy fixed amount at regular intervals with price conditions.",
-    defaults: { tokenIn: "STX", tokenOut: "sUSDT", amount: 1, intervalMinutes: 60, priceCondition: "always", priceThresholdUsd: 0, maxSlippageBps: 100, totalBudgetUsd: 0 },
+    defaults: { amount: 1, intervalMinutes: 60, priceCondition: "always", priceThresholdUsd: 0, maxSlippageBps: 100, totalBudgetUsd: 0 },
     fields: [
-      { key: "tokenIn", label: "From Token", type: "text", placeholder: "STX" },
-      { key: "tokenOut", label: "To Token", type: "text", placeholder: "sUSDT" },
+      { key: "tokenIn", label: "From Token (blank = chain's native token)", type: "text", placeholder: "e.g. ETH" },
+      { key: "tokenOut", label: "To Token (blank = chain's stablecoin)", type: "text", placeholder: "e.g. USDC" },
       { key: "amount", label: "Amount per Buy", type: "number", placeholder: "1", step: "0.1" },
       { key: "intervalMinutes", label: "Interval (min)", type: "number", placeholder: "60" },
       { key: "priceCondition", label: "Price Condition (always/below/above)", type: "text", placeholder: "always" },
@@ -60,7 +65,7 @@ export const STRATEGY_REGISTRY: StrategyDef[] = [
     defaults: { watchTokens: "", maxBuyAmount: 1, perTokenCapUsd: 5, maxPriceImpactPct: 5, slippageBps: 100, cooldownMinutes: 60 },
     fields: [
       { key: "watchTokens", label: "Watch Tokens (CSV)", type: "text", placeholder: "ALEX,WELSH" },
-      { key: "maxBuyAmount", label: "Max Buy per Token (STX)", type: "number", placeholder: "1", step: "0.1" },
+      { key: "maxBuyAmount", label: "Max Buy per Token (native token)", type: "number", placeholder: "1", step: "0.1" },
       { key: "perTokenCapUsd", label: "Per-Token Cap ($)", type: "number", placeholder: "5" },
       { key: "maxPriceImpactPct", label: "Max Price Impact (%)", type: "number", placeholder: "5" },
       { key: "slippageBps", label: "Slippage (bps)", type: "number", placeholder: "100" },
@@ -97,12 +102,12 @@ export const STRATEGY_REGISTRY: StrategyDef[] = [
     type: "mean_reversion",
     label: "Mean Reversion",
     desc: "Buy when price deviates below MA, sell when above.",
-    defaults: { maPeriods: 20, entryDeviationPct: 5, exitDeviationPct: 1, tokenPair: "STX/sUSDT", positionSizeUsd: 10 },
+    defaults: { maPeriods: 20, entryDeviationPct: 5, exitDeviationPct: 1, positionSizeUsd: 10 },
     fields: [
       { key: "maPeriods", label: "MA Periods", type: "number", placeholder: "20" },
       { key: "entryDeviationPct", label: "Entry Deviation (%)", type: "number", placeholder: "5" },
       { key: "exitDeviationPct", label: "Exit Deviation (%)", type: "number", placeholder: "1" },
-      { key: "tokenPair", label: "Token Pair", type: "text", placeholder: "STX/sUSDT" },
+      { key: "tokenPair", label: "Token Pair (blank = native/stablecoin)", type: "text", placeholder: "e.g. ETH/USDC" },
       { key: "positionSizeUsd", label: "Position Size ($)", type: "number", placeholder: "10" },
     ],
   },
@@ -110,10 +115,10 @@ export const STRATEGY_REGISTRY: StrategyDef[] = [
     type: "twap",
     label: "TWAP (Time-Weighted)",
     desc: "Split large order into equal slices over a time window.",
-    defaults: { tokenIn: "STX", tokenOut: "sUSDT", totalAmount: 10, slices: 10, windowMinutes: 60, maxSlippageBps: 100 },
+    defaults: { totalAmount: 10, slices: 10, windowMinutes: 60, maxSlippageBps: 100 },
     fields: [
-      { key: "tokenIn", label: "From Token", type: "text", placeholder: "STX" },
-      { key: "tokenOut", label: "To Token", type: "text", placeholder: "sUSDT" },
+      { key: "tokenIn", label: "From Token (blank = chain's native token)", type: "text", placeholder: "e.g. ETH" },
+      { key: "tokenOut", label: "To Token (blank = chain's stablecoin)", type: "text", placeholder: "e.g. USDC" },
       { key: "totalAmount", label: "Total Amount", type: "number", placeholder: "10" },
       { key: "slices", label: "Slices", type: "number", placeholder: "10" },
       { key: "windowMinutes", label: "Window (min)", type: "number", placeholder: "60" },
@@ -148,11 +153,11 @@ export const STRATEGY_REGISTRY: StrategyDef[] = [
     type: "breakout",
     label: "Range Breakout",
     desc: "Buy on breakout above resistance, sell on breakdown.",
-    defaults: { lookbackPeriods: 20, breakoutPct: 3, tokenPair: "STX/sUSDT", positionSizeUsd: 10 },
+    defaults: { lookbackPeriods: 20, breakoutPct: 3, positionSizeUsd: 10 },
     fields: [
       { key: "lookbackPeriods", label: "Lookback Periods", type: "number", placeholder: "20" },
       { key: "breakoutPct", label: "Breakout Threshold (%)", type: "number", placeholder: "3" },
-      { key: "tokenPair", label: "Token Pair", type: "text", placeholder: "STX/sUSDT" },
+      { key: "tokenPair", label: "Token Pair (blank = native/stablecoin)", type: "text", placeholder: "e.g. ETH/USDC" },
       { key: "positionSizeUsd", label: "Position Size ($)", type: "number", placeholder: "10" },
     ],
   },

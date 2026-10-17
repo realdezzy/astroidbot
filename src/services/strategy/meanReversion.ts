@@ -1,26 +1,28 @@
 import { PriceHistoryService } from "../priceHistory.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class MeanReversionStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { config, settings, balances } = ctx;
+    const { chainId, config, settings, balances } = ctx;
     const maPeriods = (config.maPeriods as number) ?? 50; // Increased default to 50
     const entryDeviation = (config.entryDeviationPct as number) ?? 5;
     const exitDeviation = (config.exitDeviationPct as number) ?? 1;
-    const tokenPair = ((config.tokenPair as string) ?? "STX/USDCx").split("/");
-    const tokenIn = tokenPair[0] ?? "STX";
-    const tokenOut = tokenPair[1] ?? "USDCx";
+    const { nativeSymbol, stableSymbol } = chainDescriptor(chainId);
+    const tokenPair = ((config.tokenPair as string) ?? `${nativeSymbol}/${stableSymbol}`).split("/");
+    const tokenIn = tokenPair[0] ?? nativeSymbol;
+    const tokenOut = tokenPair[1] ?? stableSymbol;
     const positionSize = (config.positionSizeUsd as number) ?? 10;
     const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
     const enableTrendFilter = config.enableTrendFilter !== false;
 
     const ph = PriceHistoryService.getInstance();
-    const price = await ph.getHistory(tokenOut, 1);
+    const price = await ph.getHistory(chainId, tokenOut, 1);
     if (price.length === 0) return [];
 
     const currentPrice = price[0]!;
-    const ma = await ph.computeMovingAverage(tokenOut, maPeriods);
+    const ma = await ph.computeMovingAverage(chainId, tokenOut, maPeriods);
     // No history means no mean, and without a mean there is nothing to revert to.
     if (ma === null) return [];
 
@@ -28,7 +30,7 @@ export class MeanReversionStrategy implements Strategy {
 
     // Trend filter: long-term moving average to avoid catching falling knives
     if (enableTrendFilter) {
-      const longMa = await ph.computeMovingAverage(tokenOut, maPeriods * 3);
+      const longMa = await ph.computeMovingAverage(chainId, tokenOut, maPeriods * 3);
       // A filter that cannot be evaluated must not silently pass. If the long
       // window has no data the downtrend check is unanswerable, and the
       // knife this filter exists to avoid catching is exactly what a cold

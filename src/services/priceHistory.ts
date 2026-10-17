@@ -20,8 +20,19 @@ export class PriceHistoryService {
     return PriceHistoryService.instance;
   }
 
-  async record(token: string, price: number): Promise<void> {
-    const key = `pricehistory:${token.toUpperCase()}`;
+  /**
+   * Series are keyed by chain as well as symbol. They were keyed by symbol
+   * alone, so ETH observed by a Base wallet and ETH observed by a Robinhood
+   * wallet — or any two same-ticker tokens on different chains — were
+   * interleaved into one series, and every indicator below was computed over
+   * prices from more than one market.
+   */
+  private key(chainId: string, token: string): string {
+    return `pricehistory:${chainId}:${token.toUpperCase()}`;
+  }
+
+  async record(chainId: string, token: string, price: number): Promise<void> {
+    const key = this.key(chainId, token);
     const point: PricePoint = { timestamp: Date.now(), price };
 
     // In-memory ring buffer
@@ -45,8 +56,8 @@ export class PriceHistoryService {
    * indicator below is computed from this series, and those indicators size
    * real trades — so an empty series has to read as empty.
    */
-  async getHistory(token: string, periods: number): Promise<number[]> {
-    const key = `pricehistory:${token.toUpperCase()}`;
+  async getHistory(chainId: string, token: string, periods: number): Promise<number[]> {
+    const key = this.key(chainId, token);
     let points = this.memory.get(key);
 
     // Fall back to Redis
@@ -58,7 +69,7 @@ export class PriceHistoryService {
           points = JSON.parse(cached);
           this.memory.set(key, points!);
         } catch {
-          logger.warn("[priceHistory] discarding unparseable cached series", { token });
+          logger.warn("[priceHistory] discarding unparseable cached series", { chainId, token });
         }
       }
     }
@@ -83,8 +94,8 @@ export class PriceHistoryService {
    * preferentially bought what it knew nothing about in exactly the market
    * where that is most expensive.
    */
-  async computeVolatility(token: string, periods: number): Promise<number | null> {
-    const prices = await this.getHistory(token, periods);
+  async computeVolatility(chainId: string, token: string, periods: number): Promise<number | null> {
+    const prices = await this.getHistory(chainId, token, periods);
     if (prices.length < 2) return null;
 
     const returns: number[] = [];
@@ -98,28 +109,28 @@ export class PriceHistoryService {
   }
 
   /** Percent change across the window, or null if there is nothing to compare. */
-  async computeMomentum(token: string, lookback: number): Promise<number | null> {
-    const prices = await this.getHistory(token, lookback);
+  async computeMomentum(chainId: string, token: string, lookback: number): Promise<number | null> {
+    const prices = await this.getHistory(chainId, token, lookback);
     if (prices.length < 2) return null;
     const first = prices[0]!;
     const last = prices[prices.length - 1]!;
     return ((last - first) / first) * 100;
   }
 
-  async computeMovingAverage(token: string, periods: number): Promise<number | null> {
-    const prices = await this.getHistory(token, periods);
+  async computeMovingAverage(chainId: string, token: string, periods: number): Promise<number | null> {
+    const prices = await this.getHistory(chainId, token, periods);
     if (prices.length === 0) return null;
     return prices.reduce((s, p) => s + p, 0) / prices.length;
   }
 
-  async computeHigh(token: string, periods: number): Promise<number | null> {
-    const prices = await this.getHistory(token, periods);
+  async computeHigh(chainId: string, token: string, periods: number): Promise<number | null> {
+    const prices = await this.getHistory(chainId, token, periods);
     if (prices.length === 0) return null;
     return Math.max(...prices);
   }
 
-  async computeLow(token: string, periods: number): Promise<number | null> {
-    const prices = await this.getHistory(token, periods);
+  async computeLow(chainId: string, token: string, periods: number): Promise<number | null> {
+    const prices = await this.getHistory(chainId, token, periods);
     if (prices.length === 0) return null;
     return Math.min(...prices);
   }

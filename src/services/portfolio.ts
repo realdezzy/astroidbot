@@ -9,7 +9,6 @@ import { publicClientFor } from "./chains/evm/evmClient.js";
 import { hasMulticall3, multicallRead } from "./chains/evm/multicall.js";
 import { familyOfChainId } from "../types/chain.js";
 import { ChainAdapterRegistry } from "./chains/chainAdapterRegistry.js";
-import { DEFAULT_CHAIN_FOR_FAMILY } from "./chains/descriptors/index.js";
 import type {
   PortfolioTarget,
   RebalanceAction,
@@ -25,10 +24,6 @@ interface StacksBalance {
   };
   fungible_tokens: Record<string, { balance: string }>;
 }
-
-// Base58, 32-44 chars. Stacks principals are also base58-ish but always start
-// with S, which is why the sniffing fallback excludes them explicitly.
-const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export class PortfolioManager {
   private static instance: PortfolioManager;
@@ -46,6 +41,33 @@ export class PortfolioManager {
   }
 
   /**
+   * A balance valued at `price`, or flagged `unpriced` with a usdValue of 0.
+   *
+   * Every chain's path values through here so they cannot drift apart again:
+   * the EVM and Stacks token paths substituted $1 per unit for a missing
+   * price, while the native and Solana paths used 0, and the $1 fed
+   * RiskManager position sizing as though it had been observed.
+   */
+  private valued(
+    entry: { token: string; symbol: string; balance: number },
+    price: number | null | undefined
+  ): TokenBalance {
+    if (price === null || price === undefined || !(price > 0)) {
+      return { ...entry, usdValue: 0, unpriced: true };
+    }
+    return { ...entry, usdValue: entry.balance * price };
+  }
+
+  /**
+   * Dust is a balance known to be worth almost nothing. An unpriced balance
+   * is not known to be worth anything in particular, so it is never dust —
+   * filtering it would hide a real holding of unknown value.
+   */
+  private isDust(balance: TokenBalance, ignoreDust: boolean): boolean {
+    return !ignoreDust && !balance.unpriced && balance.usdValue < this.dustThresholdUsd;
+  }
+
+  /**
    * Native SOL plus SPL token balances.
    *
    * Uses getParsedTokenAccountsByOwner rather than one RPC call per mint: a
@@ -56,11 +78,11 @@ export class PortfolioManager {
     address: string,
     swappableTokens: SwappableToken[],
     ignoreDust: boolean,
-    userId?: number,
-    chainId?: string
+    userId: number | undefined,
+    chainId: string
   ): Promise<TokenBalance[]> {
     const registry = DEXRegistry.getInstance();
-    const scope = chainId ?? DEFAULT_CHAIN_FOR_FAMILY.svm!;
+    const scope = chainId;
     const adapters = ChainAdapterRegistry.getInstance();
 
     if (!adapters.has(scope)) {
@@ -100,11 +122,8 @@ export class PortfolioManager {
         // No invented fallback price: this figure feeds RiskManager position
         // sizing, and a guessed price is worse than an unpriced balance.
         const solPrice = await registry.getTokenPrice("SOL", scope).catch(() => null);
-        // Unpriced contributes nothing rather than a guess, per the note above.
-        const usdValue = solBalance * (solPrice ?? 0);
-        if (ignoreDust || usdValue >= this.dustThresholdUsd) {
-          balances.push({ token: "SOL", symbol: "SOL", balance: solBalance, usdValue });
-        }
+        const sol = this.valued({ token: "SOL", symbol: "SOL", balance: solBalance }, solPrice);
+        if (!this.isDust(sol, ignoreDust)) balances.push(sol);
       }
 
       const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -135,11 +154,8 @@ export class PortfolioManager {
         const known = bySymbol.get(mint);
         const symbol = known?.symbol ?? mint;
         const price = await registry.getTokenPrice(symbol, scope).catch(() => null);
-        const usdValue = amount * (price ?? 0);
-
-        if (!ignoreDust && usdValue < this.dustThresholdUsd) continue;
-
-        balances.push({ token: mint, symbol, balance: amount, usdValue });
+        const spl = this.valued({ token: mint, symbol, balance: amount }, price);
+        if (!this.isDust(spl, ignoreDust)) balances.push(spl);
       }
     } catch (err) {
       logger.warn("Failed to fetch Solana balances", {
@@ -165,11 +181,11 @@ export class PortfolioManager {
     address: string,
     swappableTokens: SwappableToken[],
     ignoreDust: boolean,
-    userId?: number,
-    chainId?: string
+    userId: number | undefined,
+    chainId: string
   ): Promise<TokenBalance[]> {
     const registryOfChains = ChainAdapterRegistry.getInstance();
-    const resolvedChainId = chainId ?? DEFAULT_CHAIN_FOR_FAMILY.evm!;
+    const resolvedChainId = chainId;
 
     if (!registryOfChains.has(resolvedChainId)) {
       logger.warn("Cannot read EVM balances for a chain that is not enabled", {
@@ -200,7 +216,7 @@ export class PortfolioManager {
     const blockedTokens = ConfigManager.getInstance().blockedTokens;
 
     let nativeBalance = 0;
-    let nativePrice = 0;
+    let nativePrice: number | null = null;
     try {
       const rawBalance = await client.getBalance({ address: address as `0x${string}` });
       // formatUnits, not Number(raw)/1e18 — a wei value above 2^53 loses
@@ -209,7 +225,7 @@ export class PortfolioManager {
       // Scoped to this ChainId, not the bare "evm" family. A family scope
       // matches every EVM DEX on every EVM chain, so a Celo wallet's CELO
       // could be priced by a Base router that has never heard of it.
-      nativePrice = (await registry.getTokenPrice(descriptor.nativeSymbol, resolvedChainId)) ?? 0;
+      nativePrice = await registry.getTokenPrice(descriptor.nativeSymbol, resolvedChainId);
     } catch (err) {
       logger.warn("Failed to fetch native balance", {
         address,
@@ -221,18 +237,11 @@ export class PortfolioManager {
 
     const balances: TokenBalance[] = [];
     if (nativeBalance > 0) {
-      // usdValue is 0 when no on-chain price was available. Left uninvented
-      // rather than defaulted to a guessed price, because this figure feeds
-      // RiskManager position sizing.
-      const usdValue = nativeBalance * nativePrice;
-      if (ignoreDust || usdValue >= this.dustThresholdUsd) {
-        balances.push({
-          token: descriptor.nativeSymbol,
-          symbol: descriptor.nativeSymbol,
-          balance: nativeBalance,
-          usdValue,
-        });
-      }
+      const native = this.valued(
+        { token: descriptor.nativeSymbol, symbol: descriptor.nativeSymbol, balance: nativeBalance },
+        nativePrice
+      );
+      if (!this.isDust(native, ignoreDust)) balances.push(native);
     }
 
     // Scoped to this chain, not to the EVM family. Filtering by family alone
@@ -287,19 +296,13 @@ export class PortfolioManager {
       held.map(async ({ token, balance }) => {
         const tokenPrice = await registry
           .getTokenPrice(token.symbol, resolvedChainId)
-          .catch(() => 0);
-        return { token, balance, usdValue: balance * (tokenPrice || 1.0) };
+          .catch(() => null);
+        return this.valued({ token: token.contractId, symbol: token.symbol, balance }, tokenPrice);
       })
     );
 
     for (const entry of priced) {
-      if (!ignoreDust && entry.usdValue < this.dustThresholdUsd) continue;
-      balances.push({
-        token: entry.token.contractId,
-        symbol: entry.token.symbol,
-        balance: entry.balance,
-        usdValue: entry.usdValue,
-      });
+      if (!this.isDust(entry, ignoreDust)) balances.push(entry);
     }
 
     return balances;
@@ -308,21 +311,15 @@ export class PortfolioManager {
   async fetchBalances(
     address: string,
     swappableTokens: SwappableToken[],
-    userId?: number,
-    ignoreDust: boolean = false,
-    chainId?: string
+    userId: number | undefined,
+    ignoreDust: boolean,
+    chainId: string
   ): Promise<TokenBalance[]> {
-    // Prefer the caller's chainId. Address-shape sniffing was workable with two
-    // families but does not survive three: a Solana address is base58 like a
-    // Stacks principal, so shape alone can no longer tell them apart. The
-    // sniffing fallback stays for callers that haven't been threaded through.
-    const family = chainId
-      ? familyOfChainId(chainId) ?? (chainId.startsWith("stacks") ? "stacks" : "evm")
-      : address.startsWith("0x") && address.length === 42
-        ? "evm"
-        : SOLANA_ADDRESS_RE.test(address) && !address.startsWith("S")
-          ? "svm"
-          : "stacks";
+    // The chain is required, not sniffed from the address. Address shape cannot
+    // tell a Solana address from a Stacks principal, nor one EVM chain from
+    // another: an omitted chainId used to fall back to Base, so a Robinhood or
+    // Celo wallet had its balances read off Base and showed believable zeros.
+    const family = familyOfChainId(chainId) ?? (chainId.startsWith("stacks") ? "stacks" : "evm");
 
     if (family === "evm") {
       // chainId is passed through rather than dropped. It was resolved above
@@ -388,19 +385,17 @@ export class PortfolioManager {
 
     try {
       const registry = DEXRegistry.getInstance();
-      const stxPrice = await registry.getTokenPrice("STX");
+      // Scoped: this is the Stacks path, and an unscoped lookup could answer
+      // with any chain's same-ticker token.
+      const scope = chainId;
+      const stxPrice = await registry.getTokenPrice("STX", scope).catch(() => null);
 
       const stxBalance =
         parseInt(data.stx.balance, 10) / 1_000_000;
-      balances.push({
-        token: "STX",
-        symbol: "STX",
-        balance: stxBalance,
-        // Unpriced contributes nothing, matching the EVM and Solana paths
-        // above. This substituted a flat $2.00 for an unavailable STX price,
-        // which then fed RiskManager position sizing as though measured.
-        usdValue: stxBalance * (stxPrice ?? 0),
-      });
+      // Pushed regardless of dust, as before. This substituted a flat $2.00
+      // for an unavailable STX price, which then fed RiskManager position
+      // sizing as though measured.
+      balances.push(this.valued({ token: "STX", symbol: "STX", balance: stxBalance }, stxPrice));
 
       const tokenMap = new Map(
         swappableTokens.map((t) => [t.contractId, t])
@@ -432,17 +427,11 @@ export class PortfolioManager {
 
         if (balance <= 0) continue;
 
-        const tokenPrice = await registry.getTokenPrice(token.symbol);
-        const usdValue = balance * (tokenPrice || 1.0);
-
-        if (!ignoreDust && usdValue < this.dustThresholdUsd) continue;
-
-        balances.push({
-          token: token.contractId,
-          symbol: token.symbol,
-          balance,
-          usdValue,
-        });
+        // Caught per token: one unpriceable token used to throw out of the
+        // loop and fail the whole wallet's balance read.
+        const tokenPrice = await registry.getTokenPrice(token.symbol, scope).catch(() => null);
+        const ft = this.valued({ token: token.contractId, symbol: token.symbol, balance }, tokenPrice);
+        if (!this.isDust(ft, ignoreDust)) balances.push(ft);
       }
     } catch (error) {
       logger.error("Failed to process fetched balances", { address, error });
@@ -455,9 +444,10 @@ export class PortfolioManager {
   computeRebalanceActions(
     currentBalances: TokenBalance[],
     targets: PortfolioTarget[],
-    rebalanceThreshold: number
+    rebalanceThreshold: number,
+    nativeSymbol: string
   ): RebalanceAction[] {
-    const actions = runRebalance(currentBalances, targets, rebalanceThreshold);
+    const actions = runRebalance(currentBalances, targets, rebalanceThreshold, nativeSymbol);
 
     const totalValue = currentBalances.reduce((sum, b) => sum + b.usdValue, 0);
     logger.info("Rebalance actions computed", {
@@ -469,12 +459,24 @@ export class PortfolioManager {
   }
 }
 
+/**
+ * Trades that move a portfolio toward target weights, funded from and settled
+ * into `nativeSymbol` — the wallet chain's native asset. That was "STX" here,
+ * so a rebalance on any other chain looked for a balance it could not hold.
+ *
+ * Unpriced balances take no part. Their weight cannot be measured: one always
+ * reads as 0%, so a target above that would buy it again on every cycle
+ * without the position ever appearing to grow.
+ */
 export function runRebalance(
-  currentBalances: TokenBalance[],
+  allBalances: TokenBalance[],
   targets: PortfolioTarget[],
-  rebalanceThreshold: number
+  rebalanceThreshold: number,
+  nativeSymbol: string
 ): RebalanceAction[] {
   const actions: RebalanceAction[] = [];
+  const currentBalances = allBalances.filter((b) => !b.unpriced);
+  const unpricedSymbols = new Set(allBalances.filter((b) => b.unpriced).map((b) => b.symbol));
   const totalValue = currentBalances.reduce((sum, b) => sum + b.usdValue, 0);
 
   if (totalValue <= 0) return actions;
@@ -485,6 +487,7 @@ export function runRebalance(
   }
 
   for (const target of targets) {
+    if (unpricedSymbols.has(target.token)) continue;
     const currentWeight = currentWeights.get(target.token) ?? 0;
     const deviation = target.targetWeight - currentWeight;
     const absDeviation = Math.abs(deviation);
@@ -496,24 +499,24 @@ export function runRebalance(
       const currentValue = currentWeight * totalValue;
       const buyAmount = targetValue - currentValue;
 
-      const stxBalance = currentBalances.find((b) => b.symbol === "STX");
-      const stxValue = stxBalance?.usdValue ?? 0;
+      const nativeBalance = currentBalances.find((b) => b.symbol === nativeSymbol);
+      const nativeValue = nativeBalance?.usdValue ?? 0;
 
-      if (stxValue < buyAmount) continue;
+      if (nativeValue < buyAmount) continue;
 
       // Derived from the balance we are holding, which is a real observation.
       // The fallback here was a flat 2.0, and this price is the divisor that
-      // decides how much STX to spend — so a wrong one does not fail, it
-      // silently sizes the trade wrong.
-      if (!stxBalance || stxBalance.balance <= 0) continue;
-      const stxPrice = stxBalance.usdValue / stxBalance.balance;
-      if (!Number.isFinite(stxPrice) || stxPrice <= 0) continue;
-      const stxToSpend = buyAmount / stxPrice;
+      // decides how much of the native asset to spend — so a wrong one does
+      // not fail, it silently sizes the trade wrong.
+      if (!nativeBalance || nativeBalance.balance <= 0) continue;
+      const nativePrice = nativeBalance.usdValue / nativeBalance.balance;
+      if (!Number.isFinite(nativePrice) || nativePrice <= 0) continue;
+      const nativeToSpend = buyAmount / nativePrice;
 
       actions.push({
-        tokenIn: "STX",
+        tokenIn: nativeSymbol,
         tokenOut: target.token,
-        amountIn: stxToSpend,
+        amountIn: nativeToSpend,
         direction: "BUY",
         reason: `Underweight ${target.token} by ${(absDeviation * 100).toFixed(1)}%`,
       });
@@ -522,7 +525,7 @@ export function runRebalance(
       const targetValue = target.targetWeight * totalValue;
       const sellAmount = currentValue - targetValue;
 
-      if (target.token === "STX") continue;
+      if (target.token === nativeSymbol) continue;
 
       const tokenBalance = currentBalances.find(
         (b) => b.symbol === target.token
@@ -534,7 +537,7 @@ export function runRebalance(
 
       actions.push({
         tokenIn: target.token,
-        tokenOut: "STX",
+        tokenOut: nativeSymbol,
         amountIn: Math.min(sellUnits, tokenBalance.balance),
         direction: "SELL",
         reason: `Overweight ${target.token} by ${(absDeviation * 100).toFixed(1)}%`,

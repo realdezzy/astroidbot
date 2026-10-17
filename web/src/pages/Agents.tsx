@@ -105,6 +105,9 @@ function AgentStrategies({ agentId, wallets }: {
   const handleCreate = () => {
     const parsed: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(config)) {
+      // A blank field means "unset", not 0: `Number("")` is 0, which turned a
+      // cleared token field into the number 0 and failed validation.
+      if (typeof v === "string" && v.trim() === "") continue;
       const num = Number(v);
       parsed[k] = isNaN(num) ? v : num;
     }

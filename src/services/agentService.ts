@@ -106,7 +106,7 @@ export class AgentService {
           const chainId = walletChainId(w);
           try {
             const nativeSymbol = walletNativeSymbol(w);
-            const balances = await pm.fetchBalances(w.address, tokensByChain.get(chainId) ?? [], agent.userId);
+            const balances = await pm.fetchBalances(w.address, tokensByChain.get(chainId) ?? [], agent.userId, false, chainId);
             const nativeBal = balances.find((b) => b.symbol === nativeSymbol)?.balance ?? 0;
             if (nativeBal !== w.balance) {
               await db.updateWalletBalance(w.id, nativeBal);
@@ -184,14 +184,17 @@ export class AgentService {
     const ai = AIOrchestrator.getInstance();
     const db = DatabaseService.getInstance();
 
-    const nativeSymbols = new Set<string>();
+    // Each native asset is priced on a chain that holds it. Unscoped, "ETH"
+    // could be answered by any provider that lists a token by that ticker.
+    const nativeSymbols = new Map<string, string>();
     for (const w of wallets) {
-      nativeSymbols.add(walletNativeSymbol(w));
+      const symbol = walletNativeSymbol(w);
+      if (!nativeSymbols.has(symbol)) nativeSymbols.set(symbol, walletChainId(w));
     }
     const nativePrices: Record<string, number> = {};
-    for (const symbol of nativeSymbols) {
+    for (const [symbol, chainId] of nativeSymbols) {
       try {
-        const price = await DEXRegistry.getInstance().getTokenPrice(symbol);
+        const price = await DEXRegistry.getInstance().getTokenPrice(symbol, chainId);
         // Absent from the map rather than present as 0 — a reader can tell
         // "we could not price this" from "this is worthless" only if the
         // unpriceable case leaves no entry behind.
@@ -241,7 +244,7 @@ export class AgentService {
         };
 
         const tokens = await DEXRegistry.getInstance().getSwappableTokens(false, walletChainId(wallet));
-        const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId);
+        const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, agent.userId, false, walletChainId(wallet));
 
           const riskSettings = {
             slippageBps: settings?.slippageBps ?? 100,

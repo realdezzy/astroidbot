@@ -29,7 +29,14 @@ export function walletChainId(wallet: ChainBearing): ChainId {
  * disabled, it just needs sensible labels.
  */
 export function walletDescriptor(wallet: ChainBearing): ChainDescriptor {
-  const chainId = walletChainId(wallet);
+  return chainDescriptor(walletChainId(wallet));
+}
+
+/**
+ * The descriptor for a ChainId already in hand — a strategy context, a job
+ * payload. Same fallback order as `walletDescriptor`, and likewise never throws.
+ */
+export function chainDescriptor(chainId: ChainId): ChainDescriptor {
   const registry = ChainAdapterRegistry.getInstance();
 
   if (registry.has(chainId)) return registry.get(chainId).descriptor;

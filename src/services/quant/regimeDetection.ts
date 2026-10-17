@@ -1,29 +1,35 @@
 import type { MarketRegime } from "../../types/market.js";
+import type { StrategyType } from "../../../shared/types.js";
 import { FeatureEngine } from "./featureEngine.js";
 import { isQuantEnabled } from "./quantMode.js";
 import { logger } from "../../utils/logger.js";
 
 // Market regime determines which strategies are allowed to execute.
 // Strategies that are not compatible with the current regime are suppressed.
-export const STRATEGY_REGIME_GATES: Record<string, MarketRegime[]> = {
-  dca:               ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
-  twap:              ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
-  stopLossTp:        ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "CAPITULATION", "UNKNOWN"],
-  sniper:            ["TRENDING_BULL", "RANGING_LOW_VOL", "UNKNOWN"],
-  copy:              ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
-  breakout:          ["TRENDING_BULL", "TRENDING_BEAR"],
-  momentum:          ["TRENDING_BULL", "TRENDING_BEAR"],
-  meanReversion:     ["RANGING_HIGH_VOL", "RANGING_LOW_VOL"],
-  rotational:        ["TRENDING_BULL", "RANGING_LOW_VOL"],
-  portfolioRebalance:["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
-  grid:              ["RANGING_HIGH_VOL", "RANGING_LOW_VOL"],
+//
+// Keyed by StrategyType so a key that matches no strategy fails to compile.
+// It used to be a plain string record with camelCase keys (`meanReversion`,
+// `stopLossTp`, `portfolioRebalance`) while strategies are typed in snake_case,
+// so those three lookups missed and fell through to "always allowed".
+export const STRATEGY_REGIME_GATES: Record<StrategyType, MarketRegime[]> = {
+  dca:                 ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
+  twap:                ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
+  stop_loss_tp:        ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "CAPITULATION", "UNKNOWN"],
+  sniper:              ["TRENDING_BULL", "RANGING_LOW_VOL", "UNKNOWN"],
+  copy:                ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
+  breakout:            ["TRENDING_BULL", "TRENDING_BEAR"],
+  momentum:            ["TRENDING_BULL", "TRENDING_BEAR"],
+  mean_reversion:      ["RANGING_HIGH_VOL", "RANGING_LOW_VOL"],
+  rotational:          ["TRENDING_BULL", "RANGING_LOW_VOL"],
+  portfolio_rebalance: ["TRENDING_BULL", "TRENDING_BEAR", "RANGING_HIGH_VOL", "RANGING_LOW_VOL", "UNKNOWN"],
+  grid:                ["RANGING_HIGH_VOL", "RANGING_LOW_VOL"],
 };
 
 export class RegimeDetectionService {
   private static instance: RegimeDetectionService;
   private featureEngine = FeatureEngine.getInstance();
 
-  // Cached regime per token, with a TTL of 5 minutes.
+  // Cached regime per (chain, token), with a TTL of 5 minutes.
   private cache: Map<string, { regime: MarketRegime; expiresAt: number }> = new Map();
   private readonly cacheTtlMs = 5 * 60 * 1000;
 
@@ -36,32 +42,33 @@ export class RegimeDetectionService {
     return RegimeDetectionService.instance;
   }
 
-  async detectRegime(token: string): Promise<MarketRegime> {
-    const cached = this.cache.get(token);
+  async detectRegime(token: string, chainId: string): Promise<MarketRegime> {
+    const key = `${chainId}:${token}`;
+    const cached = this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.regime;
     }
 
     try {
-      const features = await this.featureEngine.compute(token);
+      const features = await this.featureEngine.compute(token, chainId);
 
       // No data — cannot classify. `available` covers the case the price check
       // cannot see: a token we can price perfectly well but have no candle
       // history for, whose zeroed returns would classify as a calm range.
       if (!features.available || features.currentPrice === 0) {
-        return this.cache_(token, "UNKNOWN");
+        return this.cache_(key, "UNKNOWN");
       }
 
       const regime = this.classify(features);
-      return this.cache_(token, regime);
+      return this.cache_(key, regime);
     } catch (err) {
-      logger.warn("[RegimeDetection] Classification failed", { token, error: err });
+      logger.warn("[RegimeDetection] Classification failed", { token, chainId, error: err });
       return "UNKNOWN";
     }
   }
 
   // Returns true if the given strategy type is allowed to execute in the current token's regime.
-  async isStrategyAllowed(strategyType: string, token: string): Promise<boolean> {
+  async isStrategyAllowed(strategyType: string, token: string, chainId: string): Promise<boolean> {
     // With the quant layer off there is no regime to gate on, and this must
     // fail *open*. Returning UNKNOWN instead would silently retire every
     // strategy whose gate omits it — grid, breakout, momentum and mean
@@ -69,11 +76,11 @@ export class RegimeDetectionService {
     // "stop trading", and it would look exactly like a strategy bug.
     if (!isQuantEnabled()) return true;
 
-    const allowed = STRATEGY_REGIME_GATES[strategyType];
+    const allowed = STRATEGY_REGIME_GATES[strategyType as StrategyType] as MarketRegime[] | undefined;
     // Unknown strategy types are always allowed (fail-open for custom strategies).
     if (!allowed) return true;
 
-    const regime = await this.detectRegime(token);
+    const regime = await this.detectRegime(token, chainId);
     return allowed.includes(regime);
   }
 
@@ -104,8 +111,8 @@ export class RegimeDetectionService {
     return "RANGING_LOW_VOL";
   }
 
-  private cache_(token: string, regime: MarketRegime): MarketRegime {
-    this.cache.set(token, { regime, expiresAt: Date.now() + this.cacheTtlMs });
+  private cache_(key: string, regime: MarketRegime): MarketRegime {
+    this.cache.set(key, { regime, expiresAt: Date.now() + this.cacheTtlMs });
     return regime;
   }
 }

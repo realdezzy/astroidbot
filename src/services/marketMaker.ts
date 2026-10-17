@@ -8,6 +8,8 @@ import type { RebalanceAction, TokenBalance } from "../types.js";
 
 export class MarketMakerService {
   private static instance: MarketMakerService;
+  // Keyed `chainId|pair`: the same pair on two chains is two markets, and a
+  // Stacks mid must never stand in for a Base one.
   private lastMidPrices: Map<string, number> = new Map();
 
   private constructor() {}
@@ -23,7 +25,7 @@ export class MarketMakerService {
     userId: number,
     walletId: number,
     balances: TokenBalance[],
-    chainId?: string
+    chainId: string
   ): Promise<RebalanceAction[]> {
     const db = DatabaseService.getInstance();
     const registry = DEXRegistry.getInstance();
@@ -41,7 +43,7 @@ export class MarketMakerService {
     const grids = await db.findGridsByWallet(walletId);
 
     if (grids.length === 0) {
-      const pairs = registry.getTradingPairs();
+      const pairs = registry.getTradingPairs(chainId);
 
       if (pairs.length > 0) {
         const pair = pairs[0]!;
@@ -63,7 +65,7 @@ export class MarketMakerService {
           });
 
           this.lastMidPrices.set(
-            `${pair.tokenX} / ${pair.tokenY}`,
+            `${chainId}|${pair.tokenX} / ${pair.tokenY}`,
             gridConfig.midPrice
           );
         } catch (err) {
@@ -78,7 +80,7 @@ export class MarketMakerService {
       const [tokenA, tokenB] = grid.tokenPair.split("/").map((s) => s.trim());
       if (!tokenA || !tokenB) continue;
 
-      const route = await registry.getBestQuote(tokenA, tokenB, 0.001).catch(() => null);
+      const route = await registry.getBestQuote(tokenA, tokenB, 0.001, chainId).catch(() => null);
 
       if (!route) {
         logger.warn("No swap route found for grid pair", {
@@ -87,14 +89,14 @@ export class MarketMakerService {
         continue;
       }
 
-      const priceA = await registry.getTokenPrice(tokenA);
-      const priceB = await registry.getTokenPrice(tokenB);
+      const priceA = await registry.getTokenPrice(tokenA, chainId);
+      const priceB = await registry.getTokenPrice(tokenB, chainId);
 
       // Falling back to a mid price of 1.0 placed a full grid of real orders
       // around a number that was never a price of anything. The last known mid
       // is a real observation and is still worth using; in its absence there is
       // nothing to quote around, so the pair is skipped this cycle.
-      const lastKnownMid = this.lastMidPrices.get(grid.tokenPair);
+      const lastKnownMid = this.lastMidPrices.get(`${chainId}|${grid.tokenPair}`);
       const currentMidPrice =
         priceA && priceB ? priceA / priceB : lastKnownMid;
 
@@ -114,7 +116,7 @@ export class MarketMakerService {
       // Caching: only call AI to refresh grid config if older than 30 minutes
       const ageMs = Date.now() - new Date(grid.lastUpdated).getTime();
       if (ageMs > 30 * 60 * 1000) {
-        const volatility = await this.computeVolatility(tokenA, tokenB);
+        const volatility = await this.computeVolatility(chainId, tokenA, tokenB);
         // Asking the model to size spreads from a volatility we invented is
         // worse than not re-sizing them. The grid keeps the configuration it
         // already has until there is history to justify changing it — the
@@ -179,7 +181,7 @@ export class MarketMakerService {
         }
       }
 
-      this.lastMidPrices.set(grid.tokenPair, currentMidPrice);
+      this.lastMidPrices.set(`${chainId}|${grid.tokenPair}`, currentMidPrice);
       logger.debug("Market maker tick complete", {
         pair: grid.tokenPair,
         midPrice: currentMidPrice,
@@ -201,12 +203,13 @@ export class MarketMakerService {
    * neither is not.
    */
   private async computeVolatility(
+    chainId: string,
     tokenA: string,
     tokenB: string
   ): Promise<number | null> {
     const ph = PriceHistoryService.getInstance();
-    const volA = await ph.computeVolatility(tokenA, 30).catch(() => null);
-    const volB = await ph.computeVolatility(tokenB, 30).catch(() => null);
+    const volA = await ph.computeVolatility(chainId, tokenA, 30).catch(() => null);
+    const volB = await ph.computeVolatility(chainId, tokenB, 30).catch(() => null);
 
     const known = [volA, volB].filter((v): v is number => v !== null);
     if (known.length === 0) return null;

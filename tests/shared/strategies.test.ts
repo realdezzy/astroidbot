@@ -33,4 +33,15 @@ describe("Shared strategies definition", () => {
       expect(defaults).toEqual(def.defaults);
     }
   });
+
+  // These defaults are saved with every strategy created from the form, so a
+  // token default names one chain for all of them. They said STX/sUSDT, and
+  // every Base or Solana strategy built from the form was saved unroutable.
+  it("pre-fills no token legs, so the wallet's chain supplies them", () => {
+    for (const def of STRATEGY_REGISTRY) {
+      for (const key of ["tokenIn", "tokenOut", "tokenPair"]) {
+        expect(def.defaults, `${def.type}.${key}`).not.toHaveProperty(key);
+      }
+    }
+  });
 });

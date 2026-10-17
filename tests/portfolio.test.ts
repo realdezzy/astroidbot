@@ -31,7 +31,7 @@ describe("PortfolioManager", () => {
         { token: "xUSD", targetWeight: 0.25 },
         { token: "DIKO", targetWeight: 0.25 },
       ];
-      const actions = runRebalance(baseBalances, targets, 2.0);
+      const actions = runRebalance(baseBalances, targets, 2.0, "STX");
       expect(actions).toHaveLength(0);
     });
 
@@ -41,7 +41,7 @@ describe("PortfolioManager", () => {
         { token: "xUSD", targetWeight: 0.6 },
         { token: "DIKO", targetWeight: 0.1 },
       ];
-      const actions = runRebalance(baseBalances, targets, 2.0);
+      const actions = runRebalance(baseBalances, targets, 2.0, "STX");
       const buys = actions.filter((a) => a.direction === "BUY");
       expect(buys.length).toBeGreaterThan(0);
     });
@@ -52,7 +52,7 @@ describe("PortfolioManager", () => {
         { token: "xUSD", targetWeight: 0.1 },
         { token: "DIKO", targetWeight: 0.3 },
       ];
-      const actions = runRebalance(baseBalances, targets, 2.0);
+      const actions = runRebalance(baseBalances, targets, 2.0, "STX");
       const sells = actions.filter((a) => a.direction === "SELL");
       expect(sells.length).toBeGreaterThan(0);
     });
@@ -63,10 +63,10 @@ describe("PortfolioManager", () => {
         { token: "xUSD", targetWeight: 0.245 },
         { token: "DIKO", targetWeight: 0.25 },
       ];
-      const actionsLow = runRebalance(baseBalances, targets, 5.0);
+      const actionsLow = runRebalance(baseBalances, targets, 5.0, "STX");
       expect(actionsLow).toHaveLength(0);
 
-      const actionsHigh = runRebalance(baseBalances, targets, 0.5);
+      const actionsHigh = runRebalance(baseBalances, targets, 0.5, "STX");
       expect(actionsHigh.length).toBeGreaterThan(0);
     });
 
@@ -76,7 +76,7 @@ describe("PortfolioManager", () => {
         { token: "xUSD", targetWeight: 0.45 },
         { token: "DIKO", targetWeight: 0.45 },
       ];
-      const actions = runRebalance(baseBalances, targets, 1.0);
+      const actions = runRebalance(baseBalances, targets, 1.0, "STX");
       const stxSells = actions.filter(
         (a) => a.tokenIn === "STX" && a.direction === "SELL"
       );
@@ -92,7 +92,7 @@ describe("PortfolioManager", () => {
         { token: "STX", targetWeight: 0.5 },
         { token: "DIKO", targetWeight: 0.5 },
       ];
-      const actions = runRebalance(balances, targets, 1.0);
+      const actions = runRebalance(balances, targets, 1.0, "STX");
       const sells = actions.filter((a) => a.direction === "SELL");
       expect(sells.length).toBeGreaterThan(0);
       expect(sells[0]?.tokenIn).toBe("DIKO");
@@ -102,7 +102,8 @@ describe("PortfolioManager", () => {
       const actions = runRebalance(
         [],
         [{ token: "STX", targetWeight: 1.0 }],
-        2.0
+        2.0,
+        "STX"
       );
       expect(actions).toHaveLength(0);
     });
@@ -114,9 +115,45 @@ describe("PortfolioManager", () => {
       const actions = runRebalance(
         zeroBalances,
         [{ token: "STX", targetWeight: 1.0 }],
-        2.0
+        2.0,
+        "STX"
       );
       expect(actions).toHaveLength(0);
+    });
+  });
+
+  describe("Rebalance on other chains and with unpriced balances", () => {
+    it("funds and settles in the chain's native asset, not STX", () => {
+      const balances: TokenBalance[] = [
+        { token: "ETH", symbol: "ETH", balance: 1, usdValue: 3000 },
+        { token: "0xaero", symbol: "AERO", balance: 1000, usdValue: 1000 },
+      ];
+      const actions = runRebalance(
+        balances,
+        [{ token: "ETH", targetWeight: 0.5 }, { token: "AERO", targetWeight: 0.5 }],
+        1.0,
+        "ETH"
+      );
+      expect(actions).toEqual([
+        expect.objectContaining({ tokenIn: "ETH", tokenOut: "AERO", direction: "BUY" }),
+      ]);
+      expect(actions[0]!.amountIn).toBeCloseTo(1000 / 3000, 6);
+    });
+
+    // An unpriced holding always reads as 0% weight. Targeted, it would be
+    // bought again every cycle with the position never appearing to grow.
+    it("never targets an unpriced balance", () => {
+      const balances: TokenBalance[] = [
+        { token: "STX", symbol: "STX", balance: 500, usdValue: 1000 },
+        { token: "MYST", symbol: "MYST", balance: 1_000, usdValue: 0, unpriced: true },
+      ];
+      const actions = runRebalance(
+        balances,
+        [{ token: "STX", targetWeight: 0.5 }, { token: "MYST", targetWeight: 0.5 }],
+        1.0,
+        "STX"
+      );
+      expect(actions.filter((a) => a.tokenOut === "MYST" || a.tokenIn === "MYST")).toEqual([]);
     });
   });
 

@@ -1,6 +1,8 @@
 import axios from "axios";
 import { ConfigManager } from "../../config.js";
 import { DatabaseService } from "../db.js";
+import { chainDescriptor } from "../chains/walletChain.js";
+import { logger } from "../../utils/logger.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
@@ -14,7 +16,7 @@ const KNOWN_DEX_DEPLOYERS = [
 
 export class CopyStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, config, settings, tokens } = ctx;
+    const { userId, walletId, chainId, config, settings, tokens } = ctx;
     const targetAddress = (config.targetAddress as string) ?? "";
     const maxPerTrade = (config.maxPerTrade as number) ?? 10;
     const maxCopies = (config.maxCopiesPerCycle as number) ?? 3;
@@ -23,6 +25,14 @@ export class CopyStrategy implements Strategy {
     const slippageBps = (config.slippageBps as number) ?? settings.slippageBps;
 
     if (!targetAddress) return [];
+
+    // The target's history comes from Hiro and its legs are Stacks contract
+    // ids, so the copied trades only route from a Stacks wallet. On any other
+    // chain this would mirror a Stacks trader into orders that cannot route.
+    if (chainDescriptor(chainId).family !== "stacks") {
+      logger.warn("Copy strategy only supports Stacks wallets; skipping", { userId, walletId, chainId });
+      return [];
+    }
 
     try {
       const stacksApi = ConfigManager.getInstance().config.STACKS_API_URL;

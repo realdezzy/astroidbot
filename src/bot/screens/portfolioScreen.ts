@@ -59,7 +59,9 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
     const balances = await pm.fetchBalances(
       wallet.address,
       tokensByChain.get(walletChainId(wallet)) ?? [],
-      user.id
+      user.id,
+      false,
+      walletChainId(wallet)
     );
     const total = balances.reduce((s, b) => s + b.usdValue, 0);
     grandTotal += total;
@@ -73,7 +75,9 @@ export async function portfolioScreen(ctx: BotContext): Promise<void> {
       allLines.push("  _No tokens_");
     } else {
       for (const b of balances.slice(0, 6)) {
-        allLines.push(`  ${escapeMd(b.symbol)}  ${b.balance.toFixed(2)}  $${b.usdValue.toFixed(2)}`);
+        // An unpriced holding shows a dash, not "$0.00": zero is a valuation.
+        const value = b.unpriced ? "—" : `$${b.usdValue.toFixed(2)}`;
+        allLines.push(`  ${escapeMd(b.symbol)}  ${b.balance.toFixed(2)}  ${value}`);
       }
       if (balances.length > 6) {
         allLines.push(`  _...and ${balances.length - 6} more_`);

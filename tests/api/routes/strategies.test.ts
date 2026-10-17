@@ -5,6 +5,7 @@ import { createServer } from "../../../src/api/server.js";
 import { ConfigManager } from "../../../src/config.js";
 import type { Server } from "node:http";
 import { JWT_ALGORITHM, JWT_ISSUER } from "../../../src/api/jwtOptions.js";
+import { DEXRegistry } from "../../../src/services/dex/dexRegistry.js";
 
 const mockDbInstance = {
   healthCheck: vi.fn().mockResolvedValue(true),
@@ -20,6 +21,9 @@ const mockDbInstance = {
       findUnique: vi.fn(),
     },
     wallet: {
+      findMany: vi.fn(),
+    },
+    trade: {
       findMany: vi.fn(),
     },
   },
@@ -179,5 +183,34 @@ describe("Strategies Routes Integration Tests", () => {
       });
 
     expect(res.status).toBe(422);
+  });
+
+  // Legs without a recorded USD value are priced live on the trade's chain.
+  // Every non-STX leg used to be counted at its raw token amount, so selling
+  // 0.01 ETH for 30 USDC on Base read as a $0.01 sale.
+  it("GET /api/me/strategies/:id/detail prices unrecorded legs on the trade's chain", async () => {
+    mockDbInstance.prisma.tradingStrategy.findUnique.mockResolvedValue({
+      id: 1, userId: 10, type: "dca", config: { walletIds: [2] }, isActive: true,
+    });
+    mockDbInstance.prisma.trade.findMany.mockResolvedValue([
+      {
+        id: 7, status: "CONFIRMED", direction: "SELL", chain: "base:mainnet",
+        tokenIn: "ETH", tokenOut: "WETH", amountIn: 0.01, amountOut: 0.01,
+        amountInUsd: null, amountOutUsd: null, txId: "0xabc",
+        wallet: { chain: "base:mainnet", chainFamily: "evm" },
+      },
+    ]);
+    const getTokenPrice = vi
+      .spyOn(DEXRegistry.getInstance(), "getTokenPrice")
+      .mockImplementation(async (symbol: string) => (symbol === "WETH" ? 3000 : null));
+
+    const res = await request(server)
+      .get("/api/me/strategies/1/detail")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(getTokenPrice).toHaveBeenCalledWith("WETH", "base:mainnet");
+    expect(res.body.pnl).toBeCloseTo(30);
+    getTokenPrice.mockRestore();
   });
 });

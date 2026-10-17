@@ -1,11 +1,12 @@
 import { DatabaseService } from "../db.js";
 import { DEXRegistry } from "../dex/dexRegistry.js";
+import { chainDescriptor } from "../chains/walletChain.js";
 import type { RebalanceAction } from "../../types.js";
 import type { Strategy, StrategyContext, StrategyState } from "../../types/strategy.js";
 
 export class SniperStrategy implements Strategy {
   async execute(ctx: StrategyContext, _state: StrategyState): Promise<RebalanceAction[]> {
-    const { userId, walletId, config, settings, tokens } = ctx;
+    const { userId, walletId, chainId, config, settings, tokens } = ctx;
     const watchTokens = ((config.watchTokens as string) ?? "")
       .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
     const maxBuyAmount = (config.maxBuyAmount as number) ?? 1;
@@ -18,8 +19,12 @@ export class SniperStrategy implements Strategy {
 
     if (watchTokens.length === 0) return [];
 
+    // Buys are paid in the wallet's native asset, and every lookup is held to
+    // the wallet's chain: an unscoped list let a same-ticker token on another
+    // chain match the watchlist and pass the ceiling at that chain's price.
+    const { nativeSymbol } = chainDescriptor(chainId);
     const registry = DEXRegistry.getInstance();
-    const freshTokens = await registry.getSwappableTokens();
+    const freshTokens = await registry.getSwappableTokens(false, chainId);
     const db = DatabaseService.getInstance();
     const actions: RebalanceAction[] = [];
 
@@ -31,7 +36,7 @@ export class SniperStrategy implements Strategy {
 
       // Gate: price ceiling check using a live quote before committing
       if (maxBuyPriceUsd > 0) {
-        const currentPrice = await registry.getTokenPrice(token.symbol).catch(() => null);
+        const currentPrice = await registry.getTokenPrice(token.symbol, chainId).catch(() => null);
         // A ceiling that cannot be checked is not a ceiling that passed. This
         // read `currentPrice > 0 && ...`, so an unpriceable token skipped the
         // gate entirely and was bought at whatever it cost.
@@ -58,12 +63,12 @@ export class SniperStrategy implements Strategy {
       }
 
       // Critical fix: quote the actual buy amount, not a test probe, so impact check is real.
-      const quote = await registry.getBestQuote("STX", token.symbol, buyAmount).catch(() => null);
+      const quote = await registry.getBestQuote(nativeSymbol, token.symbol, buyAmount, chainId).catch(() => null);
       if (!quote || quote.quote.amountOut <= 0) continue;
       if (quote.quote.priceImpact > maxImpact) continue;
 
       actions.push({
-        tokenIn: "STX", tokenOut: token.symbol,
+        tokenIn: nativeSymbol, tokenOut: token.symbol,
         amountIn: buyAmount,
         direction: "BUY",
         slippageBps,

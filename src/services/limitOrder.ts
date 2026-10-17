@@ -71,7 +71,7 @@ export class LimitOrderService {
       }
     }
 
-    const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, data.userId);
+    const balances = await PortfolioManager.getInstance().fetchBalances(wallet.address, tokens, data.userId, false, chainId);
     const tokenBalanceObj = balances.find(b =>
       b.symbol.toUpperCase() === data.tokenIn.toUpperCase() || b.token === data.tokenIn
     );

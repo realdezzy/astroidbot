@@ -188,4 +188,25 @@ describe("RiskManager unit tests", () => {
     expect(result.reason).toContain("Unable to verify");
   });
 
+
+  // With no price for what is being spent, the buy's size is unknown and the
+  // position cap would compare against zero and pass. That was hidden while
+  // unpriced balances were valued at a flat $1 per unit.
+  it("refuses a buy paid with a token it cannot value", async () => {
+    const withUnpriced: TokenBalance[] = [
+      ...balances,
+      { token: "MYST", symbol: "MYST", balance: 1_000_000, usdValue: 0, unpriced: true },
+    ];
+    const action: RebalanceAction = {
+      tokenIn: "MYST",
+      tokenOut: "sUSDT",
+      amountIn: 500_000,
+      direction: "BUY",
+      reason: "test",
+    };
+    const result = await manager.evaluateTrade(1, action, withUnpriced, settings);
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe("Cannot value MYST to check the position limit");
+  });
 });
+
