@@ -32,7 +32,8 @@
   --color-icon-surface: var(--icon-surface);
   --color-data-track: var(--data-track);
 
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, Cambria, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", "Geist Mono", monospace;
 }
 
@@ -82,7 +83,7 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   color: var(--text-title);
-  @apply transition-colors duration-300;
+  @apply font-display transition-colors duration-300;
 }
 html[data-telegram="true"] body {
   background: var(--tg-bg-color, #080b12);
