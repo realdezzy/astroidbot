@@ -407,10 +407,11 @@ describe("TokenDiscoveryService", () => {
       await service.discover({});
       const where = mockToken.findMany.mock.calls[0]![0].where;
       expect(where.OR).toEqual([
-        { liquidityUsd: null },
         { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },
         // A token that traded stays listed whatever its measured depth says.
         { volume24h: { gt: 0 } },
+        // Unknown depth is allowed with a price, but not an all-null row.
+        { AND: [{ liquidityUsd: null }, { priceUsd: { not: null } }] },
       ]);
     });
 
@@ -418,8 +419,10 @@ describe("TokenDiscoveryService", () => {
       await service.discover({});
       const where = mockToken.findMany.mock.calls[0]![0].where;
       // Absent means "not yet measured"; excluding it would hide every
-      // freshly-synced token.
-      expect(where.OR).toContainEqual({ liquidityUsd: null });
+      // freshly-synced token that has a price but no depth reading yet.
+      expect(where.OR).toContainEqual({
+        AND: [{ liquidityUsd: null }, { priceUsd: { not: null } }],
+      });
     });
 
     it("can be asked for illiquid tokens explicitly", async () => {
@@ -483,10 +486,13 @@ describe("TokenDiscoveryService", () => {
       ]);
     });
 
-    it("handles category new filter with date threshold", async () => {
+    it("orders the newest category by pair creation, without a date cutoff", async () => {
+      // A seven-day window made the tab empty when the newest readable pool
+      // was older, or when the provider had not supplied a date. Newest-first
+      // over the catalogue still answers the same question.
       await service.discover({ category: "new" });
       const where = mockToken.findMany.mock.calls[0]![0].where;
-      expect(where.pairCreatedAt).toHaveProperty("gte");
+      expect(where.pairCreatedAt).toBeUndefined();
       expect(mockToken.findMany.mock.calls[0]![0].orderBy).toEqual([
         { pairCreatedAt: { sort: "desc", nulls: "last" } },
       ]);

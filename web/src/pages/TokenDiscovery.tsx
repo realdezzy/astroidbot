@@ -45,7 +45,7 @@ interface DiscoverResponse {
 const CATEGORIES = [
   { id: "trending", label: "Trending", icon: Flame },
   { id: "gainers", label: "Gainers", icon: TrendingUp },
-  { id: "new", label: "New", icon: Sparkles },
+  { id: "new", label: "Newest", icon: Sparkles },
   // Not a ranking like the others: this tab swaps the asset class, showing the
   // curated tokenized-stock list instead of crypto tokens.
   { id: "stocks", label: "Stocks", icon: Landmark },
@@ -374,7 +374,7 @@ export function TokenDiscovery() {
       </div>
 
       <p className="mt-2 text-xs text-muted-text">
-        {data?.total ?? 0} tokens indexed across supported chains.
+        {data?.total ?? 0} tokens matching the current filters.
       </p>
     </div>
   );

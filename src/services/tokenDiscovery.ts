@@ -349,6 +349,7 @@ export class TokenDiscoveryService {
       decimals: number;
       routable: boolean;
       metricsUpdatedAt: Date | null;
+      pairCreatedAt?: Date | null;
     }
 
     // Newest catalogue rows first. Ordering by volume pinned the same old
@@ -362,6 +363,7 @@ export class TokenDiscoveryService {
         name: true,
         decimals: true,
         metricsUpdatedAt: true,
+        pairCreatedAt: true,
       },
       orderBy: [
         { pairCreatedAt: { sort: "desc", nulls: "last" } },
@@ -397,6 +399,9 @@ export class TokenDiscoveryService {
           decimals: token.decimals ?? 18,
           routable: listedIds.has(token.contractId.toLowerCase()),
           metricsUpdatedAt: null,
+          // Keep the feed's creation time even if the metrics batch omits it:
+          // it is what the Newest ordering sorts on.
+          pairCreatedAt: token.pairCreatedAt,
         });
       }
     }
@@ -502,7 +507,10 @@ export class TokenDiscoveryService {
             ...defined("marketCapUsd", market?.marketCapUsd ?? undefined),
             ...defined("txnsBuys24h", market?.txnsBuys24h ?? undefined),
             ...defined("txnsSells24h", market?.txnsSells24h ?? undefined),
-            ...defined("pairCreatedAt", market?.pairCreatedAt ?? undefined),
+            ...defined(
+              "pairCreatedAt",
+              market?.pairCreatedAt ?? token.pairCreatedAt ?? undefined
+            ),
             ...(confirmed || (external && priceUsd && priceUsd > 0)
               ? { metricsUpdatedAt: now }
               : {}),
@@ -590,9 +598,13 @@ export class TokenDiscoveryService {
     // empty the Stocks tab of exactly the names it is meant to show.
     if (!filters.includeIlliquid && filters.assetClass !== "EQUITY") {
       where.OR = [
-        { liquidityUsd: null },
         { liquidityUsd: { gte: MIN_LIQUIDITY_USD } },
         { volume24h: { gt: 0 } },
+        // Unknown liquidity stays listable, but only when the provider
+        // supplied *some* reading. An all-null row is a catalogue entry whose
+        // metrics aged out, and letting it through is what filled the page
+        // with blank rows after a provider switch.
+        { AND: [{ liquidityUsd: null }, { priceUsd: { not: null } }] },
       ];
     }
     if (filters.query) {
@@ -608,11 +620,12 @@ export class TokenDiscoveryService {
       ];
     }
 
-    if (filters.category === "new") {
-      const sevenDaysAgo = new Date(Date.now() - 7 * 86400 * 1000);
-      where.pairCreatedAt = { gte: sevenDaysAgo };
-    }
-
+    // "new" is an ordering, not a filter. Restricting to the last seven days
+    // made the tab empty whenever the catalogue's newest readable pool was
+    // older than that — and the rows that were hidden were exactly the ones a
+    // fresh provider seed had just added. Newest-first over the whole
+    // catalogue still answers "what launched recently" without making an
+    // arbitrary window decide whether the page has content.
     const sortOption = filters.category === "trending"
       ? "volume"
       : filters.category === "gainers"
