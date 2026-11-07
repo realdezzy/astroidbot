@@ -16,8 +16,8 @@ export const AstroidBadge: React.FC<AstroidBadgeProps> = ({
   icon,
 }) => {
   const variantStyles = {
-    amber: "bg-[#4B4032]/50 text-[#DEA34F] border-[#DEA34F]/30",
-    neutral: "bg-[#2D2B2B] text-[#9A9DA5] border-[#3A393B]",
+    amber: "bg-badge-bg/50 text-brand-500 border-brand-500/30",
+    neutral: "bg-bg-hover text-muted-text border-card-border",
     success: "bg-[#00E676]/10 text-[#00E676] border-[#00E676]/30",
     danger: "bg-[#FF2A4B]/10 text-[#FF2A4B] border-[#FF2A4B]/30",
   };

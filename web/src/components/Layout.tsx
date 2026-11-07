@@ -21,6 +21,7 @@ import {
 import { useAuth } from "../lib/auth";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { AstroidMark } from "./Brand/AstroidMark";
+import { ThemeToggle } from "./ThemeToggle";
 
 const navItems = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -60,7 +61,7 @@ export function Layout() {
       {/* Mobile Top Header */}
       <header className="md:hidden flex items-center justify-between px-6 py-4 bg-sidebar-bg border-b border-sidebar-border transition-colors duration-300">
         <a href="/" className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
             <AstroidMark className="w-5 h-5 text-brand-400" />
           </div>
           <div>
@@ -81,6 +82,7 @@ export function Layout() {
               {isSubscribed ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
             </button>
           )}
+          <ThemeToggle />
           <button
             onClick={() => setMobileOpen(true)}
             className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover hover:bg-input-bg transition-colors"
@@ -94,7 +96,7 @@ export function Layout() {
       <aside className="hidden md:flex w-64 bg-sidebar-bg border-r border-sidebar-border flex-col transition-colors duration-300 shrink-0">
         <div className="p-6 border-b border-sidebar-border flex items-center justify-between">
           <a href="/" className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
               <AstroidMark className="w-5 h-5 text-brand-400" />
             </div>
             <div>
@@ -151,13 +153,16 @@ export function Layout() {
             </div>
           </div>
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
-          >
-            <LogOut className="w-4 h-4" />
-            Logout
-          </button>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-3 py-2 text-sm text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
+            </button>
+            <ThemeToggle />
+          </div>
         </div>
       </aside>
 
@@ -172,7 +177,7 @@ export function Layout() {
           <aside className="relative w-64 max-w-xs bg-sidebar-bg border-r border-sidebar-border flex flex-col z-10 transition-colors duration-300">
             <div className="p-6 border-b border-sidebar-border flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
                   <AstroidMark className="w-5 h-5 text-brand-400" />
                 </div>
                 <div>
@@ -182,7 +187,7 @@ export function Layout() {
               </div>
               <button
                 onClick={() => setMobileOpen(false)}
-                className="p-1.5 text-muted-text hover:text-title-text rounded-lg hover:bg-gray-100/10 transition-colors"
+                className="p-1.5 text-muted-text hover:text-title-text rounded-lg hover:bg-bg-hover transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -199,7 +204,7 @@ export function Layout() {
                     `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
                       isActive
                         ? "bg-brand-500/20 text-brand-400 font-semibold"
-                        : "text-muted-text hover:text-title-text hover:bg-gray-100/10"
+                        : "text-muted-text hover:text-title-text hover:bg-bg-hover"
                     }`
                   }
                 >

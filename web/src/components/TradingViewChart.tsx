@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries } from "lightweight-charts";
+import { useTheme } from "../lib/theme";
 
 export interface CandleData {
   open: number;
@@ -16,13 +17,16 @@ interface TradingViewChartProps {
   theme?: "dark" | "light";
 }
 
-export function TradingViewChart({ candles, timeframe = "5m", theme = "dark" }: TradingViewChartProps) {
+export function TradingViewChart({ candles, timeframe = "5m", theme }: TradingViewChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
+  // Follow the app theme unless a caller explicitly pins one.
+  const { theme: activeTheme } = useTheme();
+  const resolvedTheme = theme ?? activeTheme;
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    const isDark = theme === "dark";
+    const isDark = resolvedTheme === "dark";
     const backgroundColor = "transparent";
     const textColor = isDark ? "#94a3b8" : "#475569";
     const gridColor = isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.05)";
@@ -132,7 +136,7 @@ export function TradingViewChart({ candles, timeframe = "5m", theme = "dark" }: 
       resizeObserver.disconnect();
       chart.remove();
     };
-  }, [candles, timeframe, theme]);
+  }, [candles, timeframe, resolvedTheme]);
 
   return <div ref={chartContainerRef} className="w-full h-full min-h-[380px]" />;
 }

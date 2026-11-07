@@ -15,7 +15,7 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   },
   IDLE: {
     label: "Idle",
-    className: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+    className: "bg-bg-hover text-muted-text border-card-border",
   },
   ERROR: {
     label: "Error",

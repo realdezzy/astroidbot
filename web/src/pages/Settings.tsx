@@ -182,7 +182,7 @@ export function Settings() {
                 setForm((prev) => ({ ...prev, useGasless: !prev.useGasless }))
               }
               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                form.useGasless ? "bg-violet-500" : "bg-gray-700"
+                form.useGasless ? "bg-violet-500" : "bg-bg-hover"
               }`}
             >
               <span

@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
 import { apiFetch } from "../lib/api";
 import { AstroidMark } from "../components/Brand/AstroidMark";
+import { ThemeToggle } from "../components/ThemeToggle";
 import { TelegramLoginWidget } from "../components/TelegramLoginWidget";
 
 export function Login() {
@@ -71,24 +72,27 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950">
+    <div className="min-h-screen flex items-center justify-center bg-main-bg">
+      <div className="fixed right-4 top-4 z-10">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#4B4032]/40 border border-[#DEA34F]/30 mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-badge-bg/40 border border-brand-500/30 mb-4">
             <AstroidMark className="w-10 h-10 text-brand-400" />
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">AstroidBot</h1>
-          <p className="text-gray-400 mt-1 text-xs font-mono uppercase tracking-wider">Algorithmic Trading Terminal</p>
+          <h1 className="text-2xl font-bold text-title-text tracking-tight">AstroidBot</h1>
+          <p className="text-muted-text mt-1 text-xs font-mono uppercase tracking-wider">Algorithmic Trading Terminal</p>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <div className="flex border-b border-gray-800">
+        <div className="bg-card-bg border border-card-border rounded-xl overflow-hidden">
+          <div className="flex border-b border-card-border">
             <button
               onClick={() => setTab("email")}
               className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
                 tab === "email"
                   ? "text-brand-400 border-b-2 border-brand-400"
-                  : "text-gray-500 hover:text-gray-300"
+                  : "text-muted-text hover:text-title-text"
               }`}
             >
               <Mail className="w-4 h-4" />
@@ -99,7 +103,7 @@ export function Login() {
               className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
                 tab === "telegram"
                   ? "text-brand-400 border-b-2 border-brand-400"
-                  : "text-gray-500 hover:text-gray-300"
+                  : "text-muted-text hover:text-title-text"
               }`}
             >
               <MessageCircle className="w-4 h-4" />
@@ -117,35 +121,35 @@ export function Login() {
             {tab === "email" ? (
               <form onSubmit={handleEmailLogin} className="space-y-4">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Email</label>
+                  <label className="block text-xs text-muted-text mb-1">Email</label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
-                    className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-brand-500 focus:outline-none"
+                    className="w-full px-3 py-2.5 bg-input-bg border border-card-border rounded-lg text-sm text-title-text placeholder-muted-text focus:border-brand-500 focus:outline-none"
                     placeholder="your@email.com"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Password</label>
+                  <label className="block text-xs text-muted-text mb-1">Password</label>
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-brand-500 focus:outline-none"
+                    className="w-full px-3 py-2.5 bg-input-bg border border-card-border rounded-lg text-sm text-title-text placeholder-muted-text focus:border-brand-500 focus:outline-none"
                     placeholder="••••••••"
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+                  className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 text-title-text rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
                 >
                   {loading ? "Signing in..." : "Sign In"}
                 </button>
-                <div className="flex justify-between text-xs text-gray-500">
+                <div className="flex justify-between text-xs text-muted-text">
                   <Link to="/reset-password" className="hover:text-brand-400">
                     Forgot password?
                   </Link>
@@ -156,23 +160,23 @@ export function Login() {
               </form>
             ) : (
               <div className="space-y-4">
-                <p className="text-sm text-gray-400 text-center">
+                <p className="text-sm text-muted-text text-center">
                   Sign in securely with your Telegram account
                 </p>
                 {botUsername ? (
                   <>
                     <TelegramLoginWidget botUsername={botUsername} onAuth={handleTelegramAuth} />
                     {loading && (
-                      <p className="text-xs text-gray-500 text-center">Connecting...</p>
+                      <p className="text-xs text-muted-text text-center">Connecting...</p>
                     )}
                   </>
                 ) : (
-                  <p className="text-xs text-gray-500 text-center italic">
+                  <p className="text-xs text-muted-text text-center italic">
                     Telegram sign-in is unavailable — this deployment has no bot username
                     configured.
                   </p>
                 )}
-                <p className="text-xs text-gray-600 text-center">
+                <p className="text-xs text-muted-text text-center">
                   Don't have Telegram?{" "}
                   <button onClick={() => setTab("email")} className="text-brand-400 hover:underline">
                     Use email instead

@@ -35,7 +35,7 @@ export const MarqueeTicker: React.FC<MarqueeTickerProps> = ({ tokens = [], isLoa
   const displayItems = [...topTokens, ...topTokens];
 
   return (
-    <div className="w-full bg-[#0d1117] border-b border-[#21262d] overflow-hidden py-1.5 px-2 select-none">
+    <div className="w-full bg-card-bg border-b border-card-border overflow-hidden py-1.5 px-2 select-none">
       <div className="flex items-center space-x-6 animate-marquee whitespace-nowrap hover:[animation-play-state:paused]">
         {displayItems.map((item, index) => {
           const rank = (index % topTokens.length) + 1;
@@ -52,15 +52,15 @@ export const MarqueeTicker: React.FC<MarqueeTickerProps> = ({ tokens = [], isLoa
                   navigate(`/tokens?search=${item.symbol}`);
                 }
               }}
-              className="inline-flex items-center space-x-1.5 text-xs cursor-pointer hover:bg-[#161b22] px-2 py-0.5 rounded transition-colors"
+              className="inline-flex items-center space-x-1.5 text-xs cursor-pointer hover:bg-bg-hover px-2 py-0.5 rounded transition-colors"
             >
-              <span className="font-semibold text-gray-400">#{rank}</span>
-              <span className="font-bold text-gray-200">{item.symbol}</span>
-              <span className={`font-semibold ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
+              <span className="font-semibold text-muted-text">#{rank}</span>
+              <span className="font-bold text-title-text">{item.symbol}</span>
+              <span className={`font-semibold ${isPositive ? "text-success-400" : "text-danger-400"}`}>
                 {isPositive ? "+" : ""}
                 {change.toFixed(1)}%
               </span>
-              <span className="text-[10px] text-gray-500 font-mono">24h</span>
+              <span className="text-[10px] text-muted-text font-mono">24h</span>
             </div>
           );
         })}

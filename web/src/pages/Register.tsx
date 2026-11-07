@@ -3,6 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { Bot } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { AstroidMark } from "../components/Brand/AstroidMark";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 export function Register() {
   const { user, register, loading, error } = useAuth();
@@ -43,17 +44,20 @@ export function Register() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950">
+    <div className="min-h-screen flex items-center justify-center bg-main-bg">
+      <div className="fixed right-4 top-4 z-10">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#4B4032]/40 border border-[#DEA34F]/30 mx-auto mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-badge-bg/40 border border-brand-500/30 mx-auto mb-4">
             <AstroidMark className="w-10 h-10 text-brand-400" />
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Create Account</h1>
-          <p className="text-gray-400 mt-1 text-xs font-mono uppercase tracking-wider">Join AstroidBot Trading Terminal</p>
+          <h1 className="text-2xl font-bold text-title-text tracking-tight">Create Account</h1>
+          <p className="text-muted-text mt-1 text-xs font-mono uppercase tracking-wider">Join AstroidBot Trading Terminal</p>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+        <div className="bg-card-bg border border-card-border rounded-xl p-6">
           {(error || localError) && (
             <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
               {localError || error}
@@ -62,58 +66,58 @@ export function Register() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Email</label>
+              <label className="block text-xs text-muted-text mb-1">Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-brand-500 focus:outline-none"
+                className="w-full px-3 py-2.5 bg-input-bg border border-card-border rounded-lg text-sm text-title-text placeholder-muted-text focus:border-brand-500 focus:outline-none"
                 placeholder="your@email.com"
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Username (optional)</label>
+              <label className="block text-xs text-muted-text mb-1">Username (optional)</label>
               <input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-brand-500 focus:outline-none"
+                className="w-full px-3 py-2.5 bg-input-bg border border-card-border rounded-lg text-sm text-title-text placeholder-muted-text focus:border-brand-500 focus:outline-none"
                 placeholder="trader420"
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Password</label>
+              <label className="block text-xs text-muted-text mb-1">Password</label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
-                className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-brand-500 focus:outline-none"
+                className="w-full px-3 py-2.5 bg-input-bg border border-card-border rounded-lg text-sm text-title-text placeholder-muted-text focus:border-brand-500 focus:outline-none"
                 placeholder="Min 8 chars, 1 letter + 1 number"
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Confirm Password</label>
+              <label className="block text-xs text-muted-text mb-1">Confirm Password</label>
               <input
                 type="password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 required
-                className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:border-brand-500 focus:outline-none"
+                className="w-full px-3 py-2.5 bg-input-bg border border-card-border rounded-lg text-sm text-title-text placeholder-muted-text focus:border-brand-500 focus:outline-none"
                 placeholder="Repeat password"
               />
             </div>
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+              className="w-full py-2.5 bg-brand-500 hover:bg-brand-600 text-title-text rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
             >
               {loading ? "Creating account..." : "Create Account"}
             </button>
           </form>
 
-          <p className="mt-4 text-center text-xs text-gray-500">
+          <p className="mt-4 text-center text-xs text-muted-text">
             Already have an account?{" "}
             <Link to="/login" className="text-brand-400 hover:underline">
               Sign in

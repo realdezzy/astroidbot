@@ -29,6 +29,10 @@ interface DiscoveredToken {
   txns24h: { buys: number | null; sells: number | null };
   pairCreatedAt: number | null;
   isVerified: boolean;
+  /** False for tokens seeded from an external feed that no DEX can route. */
+  isRoutable?: boolean;
+  /** When the active provider last confirmed these metrics. */
+  metricsUpdatedAt?: string | null;
 }
 
 interface DiscoverResponse {
@@ -115,7 +119,9 @@ export function TokenDiscovery() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
 
-  const [category, setCategory] = useState<CategoryId>("trending");
+  // New is the default: the catalogue is seeded from the newest pools, and a
+  // volume-first landing page made those new listings invisible.
+  const [category, setCategory] = useState<CategoryId>("new");
 
   const chainId = searchParams.get("chainId");
   const searchQuery = searchParams.get("q");
@@ -343,13 +349,22 @@ export function TokenDiscovery() {
                   </td>
 
                   <td className="px-3 py-2.5 text-right">
-                    <Link
-                      to={tradeHref(token)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-xs font-bold text-white transition-colors inline-block"
-                    >
-                      Trade
-                    </Link>
+                    {token.isRoutable === false ? (
+                      <span
+                        title="Catalogued from market data, but no DEX provider in this deployment can route it"
+                        className="inline-block rounded-lg border border-card-border px-3 py-1.5 text-xs font-semibold text-muted-text"
+                      >
+                        Not routable
+                      </span>
+                    ) : (
+                      <Link
+                        to={tradeHref(token)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-xs font-bold text-white transition-colors inline-block"
+                      >
+                        Trade
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))

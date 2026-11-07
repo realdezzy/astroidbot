@@ -15,6 +15,7 @@ import { apiFetch } from "../lib/api";
 import { classNames } from "../lib/utils";
 import { MarqueeTicker } from "./MarqueeTicker";
 import { AstroidMark } from "./Brand/AstroidMark";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface ChainInfo {
   chainId: string;
@@ -97,7 +98,7 @@ export function TokensLayout() {
         {/* Mobile Header */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 bg-sidebar-bg border-b border-sidebar-border transition-colors duration-300">
           <NavLink to="/tokens" className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
               <AstroidMark className="w-4 h-4 text-brand-400" />
             </div>
             <div>
@@ -105,6 +106,7 @@ export function TokensLayout() {
             </div>
           </NavLink>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <button
               onClick={() => setMobileOpen(true)}
               className="p-2 text-muted-text hover:text-title-text rounded-lg bg-bg-hover transition-colors"
@@ -118,7 +120,7 @@ export function TokensLayout() {
         <aside className="hidden md:flex w-60 bg-sidebar-bg border-r border-sidebar-border flex-col shrink-0 transition-colors duration-300">
           <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
             <NavLink to="/" className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
                 <AstroidMark className="w-5 h-5 text-brand-400" />
               </div>
               <div>
@@ -208,13 +210,16 @@ export function TokensLayout() {
                   </div>
                 </div>
 
-                <button
-                  onClick={handleLogout}
-                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  Logout
-                </button>
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={handleLogout}
+                    className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-text hover:text-red-400 hover:bg-bg-hover rounded-lg transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    Logout
+                  </button>
+                  <ThemeToggle />
+                </div>
               </div>
             ) : (
               <NavLink
@@ -239,7 +244,7 @@ export function TokensLayout() {
             <aside className="relative w-64 max-w-xs bg-sidebar-bg border-r border-sidebar-border flex flex-col z-10 transition-colors duration-300">
               <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+                  <div className="w-7 h-7 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
                     <AstroidMark className="w-4 h-4 text-brand-400" />
                   </div>
                   <div>

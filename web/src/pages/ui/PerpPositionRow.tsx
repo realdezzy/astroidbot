@@ -27,7 +27,7 @@ export function PerpPositionRow({ position, onClose, isClosing }: PerpPositionRo
   const isLong = position.direction === "LONG";
   const statusColors = {
     OPEN: "bg-green-500/10 border-green-500/20 text-green-400",
-    CLOSED: "bg-gray-500/10 border-gray-500/20 text-gray-400",
+    CLOSED: "bg-bg-hover border-card-border text-muted-text",
     LIQUIDATED: "bg-red-500/10 border-red-500/20 text-red-400",
   };
 
@@ -67,7 +67,7 @@ export function PerpPositionRow({ position, onClose, isClosing }: PerpPositionRo
         <span
           className={classNames(
             "px-2 py-0.5 rounded text-xs font-semibold border",
-            statusColors[position.status] || "bg-gray-500/10 border-gray-500/20 text-gray-400"
+            statusColors[position.status] || "bg-bg-hover border-card-border text-muted-text"
           )}
         >
           {position.status}

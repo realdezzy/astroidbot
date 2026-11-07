@@ -13,7 +13,7 @@ export const AstroidOrbital: React.FC<AstroidOrbitalProps> = ({
 }) => {
   return (
     <div
-      className={`relative flex items-center justify-center rounded-xl bg-[#262729] border border-[#3A393B] ${className}`}
+      className={`relative flex items-center justify-center rounded-xl bg-card-bg border border-card-border ${className}`}
       style={{ width: size, height: size }}
     >
       {/* Subtle orbital perimeter indicator */}

@@ -31,7 +31,7 @@ interface PortfolioChartProps {
 export function PortfolioChart({ data, totalValue }: PortfolioChartProps) {
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
+      <div className="flex items-center justify-center h-64 text-muted-text">
         No portfolio data
       </div>
     );
@@ -60,10 +60,10 @@ export function PortfolioChart({ data, totalValue }: PortfolioChartProps) {
           </Pie>
           <Tooltip
             contentStyle={{
-              backgroundColor: "#1f2937",
-              border: "1px solid #374151",
+              backgroundColor: "var(--bg-card)",
+              border: "1px solid var(--border-card)",
               borderRadius: "8px",
-              color: "#f3f4f6",
+              color: "var(--text-title)",
             }}
             formatter={(value: number) =>
               `$${value.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
@@ -76,7 +76,7 @@ export function PortfolioChart({ data, totalValue }: PortfolioChartProps) {
           <p className="text-2xl font-bold text-title-text">
             ${totalValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs text-gray-400">Portfolio Value</p>
+          <p className="text-xs text-muted-text">Portfolio Value</p>
         </div>
       </div>
     </div>

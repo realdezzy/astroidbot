@@ -38,6 +38,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --bg-main: #1a1b1e;
   --text-main: #fcfcfc;
   --bg-sidebar: #1a1b1e;
@@ -52,6 +53,34 @@
   --badge-bg: #4b4032;
   --icon-surface: #4b4032;
   --data-track: #192939;
+}
+
+/*
+ * Light theme.
+ *
+ * Every semantic colour is redefined here rather than patched per component:
+ * the components already read `bg-main-bg`/`text-title-text`/`border-card` etc.
+ * The amber brand stays, with a darker `brand-400` because the pale version is
+ * not readable as text on white.
+ */
+html.light {
+  color-scheme: light;
+  --bg-main: #f7f6f3;
+  --text-main: #1f2023;
+  --bg-sidebar: #ffffff;
+  --border-sidebar: #e6e2d9;
+  --bg-card: #ffffff;
+  --border-card: #e6e2d9;
+  --bg-input: #ffffff;
+  --text-title: #141517;
+  --text-muted: #6b6f76;
+  --bg-hover: #f1ede4;
+  --divider-color: #e6e2d9;
+  --badge-bg: #f5e8cf;
+  --icon-surface: #f3ead9;
+  --data-track: #e7edf4;
+
+  --color-brand-400: #9a641c;
 }
 
 body {

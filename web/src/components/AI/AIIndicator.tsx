@@ -27,13 +27,13 @@ export const AIIndicator: React.FC<AIIndicatorProps> = ({
     active: <Brain className="w-3.5 h-3.5 text-[#DEA34F]" strokeWidth={1.75} />,
     processing: <Cpu className="w-3.5 h-3.5 text-[#DEA34F] animate-pulse" strokeWidth={1.75} />,
     evaluating: <Activity className="w-3.5 h-3.5 text-[#DEA34F]" strokeWidth={1.75} />,
-    idle: <Sparkles className="w-3.5 h-3.5 text-[#9A9DA5]" strokeWidth={1.75} />,
+    idle: <Sparkles className="w-3.5 h-3.5 text-muted-text" strokeWidth={1.75} />,
   }[state];
 
   return (
     <div className={`inline-flex items-center gap-2 ${className}`}>
       {showIconContainer ? (
-        <div className="w-7 h-7 rounded-lg bg-[#4B4032] border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+        <div className="w-7 h-7 rounded-lg bg-badge-bg border border-brand-500/30 flex items-center justify-center shrink-0">
           {iconElement}
         </div>
       ) : (

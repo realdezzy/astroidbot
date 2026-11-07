@@ -4,6 +4,7 @@ import { Search, BookOpen, ChevronRight, FileText, Loader2, Bot, ArrowRight, Men
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { useAuth } from "../lib/auth";
 import { AstroidMark } from "../components/Brand/AstroidMark";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 interface DocMeta {
   slug: string;
@@ -150,7 +151,7 @@ export function Docs() {
       <header className="sticky top-0 z-50 backdrop-blur-md bg-main-bg/90 border-b border-sidebar-border">
         <div className="w-full max-w-full px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link to="/" className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center hover:opacity-80 transition-opacity">
+            <Link to="/" className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center hover:opacity-80 transition-opacity">
               <AstroidMark className="w-5 h-5 text-brand-400" />
             </Link>
             <div>
@@ -160,6 +161,7 @@ export function Docs() {
           </div>
 
           <div className="flex items-center gap-4">
+            <ThemeToggle />
             <Link to="/" className="text-sm font-medium text-muted-text hover:text-title-text transition-colors flex items-center gap-1.5 py-1">
               <Home className="w-4 h-4" />
               <span className="hidden sm:inline">Home</span>

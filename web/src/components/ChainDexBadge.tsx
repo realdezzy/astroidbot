@@ -29,8 +29,8 @@ export const ChainDexBadge: React.FC<ChainDexBadgeProps> = ({ chainId = "", dexI
   const chainKey = chainId.split(":")[0]?.toLowerCase() || "solana";
   const dexKey = dexId.toLowerCase();
 
-  const chainInfo = CHAIN_COLORS[chainKey] || { bg: "bg-gray-800 border-gray-600", text: "text-gray-300", label: chainKey.slice(0, 3).toUpperCase() };
-  const dexInfo = DEX_COLORS[dexKey] || { bg: "bg-gray-700", text: "text-gray-200", label: dexKey.slice(0, 3).toUpperCase() };
+  const chainInfo = CHAIN_COLORS[chainKey] || { bg: "bg-card-bg border-card-border", text: "text-title-text", label: chainKey.slice(0, 3).toUpperCase() };
+  const dexInfo = DEX_COLORS[dexKey] || { bg: "bg-bg-hover", text: "text-title-text", label: dexKey.slice(0, 3).toUpperCase() };
 
   return (
     <div className={`relative inline-flex items-center ${className}`}>
@@ -45,7 +45,7 @@ export const ChainDexBadge: React.FC<ChainDexBadgeProps> = ({ chainId = "", dexI
       {/* Secondary DEX Overlay Badge */}
       <span
         title={`DEX: ${dexId}`}
-        className={`-ml-1.5 -mt-1.5 w-3.5 h-3.5 rounded-full ${dexInfo.bg} ${dexInfo.text} border border-[#0d1117] flex items-center justify-center text-[7px] font-black shadow-sm shrink-0`}
+        className={`-ml-1.5 -mt-1.5 w-3.5 h-3.5 rounded-full ${dexInfo.bg} ${dexInfo.text} border border-card-bg flex items-center justify-center text-[7px] font-black shadow-sm shrink-0`}
       >
         {dexInfo.label[0]}
       </span>

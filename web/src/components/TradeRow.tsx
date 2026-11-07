@@ -28,7 +28,7 @@ interface TradeRowProps {
 }
 
 const statusStyles: Record<string, string> = {
-  PENDING: "text-gray-400 bg-gray-500/10",
+  PENDING: "text-muted-text bg-bg-hover",
   BROADCAST: "text-yellow-400 bg-yellow-500/10",
   CONFIRMED: "text-green-400 bg-green-500/10",
   FAILED: "text-red-400 bg-red-500/10",

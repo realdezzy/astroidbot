@@ -24,7 +24,7 @@ export const AstroidSlider: React.FC<AstroidSliderProps> = ({
   return (
     <div className={`relative w-full flex items-center select-none ${className}`}>
       {/* Background track (Dark Navy) */}
-      <div className="w-full h-2 rounded-full bg-[#192939] relative overflow-hidden">
+      <div className="w-full h-2 rounded-full bg-data-track relative overflow-hidden">
         {/* Filled track (Warm Amber) */}
         <div
           className="h-full bg-[#DEA34F] transition-all duration-75"
@@ -46,7 +46,7 @@ export const AstroidSlider: React.FC<AstroidSliderProps> = ({
 
       {/* Visual Thumb */}
       <div
-        className="absolute w-4 h-4 rounded-full bg-[#FCFCFC] border-2 border-[#DEA34F] shadow-sm pointer-events-none -translate-x-1/2 transition-all duration-75"
+        className="absolute w-4 h-4 rounded-full bg-title-text border-2 border-brand-500 shadow-sm pointer-events-none -translate-x-1/2 transition-all duration-75"
         style={{ left: `${percentage}%` }}
       />
     </div>

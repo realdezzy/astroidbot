@@ -25,7 +25,7 @@ export function AutoRefreshToggle({
         "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
         isActive
           ? "bg-green-500/15 text-green-400 hover:bg-green-500/25"
-          : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+          : "bg-bg-hover text-muted-text hover:bg-card-border"
       )}
       title={
         isActive

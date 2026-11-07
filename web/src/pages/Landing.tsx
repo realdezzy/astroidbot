@@ -24,6 +24,7 @@ import { AstroidMark } from "../components/Brand/AstroidMark";
 import { AstroidBadge } from "../components/Brand/AstroidBadge";
 import { AstroidSlider } from "../components/Controls/AstroidSlider";
 import { AIIndicator } from "../components/AI/AIIndicator";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 interface TradePreset {
   id: string;
@@ -154,7 +155,7 @@ export function Landing() {
       <header className="sticky top-0 z-50 backdrop-blur-md bg-main-bg/90 border-b border-sidebar-border">
         <div className="mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
               <AstroidMark className="w-5 h-5 text-brand-400" />
             </div>
             <div>
@@ -174,7 +175,7 @@ export function Landing() {
             </a>
             <Link to="/tokens" className="hover:text-title-text transition-colors flex items-center gap-1.5">
               <span>Token Radar</span>
-              <span className="px-1.5 py-0.2 text-[9px] font-bold rounded bg-[#4B4032] text-brand-400 border border-[#DEA34F]/30">
+              <span className="px-1.5 py-0.2 text-[9px] font-bold rounded bg-badge-bg text-brand-400 border border-brand-500/30">
                 Live
               </span>
             </Link>
@@ -190,6 +191,7 @@ export function Landing() {
           </nav>
 
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             {user ? (
               <Link
                 to="/dashboard"
@@ -225,7 +227,7 @@ export function Landing() {
         <div
           className="absolute inset-0 opacity-[0.03] pointer-events-none"
           style={{
-            backgroundImage: `linear-gradient(to right, #FCFCFC 1px, transparent 1px), linear-gradient(to bottom, #FCFCFC 1px, transparent 1px)`,
+            backgroundImage: `linear-gradient(to right, var(--text-main) 1px, transparent 1px), linear-gradient(to bottom, var(--text-main) 1px, transparent 1px)`,
             backgroundSize: "40px 40px",
           }}
         />
@@ -256,7 +258,7 @@ export function Landing() {
             </Link>
             <Link
               to="/tokens"
-              className="px-6 py-3.5 bg-[#262729] hover:bg-[#2D2B2B] border border-[#3A393B] text-title-text font-semibold rounded-xl text-sm sm:text-base transition-all duration-200 flex items-center gap-2"
+              className="px-6 py-3.5 bg-card-bg hover:bg-bg-hover border border-card-border text-title-text font-semibold rounded-xl text-sm sm:text-base transition-all duration-200 flex items-center gap-2"
             >
               <BarChart3 className="w-4 h-4 text-brand-400" />
               Explore Live Markets
@@ -264,7 +266,7 @@ export function Landing() {
           </div>
 
           {/* Interactive "Talk to AstroidBot" Card */}
-          <div className="mt-14 max-w-3xl mx-auto rounded-2xl border border-card-border bg-[#262729] p-5 sm:p-6 text-left shadow-2xl">
+          <div className="mt-14 max-w-3xl mx-auto rounded-2xl border border-card-border bg-card-bg p-5 sm:p-6 text-left shadow-2xl">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-card-border">
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-[#00E676] animate-pulse" />
@@ -287,8 +289,8 @@ export function Landing() {
                     onClick={() => setActivePreset(preset)}
                     className={`px-3 py-2 rounded-lg text-xs font-semibold border transition-all cursor-pointer text-center ${
                       activePreset.id === preset.id
-                        ? "bg-[#4B4032] border-[#DEA34F] text-[#DEA34F]"
-                        : "bg-[#1A1B1E] border-card-border text-muted-text hover:text-title-text hover:border-card-border/80"
+                        ? "bg-badge-bg border-brand-500 text-brand-500"
+                        : "bg-main-bg border-card-border text-muted-text hover:text-title-text hover:border-card-border/80"
                     }`}
                   >
                     {preset.category}
@@ -298,8 +300,8 @@ export function Landing() {
             </div>
 
             {/* Simulated Voice/Chat Input */}
-            <div className="mt-4 p-3.5 rounded-xl bg-[#1A1B1E] border border-card-border flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-[#4B4032] text-[#DEA34F] flex items-center justify-center shrink-0">
+            <div className="mt-4 p-3.5 rounded-xl bg-main-bg border border-card-border flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-badge-bg text-brand-500 flex items-center justify-center shrink-0">
                 <Mic className="w-4 h-4 animate-pulse" />
               </div>
               <div className="flex-1 min-w-0">
@@ -313,7 +315,7 @@ export function Landing() {
             </div>
 
             {/* AstroidBot Parsed Execution Card */}
-            <div className="mt-4 p-4 rounded-xl bg-[#1A1B1E]/60 border border-card-border space-y-3">
+            <div className="mt-4 p-4 rounded-xl bg-main-bg/60 border border-card-border space-y-3">
               <div className="flex items-center justify-between text-xs font-mono">
                 <span className="text-muted-text uppercase">AstroidBot Smart Understanding:</span>
                 <span className="text-[#00E676] font-semibold flex items-center gap-1">
@@ -322,17 +324,17 @@ export function Landing() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-xs">
-                <div className="p-2.5 rounded-lg bg-[#262729] border border-card-border">
+                <div className="p-2.5 rounded-lg bg-card-bg border border-card-border">
                   <span className="text-[10px] text-muted-text uppercase block font-mono">Trading Pair</span>
                   <span className="font-bold text-title-text mt-0.5 block">{activePreset.pair}</span>
                   <span className="text-[10px] text-brand-400">{activePreset.chain}</span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-[#262729] border border-card-border">
+                <div className="p-2.5 rounded-lg bg-card-bg border border-card-border">
                   <span className="text-[10px] text-muted-text uppercase block font-mono">Best Route DEX</span>
                   <span className="font-bold text-title-text mt-0.5 block">{activePreset.dex}</span>
                   <span className="text-[10px] text-[#00E676]">Zero deposit needed</span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-[#262729] border border-card-border">
+                <div className="p-2.5 rounded-lg bg-card-bg border border-card-border">
                   <span className="text-[10px] text-muted-text uppercase block font-mono">Execution Trigger</span>
                   <span className="font-bold text-title-text mt-0.5 block truncate">{activePreset.condition}</span>
                   <span className="text-[10px] text-muted-text">24/7 Auto Monitoring</span>
@@ -362,7 +364,7 @@ export function Landing() {
       </section>
 
       {/* Trust & Social Proof Strip */}
-      <section className="bg-[#262729]/40 border-y border-sidebar-border py-8">
+      <section className="bg-card-bg/40 border-y border-sidebar-border py-8">
         <div className="max-w-5xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
           <div>
             <div className="text-2xl sm:text-3xl font-black text-title-text font-mono">$48.6M+</div>
@@ -396,8 +398,8 @@ export function Landing() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-[#262729] border border-card-border p-7 rounded-2xl">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 font-mono font-bold text-sm mb-5">
+          <div className="bg-card-bg border border-card-border p-7 rounded-2xl">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 font-mono font-bold text-sm mb-5">
               01
             </div>
             <h3 className="text-lg font-bold text-title-text mb-2">Connect Your Wallet</h3>
@@ -406,8 +408,8 @@ export function Landing() {
             </p>
           </div>
 
-          <div className="bg-[#262729] border border-card-border p-7 rounded-2xl">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 font-mono font-bold text-sm mb-5">
+          <div className="bg-card-bg border border-card-border p-7 rounded-2xl">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 font-mono font-bold text-sm mb-5">
               02
             </div>
             <h3 className="text-lg font-bold text-title-text mb-2">Say What You Want</h3>
@@ -416,8 +418,8 @@ export function Landing() {
             </p>
           </div>
 
-          <div className="bg-[#262729] border border-card-border p-7 rounded-2xl">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 font-mono font-bold text-sm mb-5">
+          <div className="bg-card-bg border border-card-border p-7 rounded-2xl">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 font-mono font-bold text-sm mb-5">
               03
             </div>
             <h3 className="text-lg font-bold text-title-text mb-2">Automate & Relax</h3>
@@ -441,8 +443,8 @@ export function Landing() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-[#262729] border border-card-border p-6 rounded-2xl flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
               <Zap className="w-5 h-5" />
             </div>
             <div>
@@ -453,8 +455,8 @@ export function Landing() {
             </div>
           </div>
 
-          <div className="bg-[#262729] border border-card-border p-6 rounded-2xl flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
               <Clock className="w-5 h-5" />
             </div>
             <div>
@@ -465,8 +467,8 @@ export function Landing() {
             </div>
           </div>
 
-          <div className="bg-[#262729] border border-card-border p-6 rounded-2xl flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
@@ -477,8 +479,8 @@ export function Landing() {
             </div>
           </div>
 
-          <div className="bg-[#262729] border border-card-border p-6 rounded-2xl flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-[#4B4032] flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
+          <div className="bg-card-bg border border-card-border p-6 rounded-2xl flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-badge-bg flex items-center justify-center text-brand-400 shrink-0 mt-0.5">
               <TrendingUp className="w-5 h-5" />
             </div>
             <div>
@@ -497,21 +499,21 @@ export function Landing() {
           Trade Seamlessly Across Top Blockchains
         </span>
         <div className="flex flex-wrap justify-center items-center gap-4 sm:gap-6">
-          <div className="flex items-center gap-2.5 bg-[#262729] px-4 py-2.5 rounded-xl border border-card-border">
+          <div className="flex items-center gap-2.5 bg-card-bg px-4 py-2.5 rounded-xl border border-card-border">
             <span className="font-bold text-sm text-title-text font-mono">SOLANA</span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-[#4B4032] text-brand-400 font-bold">Jupiter</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-badge-bg text-brand-400 font-bold">Jupiter</span>
           </div>
-          <div className="flex items-center gap-2.5 bg-[#262729] px-4 py-2.5 rounded-xl border border-card-border">
+          <div className="flex items-center gap-2.5 bg-card-bg px-4 py-2.5 rounded-xl border border-card-border">
             <span className="font-bold text-sm text-title-text font-mono">BASE</span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-[#4B4032] text-brand-400 font-bold">Uniswap V3</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-badge-bg text-brand-400 font-bold">Uniswap V3</span>
           </div>
-          <div className="flex items-center gap-2.5 bg-[#262729] px-4 py-2.5 rounded-xl border border-card-border">
+          <div className="flex items-center gap-2.5 bg-card-bg px-4 py-2.5 rounded-xl border border-card-border">
             <span className="font-bold text-sm text-title-text font-mono">STACKS</span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-[#4B4032] text-brand-400 font-bold">Bitflow · ALEX</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-badge-bg text-brand-400 font-bold">Bitflow · ALEX</span>
           </div>
-          <div className="flex items-center gap-2.5 bg-[#262729] px-4 py-2.5 rounded-xl border border-card-border">
+          <div className="flex items-center gap-2.5 bg-card-bg px-4 py-2.5 rounded-xl border border-card-border">
             <span className="font-bold text-sm text-title-text font-mono">ETHEREUM & EVM</span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-[#4B4032] text-brand-400 font-bold">Multi-DEX</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-badge-bg text-brand-400 font-bold">Multi-DEX</span>
           </div>
         </div>
       </section>
@@ -540,8 +542,8 @@ export function Landing() {
                       onClick={() => setSelectedAsset(a)}
                       className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
                         selectedAsset === a
-                          ? "bg-[#4B4032] border-[#DEA34F] text-[#DEA34F]"
-                          : "bg-[#262729] border-card-border text-muted-text hover:text-title-text"
+                          ? "bg-badge-bg border-brand-500 text-brand-500"
+                          : "bg-card-bg border-card-border text-muted-text hover:text-title-text"
                       }`}
                     >
                       {a}
@@ -584,8 +586,8 @@ export function Landing() {
                       onClick={() => setTimeHorizonWeeks(h.weeks)}
                       className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
                         timeHorizonWeeks === h.weeks
-                          ? "bg-[#4B4032] border-[#DEA34F] text-[#DEA34F]"
-                          : "bg-[#262729] border-card-border text-muted-text hover:text-title-text"
+                          ? "bg-badge-bg border-brand-500 text-brand-500"
+                          : "bg-card-bg border-card-border text-muted-text hover:text-title-text"
                       }`}
                     >
                       {h.label}
@@ -597,7 +599,7 @@ export function Landing() {
           </div>
 
           {/* Calculator Output Display */}
-          <div className="bg-[#262729] border border-card-border rounded-2xl p-6 sm:p-8 space-y-6">
+          <div className="bg-card-bg border border-card-border rounded-2xl p-6 sm:p-8 space-y-6">
             <div className="flex justify-between items-baseline">
               <div>
                 <span className="text-xs text-muted-text uppercase font-mono block">Projected Portfolio</span>
@@ -629,7 +631,7 @@ export function Landing() {
             </div>
 
             {/* Visual Curve Preview */}
-            <div className="relative h-32 bg-[#1A1B1E] border border-card-border rounded-xl p-3 overflow-hidden">
+            <div className="relative h-32 bg-main-bg border border-card-border rounded-xl p-3 overflow-hidden">
               <span className="text-[10px] text-muted-text font-mono block">SIMULATED WEALTH TRAJECTORY</span>
               <svg className="w-full h-24 mt-1" viewBox="0 0 400 100" preserveAspectRatio="none">
                 <defs>
@@ -681,7 +683,7 @@ export function Landing() {
             return (
               <div
                 key={idx}
-                className="bg-[#262729] border border-card-border rounded-xl overflow-hidden transition-colors"
+                className="bg-card-bg border border-card-border rounded-xl overflow-hidden transition-colors"
               >
                 <button
                   onClick={() => setOpenFaq(isOpen ? null : idx)}
@@ -707,7 +709,7 @@ export function Landing() {
 
       {/* Final Call to Action Banner */}
       <section className="max-w-5xl mx-auto px-6 pb-24">
-        <div className="bg-[#262729] border border-card-border rounded-3xl p-8 sm:p-12 text-center relative overflow-hidden">
+        <div className="bg-card-bg border border-card-border rounded-3xl p-8 sm:p-12 text-center relative overflow-hidden">
           <div className="relative z-10 max-w-2xl mx-auto">
             <h2 className="text-3xl sm:text-4xl font-extrabold text-title-text tracking-tight">
               Ready to Trade Without the Headache?
@@ -732,7 +734,7 @@ export function Landing() {
         <div className="max-w-5xl mx-auto px-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-[#4B4032]/40 border border-[#DEA34F]/30 flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-badge-bg/40 border border-brand-500/30 flex items-center justify-center shrink-0">
                 <AstroidMark className="w-5 h-5 text-brand-400" />
               </div>
               <div>

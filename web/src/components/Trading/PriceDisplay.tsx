@@ -32,7 +32,7 @@ export const PriceDisplay: React.FC<PriceDisplayProps> = ({
 
   return (
     <div className={`inline-flex items-baseline gap-1.5 font-mono ${className}`}>
-      <span className={`font-bold text-[#FCFCFC] tracking-tight ${sizeClasses[size]}`}>
+      <span className={`font-bold text-title-text tracking-tight ${sizeClasses[size]}`}>
         {currency}
         {formattedPrice}
       </span>

@@ -23,12 +23,12 @@ export const TradeStatus: React.FC<TradeStatusProps> = ({ status, className = ""
     pending: {
       label: "PENDING",
       icon: <Clock className="w-3 h-3 text-[#DEA34F] animate-spin" strokeWidth={2} />,
-      styles: "text-[#DEA34F] bg-[#4B4032]/40 border-[#DEA34F]/30",
+      styles: "text-[#DEA34F] bg-badge-bg/40 border-brand-500/30",
     },
     cancelled: {
       label: "CANCELLED",
-      icon: <XCircle className="w-3 h-3 text-[#9A9DA5]" strokeWidth={2} />,
-      styles: "text-[#9A9DA5] bg-[#2D2B2B] border-[#3A393B]",
+      icon: <XCircle className="w-3 h-3 text-muted-text" strokeWidth={2} />,
+      styles: "text-muted-text bg-bg-hover border-card-border",
     },
     failed: {
       label: "FAILED",

@@ -30,7 +30,7 @@ interface DetailData {
 const STATUS_COLORS: Record<string, string> = {
   CONFIRMED: "text-green-400 bg-green-500/10",
   BROADCAST: "text-yellow-400 bg-yellow-500/10",
-  PENDING: "text-gray-400 bg-gray-500/10",
+  PENDING: "text-muted-text bg-bg-hover",
   FAILED: "text-red-400 bg-red-500/10",
 };
 
