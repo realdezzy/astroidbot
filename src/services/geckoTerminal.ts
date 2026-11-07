@@ -72,6 +72,16 @@ const RATE_LIMIT_COOLDOWN_MS = 60_000;
  * `robinhood` and `stacks` were the two expected to block this and neither
  * does.
  */
+/**
+ * EVM addresses are case-insensitive; Solana mints and Stacks principals are
+ * not. Lowercasing one of those produces a valid-looking address for a
+ * different asset (or for nothing at all), which the API answers with an empty
+ * result rather than an error — so the page simply showed no metrics.
+ */
+function normalizeAddress(address: string): string {
+  return address.startsWith("0x") ? address.toLowerCase() : address;
+}
+
 const NETWORK_SLUGS: Record<string, string> = {
   "ethereum:mainnet": "eth",
   "base:mainnet": "base",
@@ -279,7 +289,7 @@ export class GeckoTerminalService {
     const empty: GeckoTokenBatch = { tokens: [], pools: [] };
     if (!network || addresses.length === 0) return empty;
 
-    const unique = [...new Set(addresses.map((a) => a.toLowerCase()))];
+    const unique = [...new Set(addresses.map(normalizeAddress))];
     const tokens: GeckoTokenMetrics[] = [];
     const pools: GeckoPool[] = [];
 
@@ -308,7 +318,7 @@ export class GeckoTerminalService {
     const network = geckoNetworkFor(chainId);
     if (!network) return [];
 
-    const body = await this.get(`/networks/${network}/tokens/${address.toLowerCase()}/pools`);
+    const body = await this.get(`/networks/${network}/tokens/${normalizeAddress(address)}/pools`);
     return asArray(body?.data).map((row) => this.toPool(row));
   }
 
@@ -352,7 +362,7 @@ export class GeckoTerminalService {
     }
 
     const body = await this.get(
-      `/networks/${network}/pools/${poolAddress.toLowerCase()}/ohlcv/${resolution.timeframe}?${query.toString()}`
+      `/networks/${network}/pools/${normalizeAddress(poolAddress)}/ohlcv/${resolution.timeframe}?${query.toString()}`
     );
 
     const attributes = (asOne(body?.data)?.attributes ?? {}) as { ohlcv_list?: unknown };
@@ -380,7 +390,7 @@ export class GeckoTerminalService {
         : "";
 
     const body = await this.get(
-      `/networks/${network}/pools/${poolAddress.toLowerCase()}/trades${query}`
+      `/networks/${network}/pools/${normalizeAddress(poolAddress)}/trades${query}`
     );
 
     return asArray(body?.data)
@@ -493,7 +503,7 @@ export class GeckoTerminalService {
     const volume = attributes.volume_usd as Record<string, unknown> | undefined;
 
     return {
-      address: address.toLowerCase(),
+      address: normalizeAddress(address),
       symbol: str(attributes.symbol) ?? undefined,
       name: str(attributes.name) ?? undefined,
       decimals: int(attributes.decimals) ?? undefined,
@@ -515,14 +525,15 @@ export class GeckoTerminalService {
     const day = txns?.h24 as Record<string, unknown> | undefined;
 
     const baseTokenId = row.relationships?.base_token?.data?.id;
+    const baseTokenAddress = idAddress(baseTokenId);
     const dexId = row.relationships?.dex?.data?.id;
 
     return {
-      address: (str(attributes.address) ?? idAddress(row.id) ?? "").toLowerCase(),
+      address: normalizeAddress(str(attributes.address) ?? idAddress(row.id) ?? ""),
       network: row.relationships?.network?.data?.id ?? idNetwork(row.id),
       name: str(attributes.name),
       dexId: dexId ?? null,
-      baseTokenAddress: idAddress(baseTokenId)?.toLowerCase() ?? null,
+      baseTokenAddress: baseTokenAddress ? normalizeAddress(baseTokenAddress) : null,
       reserveUsd: usdOrNull(attributes.reserve_in_usd),
       volume24h: usdOrNull(volume?.h24),
       priceUsd: usdOrNull(attributes.base_token_price_usd),

@@ -85,6 +85,35 @@ describe("GeckoTerminalService", () => {
     expect(requested).toEqual([30, 30, 5]);
   });
 
+  it("preserves case-sensitive Solana mints and Stacks principals", async () => {
+    // Lowercasing these produces a valid-looking address for something else,
+    // and the API answers with an empty result instead of an error — which is
+    // how a chain's metrics silently went missing.
+    const solana = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    const stacks = "SP3K8BC0PPEVCV7NZ6QSRWPQ2JE9E5B6N3PA0KBR9.usdc-token";
+    get.mockResolvedValueOnce({
+      data: { data: [tokenResource(solana, { symbol: "BONK", price_usd: "0.00002" })] },
+    });
+    get.mockResolvedValueOnce({
+      data: { data: [tokenResource(stacks, { symbol: "USDC", price_usd: "1" })] },
+    });
+
+    const solanaResult = await GeckoTerminalService.getInstance().tokenMetrics("solana:mainnet", [
+      solana,
+    ]);
+    const stacksResult = await GeckoTerminalService.getInstance().tokenMetrics("stacks:mainnet", [
+      stacks,
+    ]);
+
+    const solanaPath = String(get.mock.calls[0]![0]);
+    const stacksPath = String(get.mock.calls[1]![0]);
+    expect(solanaPath).toContain(solana);
+    expect(solanaPath).not.toContain(solana.toLowerCase());
+    expect(stacksPath).toContain(stacks);
+    expect(solanaResult.tokens[0]?.address).toBe(solana);
+    expect(stacksResult.tokens[0]?.address).toBe(stacks);
+  });
+
   it("reads the change columns off the pools the batch call includes", async () => {
     get.mockResolvedValue({
       data: {
