@@ -539,6 +539,14 @@ model Token {
   txnsSells24h   Int?
   pairCreatedAt  DateTime?
   isVerified     Boolean   @default(false)
+  // Whether any DEX provider in this deployment can route a trade for this
+  // token. Tokens seeded from an external market-data feed can be catalogued
+  // without being routable; the UI must not offer a trade that cannot execute.
+  isRoutable     Boolean   @default(true)
+  // When the active provider last supplied a *metric*. `lastSyncedAt` and
+  // `updatedAt` also move on identity-only syncs, so they cannot answer
+  // "is this price still current?" — this column can.
+  metricsUpdatedAt DateTime?
   lastSyncedAt   DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt

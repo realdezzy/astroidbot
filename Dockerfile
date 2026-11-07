@@ -58,6 +58,9 @@ RUN npx prisma generate
 # ship: both entrypoints ran `npx tsx src/*.ts`, transpiling on demand at every
 # boot and holding source maps in memory for the life of the process.
 COPY --from=build /app/dist ./dist
+# Operational scripts run from the runtime image (e.g. the one-off
+# reset-token-metrics command after switching market-data providers).
+COPY scripts/ ./scripts/
 COPY Docs/ ./Docs/
 COPY --from=frontend-builder /app/web/dist ./web/dist
 

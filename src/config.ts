@@ -61,6 +61,24 @@ const envSchema = z.object({
   MARKET_DATA_PROVIDER: z
     .enum(["internal", "dexscreener", "auto", "geckoterminal", "hybrid"])
     .default("internal"),
+  // How long a metric may stay displayed without being re-confirmed by the
+  // active provider. Under an external provider a token the API no longer
+  // returns leaves stale numbers behind forever otherwise: `defined()` treats
+  // a missing value as "no opinion" so a transient blip doesn't erase a good
+  // reading, and the result is a discovery page whose prices are months old.
+  MARKET_DATA_MAX_METRIC_AGE_SECONDS: z.coerce.number().int().positive().default(86_400),
+  // Per-chain ceiling on tokens refreshed in one pass. The keyless GeckoTerminal
+  // budget is 30 calls/minute, and each `tokens/multi` call covers 30 addresses,
+  // so unbounded catalogue refresh is guaranteed to 429. Raise this with a key.
+  MARKET_DATA_MAX_TOKENS_PER_CHAIN_PER_SYNC: z.coerce.number().int().positive().default(90),
+  // Minimum gap between discovery syncs. The global tick is 60s, but the
+  // catalogue does not need to be rebuilt that often, and the request budget
+  // is shared with search/candles/trades.
+  MARKET_DATA_SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
+  // How many pages of GeckoTerminal's newest-pools feed to seed from.
+  // New tokens are the point of the discovery page; without this the
+  // catalogue only ever contains what our DEX lists or an old index knew.
+  MARKET_DATA_SEED_POOL_PAGES: z.coerce.number().int().min(0).max(10).default(2),
   // GeckoTerminal is keyless at 30 calls/minute, which is a development tier
   // and nothing more — a single discovery page can spend that. A CoinGecko
   // paid key raises it to 500/min and moves the client onto the pro host; the
@@ -337,6 +355,10 @@ export class ConfigManager {
       dryRun: this.config.DRY_RUN,
       pollInterval: this.config.POLL_INTERVAL_SECONDS,
       port: this.config.PORT,
+      marketDataProvider: this.config.MARKET_DATA_PROVIDER,
+      indexerMode: this.config.INDEXER_MODE,
+      candleSource: this.config.CANDLE_SOURCE,
+      geckoterminalKeyed: Boolean(this.config.GECKOTERMINAL_API_KEY),
     });
   }
 

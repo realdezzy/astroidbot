@@ -74,6 +74,8 @@ export function serialiseToken(row: {
   txnsSells24h?: number | null;
   pairCreatedAt?: Date | null;
   isVerified?: boolean;
+  isRoutable?: boolean;
+  metricsUpdatedAt?: Date | null;
 }) {
   return {
     contractId: row.contractId,
@@ -101,6 +103,13 @@ export function serialiseToken(row: {
     },
     pairCreatedAt: row.pairCreatedAt ? new Date(row.pairCreatedAt).getTime() : null,
     isVerified: row.isVerified ?? false,
+    // Whether this deployment can actually execute a trade for it. Seeded
+    // external listings can be catalogue entries without a route; the UI must
+    // not offer a trade that is guaranteed to fail.
+    isRoutable: row.isRoutable ?? true,
+    metricsUpdatedAt: row.metricsUpdatedAt
+      ? new Date(row.metricsUpdatedAt).toISOString()
+      : null,
     explorerUrl: explorerUrlFor(row.chainId, row.contractId),
   };
 }
@@ -127,6 +136,9 @@ function serialiseMarketData(m: TokenMarketData) {
     txnsSells24h: m.txnsSells24h,
     pairCreatedAt: m.pairCreatedAt,
     isVerified: false,
+    isRoutable: true,
+    // The provider answer is live by construction.
+    metricsUpdatedAt: new Date(),
   });
 }
 

@@ -6,6 +6,7 @@ import {
   type GeckoTokenMetrics,
 } from "../geckoTerminal.js";
 import { findDescriptor } from "../chains/descriptors/index.js";
+import { ConfigManager } from "../../config.js";
 import type { ChainId } from "../../types/chain.js";
 import type { MarketDataProvider, TokenMarketData } from "./types.js";
 
@@ -87,30 +88,42 @@ export class GeckoTerminalMarketDataProvider implements MarketDataProvider {
   }
 
   /**
-   * The most active tokens on a chain.
+   * The newest tokens on a chain, for seeding the catalogue.
    *
-   * There is no "top tokens" endpoint, so this ranks the base tokens of the
-   * chain's newest pools — which answers "what is trading now" rather than
-   * "what is biggest". A caller wanting the catalogue's own ordering gets it
-   * by this returning fewer rows than asked for, which is the same contract
-   * the DexScreener provider honours by returning none.
+   * There is no "top tokens" endpoint. This walks the newest-pools feed, so
+   * the result answers "what launched recently" rather than "what is biggest" —
+   * which is exactly what the discovery page was missing: the catalogue only
+   * ever contained tokens a DEX list or an old index already knew about.
+   *
+   * Ordering is newest-first. A caller that wants a volume ranking sorts the
+   * catalogue itself; seeding must not bury the tokens this exists to surface.
    */
   async topTokens(chainId: ChainId, limit: number): Promise<TokenMarketData[]> {
     if (!this.supportsChain(chainId)) return [];
 
-    const pools = await this.api.newPools(chainId);
+    const pages = Math.max(
+      1,
+      ConfigManager.getInstance().config.MARKET_DATA_SEED_POOL_PAGES
+    );
     const byToken = new Map<string, GeckoPool>();
 
-    for (const pool of pools) {
-      if (!pool.baseTokenAddress) continue;
-      const existing = byToken.get(pool.baseTokenAddress);
-      if (!existing || (pool.reserveUsd ?? 0) > (existing.reserveUsd ?? 0)) {
-        byToken.set(pool.baseTokenAddress, pool);
+    for (let page = 1; page <= pages && byToken.size < limit; page++) {
+      const pools = await this.api.newPools(chainId, page);
+      if (pools.length === 0) break;
+
+      for (const pool of pools) {
+        if (!pool.baseTokenAddress) continue;
+        const existing = byToken.get(pool.baseTokenAddress);
+        // Several pools can share a base token; the deepest supplies the
+        // metrics, but the entry keeps its first (newest-feed) position.
+        if (!existing || (pool.reserveUsd ?? 0) > (existing.reserveUsd ?? 0)) {
+          byToken.set(pool.baseTokenAddress, pool);
+        }
       }
     }
 
     return [...byToken.values()]
-      .sort((a, b) => (b.volume24h ?? 0) - (a.volume24h ?? 0))
+      .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))
       .slice(0, limit)
       .map((pool) => fromPool(chainId, pool));
   }

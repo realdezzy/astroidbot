@@ -13,6 +13,7 @@
     "db:migrate": "npx prisma migrate dev",
     "db:generate": "npx prisma generate",
     "db:studio": "npx prisma studio",
+    "db:reset-token-metrics": "tsx scripts/reset-token-metrics.ts",
     "lint": "eslint src/ tests/ scripts/",
     "lint:gate": "node scripts/lint-ratchet.mjs"
   },

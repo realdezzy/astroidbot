@@ -36,7 +36,7 @@ export async function runCycle(): Promise<void> {
     // in this codebase on purpose. Fire-and-forget: discovery is a read-side
     // convenience and must never delay or fail a trading cycle.
     TokenDiscoveryService.getInstance()
-      .syncAll()
+      .syncIfDue()
       .catch((err) => logger.warn("Token discovery sync failed", { error: err }));
 
     // Social mentions ride the same tick. Fire-and-forget for the same reason

@@ -7,6 +7,7 @@ const mockToken = {
   createMany: vi.fn(),
   count: vi.fn(),
   findUnique: vi.fn(),
+  updateMany: vi.fn(),
 };
 
 /**
@@ -90,6 +91,7 @@ describe("TokenDiscoveryService", () => {
     mockToken.findMany.mockResolvedValue([]);
     mockToken.createMany.mockResolvedValue({ count: 0 });
     mockToken.count.mockResolvedValue(0);
+    mockToken.updateMany.mockResolvedValue({ count: 0 });
     mockIndexedToken.findMany.mockResolvedValue([]);
     mockMarketData.getMarketData.mockResolvedValue(new Map());
     mockMarketData.search.mockResolvedValue([]);
@@ -202,6 +204,110 @@ describe("TokenDiscoveryService", () => {
       await service.syncChain("base:mainnet");
 
       expect(mockDexRegistry.getTokenPrice).not.toHaveBeenCalled();
+    });
+
+    it("asks for the newest catalogue rows first", async () => {
+      mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+
+      await service.syncChain("base:mainnet");
+
+      // Ordering by volume pinned the same old high-volume rows every pass.
+      expect(mockToken.findMany.mock.calls[0]![0].orderBy?.[0]).toEqual({
+        pairCreatedAt: { sort: "desc", nulls: "last" },
+      });
+    });
+
+    describe("external provider", () => {
+      function setProvider(mode: "internal" | "hybrid") {
+        (ConfigManager.getInstance().config as { MARKET_DATA_PROVIDER: string })
+          .MARKET_DATA_PROVIDER = mode;
+      }
+
+      afterEach(() => setProvider("internal"));
+
+      it("seeds new tokens from the provider and marks unroutable ones", async () => {
+        // Without seeding, switching to GeckoTerminal only repaints rows a DEX
+        // list or an old index already knew — the list never gains a new token.
+        setProvider("hybrid");
+        mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+        mockMarketData.topTokens.mockResolvedValue([
+          {
+            chainId: "base:mainnet",
+            contractId: "0xnew",
+            symbol: "NEW",
+            name: "New Token",
+            decimals: 18,
+            priceUsd: 1,
+            volume24h: 10,
+            liquidityUsd: 100,
+            priceChange5m: null,
+            priceChange1h: null,
+            priceChange6h: null,
+            priceChange24h: null,
+            marketCapUsd: null,
+            txnsBuys24h: null,
+            txnsSells24h: null,
+            pairCreatedAt: new Date(),
+          },
+        ]);
+        mockMarketData.getMarketData.mockResolvedValue(
+          new Map([
+            [
+              "0xnew",
+              {
+                chainId: "base:mainnet",
+                contractId: "0xnew",
+                symbol: "NEW",
+                name: "New Token",
+                decimals: 18,
+                priceUsd: 1,
+                volume24h: 10,
+                liquidityUsd: 100,
+                priceChange5m: null,
+                priceChange1h: null,
+                priceChange6h: null,
+                priceChange24h: null,
+                marketCapUsd: null,
+                txnsBuys24h: null,
+                txnsSells24h: null,
+                pairCreatedAt: new Date(),
+              },
+            ],
+          ])
+        );
+
+        await service.syncChain("base:mainnet");
+
+        const call = mockToken.upsert.mock.calls.find(
+          (c) => c[0].where.chainId_contractId.contractId === "0xnew"
+        );
+        expect(call?.[0].create.isRoutable).toBe(false);
+        expect(call?.[0].create.metricsUpdatedAt).toBeInstanceOf(Date);
+      });
+
+      it("clears metrics the provider no longer returns once they age out", async () => {
+        setProvider("hybrid");
+        mockDexRegistry.getSwappableTokens.mockResolvedValue([]);
+        mockToken.findMany.mockResolvedValue([
+          {
+            contractId: "0xstale",
+            symbol: "OLD",
+            name: "Old Token",
+            decimals: 18,
+            metricsUpdatedAt: new Date(Date.now() - 10 * 86_400_000),
+          },
+        ]);
+        mockMarketData.getMarketData.mockResolvedValue(new Map());
+
+        await service.syncChain("base:mainnet");
+
+        const call = mockToken.upsert.mock.calls.find(
+          (c) => c[0].where.chainId_contractId.contractId === "0xstale"
+        );
+        expect(call?.[0].update.priceUsd).toBeNull();
+        expect(call?.[0].update.volume24h).toBeNull();
+        expect(call?.[0].update.metricsUpdatedAt).toBeNull();
+      });
     });
   });
 

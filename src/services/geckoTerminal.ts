@@ -207,6 +207,14 @@ export class GeckoTerminalService {
   /** Wall-clock time before which no request is made. Set by a 429. */
   private cooldownUntil = 0;
 
+  /**
+   * Request timestamps inside the current minute, used to stay under the
+   * provider's limit instead of discovering it via a 429. A 429 silences the
+   * whole client for a minute, so one avoidable request costs far more than
+   * skipping it.
+   */
+  private callTimestamps: number[] = [];
+
   static getInstance(): GeckoTerminalService {
     if (!GeckoTerminalService.instance) {
       GeckoTerminalService.instance = new GeckoTerminalService();
@@ -280,6 +288,9 @@ export class GeckoTerminalService {
       const body = await this.get(
         `/networks/${network}/tokens/multi/${batch.join(",")}?include=top_pools`
       );
+      // Null means rate-limited or failed; further batches in this pass will
+      // fail the same way, so stop rather than burn the whole budget on them.
+      if (!body) break;
       for (const row of asArray(body?.data)) {
         const token = this.toTokenMetrics(row);
         if (token) tokens.push(token);
@@ -302,11 +313,11 @@ export class GeckoTerminalService {
   }
 
   /** The newest pools on a chain. A cross-check against our own discovery. */
-  async newPools(chainId: ChainId): Promise<GeckoPool[]> {
+  async newPools(chainId: ChainId, page = 1): Promise<GeckoPool[]> {
     const network = geckoNetworkFor(chainId);
     if (!network) return [];
 
-    const body = await this.get(`/networks/${network}/new_pools`);
+    const body = await this.get(`/networks/${network}/new_pools?page=${page}`);
     return asArray(body?.data).map((row) => this.toPool(row));
   }
 
@@ -425,6 +436,17 @@ export class GeckoTerminalService {
       logger.debug("[geckoterminal] skipped while rate-limited", { path });
       return null;
     }
+
+    // Stay below the published limit rather than letting a 429 discover it for
+    // us. The keyless tier is 30/min; a paid key is 500/min.
+    const perMinute = this.apiKey ? 500 : 30;
+    const now = Date.now();
+    this.callTimestamps = this.callTimestamps.filter((t) => now - t < 60_000);
+    if (this.callTimestamps.length >= perMinute) {
+      logger.debug("[geckoterminal] local request budget exhausted", { path, perMinute });
+      return null;
+    }
+    this.callTimestamps.push(now);
 
     try {
       const response = await this.http.get<JsonApiResponse>(path);

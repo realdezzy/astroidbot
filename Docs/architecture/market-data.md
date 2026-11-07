@@ -24,6 +24,17 @@ Nothing was deleted to make this possible. `INDEXER_MODE=full` with `MARKET_DATA
 
 All six chains this deployment enables by default are covered (`eth`, `base`, `celo`, `robinhood`, `solana`, `stacks`). Keyless the API allows **30 calls a minute**, which one discovery page can spend — it is a development tier. A CoinGecko paid key raises it to 500/minute and moves the client to `pro-api.coingecko.com`; `GECKOTERMINAL_API_KEY` is the only switch.
 
+The catalogue feeds itself from the same API. `TokenDiscoveryService.syncChain`
+seeds tokens from the provider's newest-pools feed before refreshing metrics
+(`MARKET_DATA_SEED_POOL_PAGES`, default 2), because a provider switch only
+repaints rows the DEX lists or an old index already knew. Selection is
+newest-first, capped per chain (`MARKET_DATA_MAX_TOKENS_PER_CHAIN_PER_SYNC`) to
+fit the request budget, and `metricsUpdatedAt` ages out numbers an external
+provider no longer returns (`MARKET_DATA_MAX_METRIC_AGE_SECONDS`) instead of
+leaving months-old prices sorted among live ones. `MARKET_DATA_SYNC_INTERVAL_SECONDS`
+throttles the pass; `syncAll` is single-flight so a slow pass cannot overlap the
+next tick.
+
 Three things in `src/services/geckoTerminal.ts` are load-bearing:
 
 - **Batching and a shared cache.** Token metrics go 30 addresses per call, and responses are cached in *Redis* rather than per process — the API server and the indexer both read this API, and a per-process cache would double the call rate against a limit counted per minute.
