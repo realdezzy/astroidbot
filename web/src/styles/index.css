@@ -56,31 +56,53 @@
 }
 
 /*
- * Light theme.
+ * Light theme — slate and amber.
  *
  * Every semantic colour is redefined here rather than patched per component:
  * the components already read `bg-main-bg`/`text-title-text`/`border-card` etc.
- * The amber brand stays, with a darker `brand-400` because the pale version is
- * not readable as text on white.
+ * Cool neutral surfaces keep the amber brand as the only warm accent; the pale
+ * brand-400 is dark enough to read as text on white.
  */
 html.light {
   color-scheme: light;
-  --bg-main: #f7f6f3;
-  --text-main: #1f2023;
+  --bg-main: #f5f7fa;
+  --text-main: #0f172a;
   --bg-sidebar: #ffffff;
-  --border-sidebar: #e6e2d9;
+  --border-sidebar: #e2e8f0;
   --bg-card: #ffffff;
-  --border-card: #e6e2d9;
+  --border-card: #e2e8f0;
   --bg-input: #ffffff;
-  --text-title: #141517;
-  --text-muted: #6b6f76;
-  --bg-hover: #f1ede4;
-  --divider-color: #e6e2d9;
-  --badge-bg: #f5e8cf;
-  --icon-surface: #f3ead9;
-  --data-track: #e7edf4;
+  --text-title: #0b1220;
+  --text-muted: #5b6472;
+  --bg-hover: #eef1f5;
+  --divider-color: #e2e8f0;
+  --badge-bg: #fff3df;
+  --icon-surface: #fff3df;
+  --data-track: #e9eff6;
 
-  --color-brand-400: #9a641c;
+  --color-brand-400: #a56512;
+}
+
+/* Crisp but light: cards sit on the slate canvas without a heavy shadow. */
+html.light .glass-card {
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+}
+
+html.light .glass-card:hover {
+  box-shadow: 0 4px 16px rgb(15 23 42 / 0.07);
+}
+
+/* Amber is light enough that white text on it fails contrast; the brand
+ * buttons use dark ink in this theme. */
+html.light .bg-brand-500.text-white,
+html.light .bg-brand-600.text-white,
+html.light .bg-brand-500.hover\:bg-brand-600.text-white:hover {
+  color: #1a1b1e;
+}
+
+html.light ::selection {
+  background-color: rgb(222 163 79 / 0.35);
+  color: #0b1220;
 }
 
 body {
